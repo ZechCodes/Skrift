@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}{{ slugs|join(" / ")|title }} - Base Site{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <h1>{{ slugs|join(" / ")|title|replace("-", " ") }}</h1>
+    </header>
+
+    <p>This is the default page template for <code>{{ path }}</code>.</p>
+
+    <p>To create a custom template, create one of:</p>
+    <ul>
+        {% for i in range(slugs|length, 0, -1) %}
+        <li><code>templates/page-{{ slugs[:i]|join("-") }}.html</code></li>
+        {% endfor %}
+    </ul>
+</article>
+{% endblock %}

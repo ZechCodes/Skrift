@@ -1,0 +1,23 @@
+/* Custom styles for the site */
+
+/* Flash messages */
+.flash-messages {
+    margin-bottom: 1rem;
+}
+
+.flash-messages [role="alert"] {
+    margin-bottom: 0.5rem;
+}
+
+/* Auth navigation */
+nav .user-info {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+nav .user-info img {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+}

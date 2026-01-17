@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Base Site{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/static/css/custom.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <header class="container">
+        <nav>
+            <ul>
+                <li><strong><a href="/">Base Site</a></strong></li>
+            </ul>
+            <ul>
+                {% if user %}
+                    <li class="user-info">
+                        {% if user.picture_url %}
+                            <img src="{{ user.picture_url }}" alt="{{ user.name }}">
+                        {% endif %}
+                        <span>{{ user.name or user.email }}</span>
+                    </li>
+                    <li><a href="/auth/logout" role="button" class="outline">Logout</a></li>
+                {% else %}
+                    <li><a href="/auth/login" role="button">Login</a></li>
+                {% endif %}
+            </ul>
+        </nav>
+    </header>
+
+    <main class="container">
+        {% if flash %}
+            <div class="flash-messages">
+                <article role="alert">{{ flash }}</article>
+            </div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="container">
+        <hr>
+        <p><small>&copy; {{ now().year }} Base Site. All rights reserved.</small></p>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

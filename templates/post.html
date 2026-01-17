@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}{{ slug|title }} - Base Site{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <h1>{{ slug|title|replace("-", " ") }}</h1>
+    </header>
+
+    <p>This is the default post template for <code>{{ slug }}</code>.</p>
+
+    <p>To create a custom template for this post, create <code>templates/post-{{ slug }}.html</code>.</p>
+</article>
+{% endblock %}
