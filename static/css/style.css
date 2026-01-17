@@ -537,6 +537,21 @@ th {
 .text-center { text-align: center; }
 .text-muted { color: var(--color-text-muted); }
 
+/* Error page vertical centering */
+.error-page {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: calc(100vh - 160px);
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+.error-page article {
+    text-align: center;
+    background-color: transparent;
+}
+
 /* Focus visible for accessibility */
 :focus-visible {
     outline: 2px solid var(--color-primary);
