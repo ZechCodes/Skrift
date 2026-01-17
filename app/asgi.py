@@ -10,6 +10,7 @@ from advanced_alchemy.extensions.litestar import (
 from litestar import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.contrib.jinja import JinjaTemplateEngine
+from litestar.exceptions import HTTPException
 from litestar.middleware.session.client_side import CookieBackendConfig
 from litestar.static_files import create_static_files_router
 from litestar.template import TemplateConfig
@@ -18,6 +19,7 @@ from app.config import get_settings
 from app.controllers.auth import AuthController
 from app.controllers.web import WebController
 from app.db.base import Base
+from app.lib.exceptions import http_exception_handler, internal_server_error_handler
 
 
 def create_app() -> Litestar:
@@ -63,6 +65,10 @@ def create_app() -> Litestar:
         middleware=[session_config.middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip"),
+        exception_handlers={
+            HTTPException: http_exception_handler,
+            Exception: internal_server_error_handler,
+        },
         debug=settings.debug,
     )
 

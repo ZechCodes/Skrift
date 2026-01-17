@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Error {{ status_code }} - Base Site{% endblock %}
+
+{% block content %}
+<article>
+    <header>
+        <h1>Error {{ status_code }}</h1>
+    </header>
+
+    <p>{{ message or "An unexpected error occurred." }}</p>
+
+    <footer>
+        <a href="/" role="button">Return Home</a>
+    </footer>
+</article>
+{% endblock %}
