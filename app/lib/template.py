@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 from litestar.contrib.jinja import JinjaTemplateEngine
+from litestar.response import Template as TemplateResponse
 from litestar.template import TemplateConfig
 
 
@@ -45,6 +46,16 @@ class Template:
         # Default to base template even if it doesn't exist (let Jinja handle the error)
         self._resolved_template = f"{self.template_type}.html"
         return self._resolved_template
+
+    def render(self, template_dir: Path, **extra_context: Any) -> TemplateResponse:
+        """Resolve template and return TemplateResponse with merged context.
+
+        Context passed to __init__ is merged with extra_context, with extra_context
+        taking precedence for duplicate keys.
+        """
+        template_name = self.resolve(template_dir)
+        merged_context = {**self.context, **extra_context}
+        return TemplateResponse(template_name, context=merged_context)
 
     def __repr__(self) -> str:
         return f"Template({self.template_type!r}, {', '.join(repr(s) for s in self.slugs)})"

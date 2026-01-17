@@ -48,13 +48,8 @@ class WebController(Controller):
         user_ctx = await self._get_user_context(request, db_session)
         flash = request.session.pop("flash", None)
 
-        template = Template("post", slug)
-        template_name = template.resolve(TEMPLATE_DIR)
-
-        return TemplateResponse(
-            template_name,
-            context={"flash": flash, "slug": slug, **user_ctx},
-        )
+        template = Template("post", slug, context={"slug": slug})
+        return template.render(TEMPLATE_DIR, flash=flash, **user_ctx)
 
     @get("/page/{path:path}")
     async def page(
@@ -66,10 +61,5 @@ class WebController(Controller):
 
         # Split path into slugs (e.g., "services/web" -> ["services", "web"])
         slugs = [s for s in path.split("/") if s]
-        template = Template("page", *slugs)
-        template_name = template.resolve(TEMPLATE_DIR)
-
-        return TemplateResponse(
-            template_name,
-            context={"flash": flash, "path": path, "slugs": slugs, **user_ctx},
-        )
+        template = Template("page", *slugs, context={"path": path, "slugs": slugs})
+        return template.render(TEMPLATE_DIR, flash=flash, **user_ctx)
