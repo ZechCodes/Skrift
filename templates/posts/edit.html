@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Post - Base Site{% endblock %}
+
+{% block content %}
+<hgroup>
+    <h1>Edit Post</h1>
+    <p>Update your blog post</p>
+</hgroup>
+
+<form method="post" action="/posts/{{ post.id }}/edit">
+    <label for="title">
+        Title
+        <input type="text" id="title" name="title" required placeholder="Enter post title" value="{{ post.title }}">
+    </label>
+
+    <label for="slug">
+        Slug
+        <input type="text" id="slug" name="slug" required placeholder="post-url-slug" value="{{ post.slug }}">
+        <small>This will be used in the URL: /post/your-slug</small>
+    </label>
+
+    <label for="content">
+        Content
+        <textarea id="content" name="content" rows="15" placeholder="Write your post content here (HTML supported)...">{{ post.content }}</textarea>
+    </label>
+
+    <label for="is_published">
+        <input type="checkbox" id="is_published" name="is_published" role="switch" {% if post.is_published %}checked{% endif %}>
+        Published
+    </label>
+
+    {% if post.published_at %}
+    <p style="margin-top: 0; font-size: 0.9em; color: #666;">
+        Published on: <time datetime="{{ post.published_at.isoformat() }}">{{ post.published_at.strftime('%B %d, %Y at %I:%M %p') }}</time>
+    </p>
+    {% endif %}
+
+    <div style="display: flex; gap: 1rem;">
+        <button type="submit">Update Post</button>
+        <a href="/posts/my" role="button" class="outline">Cancel</a>
+    </div>
+</form>
+
+<hr>
+
+<details>
+    <summary style="color: #dc3545; cursor: pointer;">Danger Zone</summary>
+    <form method="post" action="/posts/{{ post.id }}/delete" onsubmit="return confirm('Are you sure you want to delete this post? This action cannot be undone.');">
+        <p style="color: #666;">Permanently delete this post. This action cannot be undone.</p>
+        <button type="submit" style="background: #dc3545; border-color: #dc3545;">Delete Post</button>
+    </form>
+</details>
+{% endblock %}

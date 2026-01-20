@@ -8,6 +8,20 @@
     <p>A Litestar-powered website with Google OAuth and WordPress-like templates.</p>
 </hgroup>
 
+{% if posts %}
+<section>
+    <h2>Recent Posts</h2>
+    {% for post in posts %}
+    <article>
+        <h3><a href="/post/{{ post.slug }}">{{ post.title }}</a></h3>
+        {% if post.published_at %}
+        <p><small><time datetime="{{ post.published_at.isoformat() }}">{{ post.published_at.strftime('%B %d, %Y') }}</time></small></p>
+        {% endif %}
+    </article>
+    {% endfor %}
+</section>
+{% endif %}
+
 <section>
     <h2>Features</h2>
     <ul>

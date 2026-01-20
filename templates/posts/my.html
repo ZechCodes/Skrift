@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}My Posts - Base Site{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+    <hgroup>
+        <h1>My Posts</h1>
+        <p>Manage your blog posts</p>
+    </hgroup>
+    <a href="/posts/new" role="button">New Post</a>
+</div>
+
+{% if posts %}
+<div>
+    {% for post in posts %}
+    <article style="margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid #e0e0e0;">
+        <header style="display: flex; justify-content: space-between; align-items: start;">
+            <div style="flex: 1;">
+                <h3 style="margin-bottom: 0.5rem;">
+                    <a href="/post/{{ post.slug }}">{{ post.title }}</a>
+                    {% if not post.is_published %}
+                    <small style="color: #999; font-weight: normal;">(Draft)</small>
+                    {% endif %}
+                </h3>
+                <p style="margin: 0; font-size: 0.9em; color: #666;">
+                    <strong>Slug:</strong> {{ post.slug }}
+                    {% if post.published_at %}
+                    <br><strong>Published:</strong> <time datetime="{{ post.published_at.isoformat() }}">{{ post.published_at.strftime('%B %d, %Y') }}</time>
+                    {% else %}
+                    <br><strong>Created:</strong> <time datetime="{{ post.created_at.isoformat() }}">{{ post.created_at.strftime('%B %d, %Y') }}</time>
+                    {% endif %}
+                </p>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <a href="/posts/{{ post.id }}/edit" role="button" class="outline" style="margin: 0;">Edit</a>
+                <form method="post" action="/posts/{{ post.id }}/delete" style="margin: 0;" onsubmit="return confirm('Are you sure you want to delete this post?');">
+                    <button type="submit" class="outline" style="margin: 0; background: #dc3545; color: white; border-color: #dc3545;">Delete</button>
+                </form>
+            </div>
+        </header>
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<article>
+    <p>You haven't created any posts yet.</p>
+    <p><a href="/posts/new" role="button">Create your first post</a></p>
+</article>
+{% endif %}
+{% endblock %}
