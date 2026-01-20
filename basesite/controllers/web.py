@@ -6,8 +6,8 @@ from litestar.response import Template as TemplateResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.user import User
-from app.lib.template import Template
+from basesite.db.models.user import User
+from basesite.lib.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
 

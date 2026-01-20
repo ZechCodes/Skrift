@@ -1,5 +1,5 @@
 [project]
-name = "base-site"
+name = "basesite"
 version = "0.1.0"
 description = "Litestar website with Google OAuth and WP-like templates"
 readme = "README.md"
@@ -15,6 +15,9 @@ dependencies = [
     "uvicorn>=0.34.0",
     "pyyaml>=6.0.0",
 ]
+
+[project.scripts]
+base-site = "main:main"
 
 [tool.ruff]
 line-length = 100
