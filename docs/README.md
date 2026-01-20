@@ -13,6 +13,7 @@ For styling documentation, see: [CSS Framework](css-framework.md)
 - [Template System](#template-system)
 - [Controllers & Routes](#controllers--routes)
 - [Database](#database)
+- [Content Management](#content-management)
 - [Error Handling](#error-handling)
 - [Production Deployment](#production-deployment)
 
@@ -29,8 +30,11 @@ base-site/
 │   │   └── web.py           # Main web routes (pages, posts)
 │   ├── db/
 │   │   ├── base.py          # SQLAlchemy base model
-│   │   └── models/
-│   │       └── user.py      # User model
+│   │   ├── models/
+│   │   │   ├── user.py      # User model
+│   │   │   └── page.py      # Page/Post model
+│   │   └── services/
+│   │       └── page_service.py  # Page CRUD operations
 │   └── lib/
 │       ├── exceptions.py    # Custom exception handlers
 │       └── template.py      # WordPress-like template resolver
@@ -225,8 +229,8 @@ All templates receive these context variables:
 | `now` | callable | Function returning current datetime |
 
 Route-specific variables:
-- **Posts**: `slug` (the post slug)
-- **Pages**: `path` (full path), `slugs` (list of path segments)
+- **Posts**: `slug` (the post slug), `page` (Page object from database)
+- **Pages**: `path` (full path), `slugs` (list of path segments), `page` (Page object from database)
 
 ### Base Template Blocks
 
@@ -259,8 +263,8 @@ Example usage:
 | Method | Path | Controller | Handler | Description |
 |--------|------|------------|---------|-------------|
 | GET | `/` | WebController | `index` | Home page |
-| GET | `/post/{slug}` | WebController | `post` | Post page with template resolution |
-| GET | `/page/{path:path}` | WebController | `page` | Page with nested path support |
+| GET | `/post/{slug}` | WebController | `post` | Post page from database with template resolution |
+| GET | `/page/{path:path}` | WebController | `page` | Page from database with nested path support |
 | GET | `/auth/login` | AuthController | `login_page` | Login page |
 | GET | `/auth/logout` | AuthController | `logout` | Clear session and redirect |
 | GET | `/auth/google/login` | AuthController | `google_login` | Initiate Google OAuth |
@@ -315,6 +319,223 @@ controllers:
 The application will automatically import and register all controllers listed in `app.yaml`.
 
 ## Database
+
+### Models
+
+The application uses two primary models:
+
+#### User Model
+
+Stores OAuth authentication data. See [Authentication](#authentication) section for details.
+
+#### Page Model
+
+The `Page` model (`basesite/db/models/page.py`) manages all content including posts and pages.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Primary key (auto-generated) |
+| `type` | PageType | Content type: "post" or "page" |
+| `slug` | String | Unique URL slug (indexed) |
+| `title` | String | Page/post title |
+| `content` | Text | Page/post content (HTML) |
+| `is_published` | Boolean | Publication status |
+| `published_at` | DateTime | Publication timestamp (nullable) |
+| `created_at` | DateTime | Creation timestamp (auto) |
+| `updated_at` | DateTime | Last update timestamp (auto) |
+
+**Indexes:**
+- `slug` - Unique index for fast lookups
+- `(type, is_published)` - Composite index for filtering
+
+## Content Management
+
+### Page Service
+
+The `page_service` module (`basesite/db/services/page_service.py`) provides CRUD operations for managing pages and posts.
+
+#### List Pages
+
+```python
+from basesite.db.services import page_service
+from basesite.db.models import PageType
+
+# List all published posts
+posts = await page_service.list_pages(
+    db_session,
+    page_type=PageType.POST,
+    published_only=True,
+    limit=10
+)
+
+# List all pages (including drafts)
+pages = await page_service.list_pages(
+    db_session,
+    page_type=PageType.PAGE
+)
+```
+
+**Parameters:**
+- `db_session` (required): Database session
+- `page_type`: Filter by PageType.POST or PageType.PAGE
+- `published_only`: Only return published content
+- `limit`: Maximum number of results
+- `offset`: Number of results to skip (for pagination)
+
+#### Get Page by Slug
+
+```python
+# Get published page
+page = await page_service.get_page_by_slug(
+    db_session,
+    "about",
+    published_only=True
+)
+
+# Get any page (including drafts)
+page = await page_service.get_page_by_slug(
+    db_session,
+    "services/web"
+)
+```
+
+**Parameters:**
+- `db_session` (required): Database session
+- `slug` (required): Page slug (can include slashes for nested pages)
+- `published_only`: Only return if published
+
+#### Create Page
+
+```python
+from datetime import datetime, timezone
+
+page = await page_service.create_page(
+    db_session,
+    slug="my-post",
+    title="My First Post",
+    content="<p>Welcome to my blog!</p>",
+    page_type=PageType.POST,
+    is_published=True,
+    published_at=datetime.now(timezone.utc)
+)
+```
+
+**Parameters:**
+- `db_session` (required): Database session
+- `slug` (required): Unique URL slug
+- `title` (required): Page title
+- `content`: HTML content (default: "")
+- `page_type`: PageType.POST or PageType.PAGE (default: PAGE)
+- `is_published`: Publication status (default: False)
+- `published_at`: Publication timestamp (optional)
+
+#### Update Page
+
+```python
+from uuid import UUID
+
+updated_page = await page_service.update_page(
+    db_session,
+    page_id=UUID("..."),
+    title="Updated Title",
+    content="<p>New content</p>",
+    is_published=True
+)
+```
+
+**Parameters:**
+- `db_session` (required): Database session
+- `page_id` (required): UUID of page to update
+- `slug`: New slug (optional)
+- `title`: New title (optional)
+- `content`: New content (optional)
+- `page_type`: New type (optional)
+- `is_published`: New publication status (optional)
+- `published_at`: New publication timestamp (optional)
+
+Returns the updated Page object or None if not found.
+
+#### Delete Page
+
+```python
+success = await page_service.delete_page(
+    db_session,
+    page_id=UUID("...")
+)
+```
+
+**Parameters:**
+- `db_session` (required): Database session
+- `page_id` (required): UUID of page to delete
+
+Returns True if deleted, False if not found.
+
+### Route Integration
+
+The web controller automatically fetches pages from the database:
+
+- **Posts** (`/post/{slug}`): Looks up pages where `type=POST` and `slug` matches
+- **Pages** (`/page/{path}`): Looks up pages where `type=PAGE` and `slug` matches the full path
+
+**Authentication behavior:**
+- Logged-in users can view unpublished content
+- Anonymous users only see published content (`is_published=True`)
+
+### Creating Sample Content
+
+To add sample content, use the Python REPL or create a migration script:
+
+```python
+# Example: Create sample pages via Python REPL
+import asyncio
+from datetime import datetime, timezone
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from basesite.config import get_settings
+from basesite.db.models import PageType
+from basesite.db.services import page_service
+
+async def create_samples():
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with async_session() as session:
+        # Create a published post
+        await page_service.create_page(
+            session,
+            slug="hello-world",
+            title="Hello World",
+            content="<p>This is my first post!</p>",
+            page_type=PageType.POST,
+            is_published=True,
+            published_at=datetime.now(timezone.utc)
+        )
+
+        # Create a page
+        await page_service.create_page(
+            session,
+            slug="about",
+            title="About Us",
+            content="<p>Learn more about our company.</p>",
+            page_type=PageType.PAGE,
+            is_published=True
+        )
+
+asyncio.run(create_samples())
+```
+
+### Database Migrations
+
+The application uses SQLAlchemy's `create_all()` to automatically create tables on startup. This works well for development but is not recommended for production.
+
+**For development:**
+Tables are automatically created when you first run the application. No manual migration needed.
+
+**For production:**
+Consider using Alembic for proper database migrations to manage schema changes safely.
+
+## Database (Technical Details)
 
 ### SQLAlchemy Async Setup
 

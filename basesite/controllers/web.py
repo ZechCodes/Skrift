@@ -2,11 +2,14 @@ from pathlib import Path
 from uuid import UUID
 
 from litestar import Controller, Request, get
+from litestar.exceptions import NotFoundException
 from litestar.response import Template as TemplateResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from basesite.db.models.user import User
+from basesite.db.models import PageType
+from basesite.db.services import page_service
 from basesite.lib.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
@@ -48,7 +51,14 @@ class WebController(Controller):
         user_ctx = await self._get_user_context(request, db_session)
         flash = request.session.pop("flash", None)
 
-        template = Template("post", slug, context={"slug": slug})
+        # Fetch post from database
+        page = await page_service.get_page_by_slug(
+            db_session, slug, published_only=not request.session.get("user_id")
+        )
+        if not page or page.type != PageType.POST:
+            raise NotFoundException(f"Post '{slug}' not found")
+
+        template = Template("post", slug, context={"slug": slug, "page": page})
         return template.render(TEMPLATE_DIR, flash=flash, **user_ctx)
 
     @get("/page/{path:path}")
@@ -61,5 +71,16 @@ class WebController(Controller):
 
         # Split path into slugs (e.g., "services/web" -> ["services", "web"])
         slugs = [s for s in path.split("/") if s]
-        template = Template("page", *slugs, context={"path": path, "slugs": slugs})
+
+        # Use the full path as the slug for database lookup
+        page_slug = "/".join(slugs)
+
+        # Fetch page from database
+        page = await page_service.get_page_by_slug(
+            db_session, page_slug, published_only=not request.session.get("user_id")
+        )
+        if not page or page.type != PageType.PAGE:
+            raise NotFoundException(f"Page '{path}' not found")
+
+        template = Template("page", *slugs, context={"path": path, "slugs": slugs, "page": page})
         return template.render(TEMPLATE_DIR, flash=flash, **user_ctx)

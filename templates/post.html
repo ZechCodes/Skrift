@@ -1,15 +1,30 @@
 {% extends "base.html" %}
 
-{% block title %}{{ slug|title }} - Base Site{% endblock %}
+{% block title %}{{ page.title }} - Base Site{% endblock %}
 
 {% block content %}
 <article>
     <header>
-        <h1>{{ slug|title|replace("-", " ") }}</h1>
+        <h1>{{ page.title }}</h1>
+        {% if page.published_at %}
+        <time datetime="{{ page.published_at.isoformat() }}">
+            Published: {{ page.published_at.strftime('%B %d, %Y') }}
+        </time>
+        {% endif %}
     </header>
 
-    <p>This is the default post template for <code>{{ slug }}</code>.</p>
+    <div class="post-content">
+        {{ page.content | safe }}
+    </div>
 
-    <p>To create a custom template for this post, create <code>templates/post-{{ slug }}.html</code>.</p>
+    {% if not page.is_published %}
+    <aside style="background: #fff3cd; padding: 1rem; border-left: 4px solid #ffc107; margin-top: 2rem;">
+        <strong>Draft:</strong> This post is not published and only visible to logged-in users.
+    </aside>
+    {% endif %}
+
+    <footer style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e0e0e0; font-size: 0.9em; color: #666;">
+        <p><em>To customize this post's template, create <code>templates/post-{{ slug }}.html</code>.</em></p>
+    </footer>
 </article>
 {% endblock %}
