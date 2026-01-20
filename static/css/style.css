@@ -27,7 +27,7 @@
     --spacing-2xl: 3rem;
 
     /* Typography */
-    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+    --font-family: 'Lora', Georgia, 'Times New Roman', serif;
     --font-family-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
     --line-height: 1.6;
     --line-height-tight: 1.3;
@@ -274,6 +274,10 @@ nav ul {
     gap: var(--spacing-md);
 }
 
+nav li {
+    margin-bottom: 0;
+}
+
 nav a {
     color: var(--color-text);
     font-weight: 500;
@@ -283,9 +287,11 @@ nav a:hover {
     color: var(--color-primary);
 }
 
-nav strong a {
-    font-size: 1.125rem;
-    letter-spacing: -0.025em;
+.site-name {
+    font-family: 'Cinzel', serif;
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
 }
 
 nav .user-info {
@@ -321,7 +327,7 @@ input[type="reset"] {
     gap: var(--spacing-sm);
     font-family: inherit;
     font-size: 0.875rem;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 1;
     padding: 0.625rem 1.25rem;
     border: 1px solid transparent;
