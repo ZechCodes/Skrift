@@ -13,6 +13,7 @@ async def list_pages(
     db_session: AsyncSession,
     page_type: PageType | None = None,
     published_only: bool = False,
+    user_id: UUID | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> list[Page]:
@@ -22,6 +23,7 @@ async def list_pages(
         db_session: Database session
         page_type: Filter by page type (post, page, etc.)
         published_only: Only return published pages
+        user_id: Filter by user ID (author)
         limit: Maximum number of results
         offset: Number of results to skip
 
@@ -36,6 +38,8 @@ async def list_pages(
         filters.append(Page.type == page_type)
     if published_only:
         filters.append(Page.is_published == True)
+    if user_id:
+        filters.append(Page.user_id == user_id)
 
     if filters:
         query = query.where(and_(*filters))
@@ -102,6 +106,7 @@ async def create_page(
     page_type: PageType = PageType.PAGE,
     is_published: bool = False,
     published_at: datetime | None = None,
+    user_id: UUID | None = None,
 ) -> Page:
     """Create a new page.
 
@@ -113,6 +118,7 @@ async def create_page(
         page_type: Type of page (post, page, etc.)
         is_published: Whether page is published
         published_at: Publication timestamp
+        user_id: Author user ID (optional)
 
     Returns:
         Created Page object
@@ -124,6 +130,7 @@ async def create_page(
         type=page_type,
         is_published=is_published,
         published_at=published_at,
+        user_id=user_id,
     )
     db_session.add(page)
     await db_session.commit()
@@ -198,3 +205,24 @@ async def delete_page(
     await db_session.delete(page)
     await db_session.commit()
     return True
+
+
+async def check_page_ownership(
+    db_session: AsyncSession,
+    page_id: UUID,
+    user_id: UUID,
+) -> bool:
+    """Check if a user owns a page.
+
+    Args:
+        db_session: Database session
+        page_id: Page UUID to check
+        user_id: User UUID to check ownership
+
+    Returns:
+        True if user owns the page, False otherwise
+    """
+    page = await get_page_by_id(db_session, page_id)
+    if not page:
+        return False
+    return page.user_id == user_id
