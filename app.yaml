@@ -1,3 +1,3 @@
 controllers:
-  - app.controllers.auth:AuthController
-  - app.controllers.web:WebController
+  - basesite.controllers.auth:AuthController
+  - basesite.controllers.web:WebController
