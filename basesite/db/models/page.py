@@ -1,8 +1,9 @@
 from datetime import datetime
 from enum import Enum
+from uuid import UUID
 
-from sqlalchemy import String, Text, Boolean, DateTime, Index
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import String, Text, Boolean, DateTime, Index, ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from basesite.db.base import Base
 
@@ -18,6 +19,10 @@ class Page(Base):
     """Page/Post model for content management."""
 
     __tablename__ = "pages"
+
+    # Author relationship (optional - pages may not have an author)
+    user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    user: Mapped["User"] = relationship("User", back_populates="pages")
 
     # Content fields
     type: Mapped[PageType] = mapped_column(String(50), nullable=False, default=PageType.PAGE)
