@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,23 @@ class Template:
     Resolves templates in order of specificity:
     - Template("post", "about") → tries post-about.html, falls back to post.html
     - Template("page", "services", "web") → tries page-services-web.html → page-services.html → page.html
+
+    Template Directory Hierarchy:
+    Templates are searched in the following order:
+    1. ./templates/ (working directory) - User overrides
+    2. basesite/templates/ (package directory) - Default templates
+
+    Available Templates for Override:
+    - base.html - Base layout template
+    - index.html - Homepage template
+    - page.html - Default page template
+    - post.html - Default post template
+    - error.html - Generic error page
+    - error-404.html - Not found error page
+    - error-500.html - Server error page
+
+    Users can override any template by creating a file with the same name
+    in their project's ./templates/ directory.
     """
 
     def __init__(self, template_type: str, *slugs: str, context: dict[str, Any] | None = None):
@@ -21,9 +39,20 @@ class Template:
         self._resolved_template: str | None = None
 
     def resolve(self, template_dir: Path) -> str:
-        """Resolve the most specific template that exists."""
+        """Resolve the most specific template that exists.
+
+        Searches for templates in order:
+        1. Working directory's ./templates/
+        2. Package's templates directory
+
+        Within each directory, searches from most to least specific template name.
+        """
         if self._resolved_template:
             return self._resolved_template
+
+        # Define search paths: working directory first, then package directory
+        working_dir_templates = Path(os.getcwd()) / "templates"
+        search_dirs = [working_dir_templates, template_dir]
 
         # Build list of templates to try, from most to least specific
         templates_to_try = []
@@ -37,11 +66,13 @@ class Template:
         # Always fall back to the base template type
         templates_to_try.append(f"{self.template_type}.html")
 
-        # Find the first template that exists
+        # Search for templates in each directory
         for template_name in templates_to_try:
-            if (template_dir / template_name).exists():
-                self._resolved_template = template_name
-                return template_name
+            for search_dir in search_dirs:
+                template_path = search_dir / template_name
+                if template_path.exists():
+                    self._resolved_template = template_name
+                    return template_name
 
         # Default to base template even if it doesn't exist (let Jinja handle the error)
         self._resolved_template = f"{self.template_type}.html"
@@ -62,8 +93,16 @@ class Template:
 
 
 def get_template_config(template_dir: Path) -> TemplateConfig:
-    """Get the Jinja template configuration."""
+    """Get the Jinja template configuration.
+
+    Configures Jinja to search for templates in multiple directories:
+    1. ./templates/ (working directory) - for user overrides
+    2. package templates directory - for default templates
+    """
+    working_dir_templates = Path(os.getcwd()) / "templates"
+    directories = [working_dir_templates, template_dir]
+
     return TemplateConfig(
-        directory=template_dir,
+        directory=directories,
         engine=JinjaTemplateEngine,
     )
