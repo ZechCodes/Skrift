@@ -1,0 +1,3 @@
+controllers:
+  - app.controllers.auth:AuthController
+  - app.controllers.web:WebController

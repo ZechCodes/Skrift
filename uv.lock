@@ -104,6 +104,7 @@ dependencies = [
     { name = "httpx" },
     { name = "litestar", extra = ["cryptography", "jinja", "standard"] },
     { name = "pydantic-settings" },
+    { name = "pyyaml" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn" },
 ]
@@ -116,6 +117,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "litestar", extras = ["standard", "jinja", "cryptography"], specifier = ">=2.14.0" },
     { name = "pydantic-settings", specifier = ">=2.7.0" },
+    { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
     { name = "uvicorn", specifier = ">=0.34.0" },
 ]

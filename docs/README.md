@@ -52,6 +52,7 @@ base-site/
 │       └── login.html       # Login page
 ├── .env                     # Environment variables (not in git)
 ├── .env.example             # Environment template
+├── app.yaml                 # Controller configuration
 ├── main.py                  # Development server entry point
 └── pyproject.toml           # Project dependencies
 ```
@@ -266,32 +267,52 @@ Example usage:
 | GET | `/auth/google/callback` | AuthController | `google_callback` | Handle OAuth callback |
 | GET | `/static/*` | Static Files Router | - | Serve static assets |
 
+### Controller Configuration
+
+Controllers are loaded dynamically from `app.yaml` at startup. This allows you to add or remove controllers without modifying the application code.
+
+**app.yaml format:**
+```yaml
+controllers:
+  - app.controllers.auth:AuthController
+  - app.controllers.web:WebController
+```
+
+Each controller entry uses the format `module.path:ControllerClass`, where the module path is relative to the current working directory.
+
 ### Adding New Routes
 
-1. Create a new controller in `app/controllers/` or add to an existing one:
+1. **Create a controller** in `app/controllers/` (or any location within your project):
 
 ```python
+# app/controllers/my_controller.py
 from litestar import Controller, get
 from litestar.response import Template as TemplateResponse
+from litestar import Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
 class MyController(Controller):
     path = "/my-path"
 
     @get("/")
-    async def my_handler(self) -> TemplateResponse:
+    async def my_handler(
+        self, request: Request, db_session: AsyncSession
+    ) -> TemplateResponse:
         return TemplateResponse("my-template.html", context={})
 ```
 
-2. Register the controller in `app/asgi.py`:
+2. **Register the controller** in `app.yaml`:
 
-```python
-from app.controllers.my_controller import MyController
-
-app = Litestar(
-    route_handlers=[AuthController, WebController, MyController, static_files_router],
-    # ...
-)
+```yaml
+controllers:
+  - app.controllers.auth:AuthController
+  - app.controllers.web:WebController
+  - app.controllers.my_controller:MyController  # Add your controller
 ```
+
+3. **Restart the application** for the changes to take effect.
+
+The application will automatically import and register all controllers listed in `app.yaml`.
 
 ## Database
 

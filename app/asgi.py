@@ -1,7 +1,9 @@
 import hashlib
+import importlib
 from datetime import datetime
 from pathlib import Path
 
+import yaml
 from advanced_alchemy.extensions.litestar import (
     AsyncSessionConfig,
     SQLAlchemyAsyncConfig,
@@ -16,15 +18,36 @@ from litestar.static_files import create_static_files_router
 from litestar.template import TemplateConfig
 
 from app.config import get_settings
-from app.controllers.auth import AuthController
-from app.controllers.web import WebController
 from app.db.base import Base
 from app.lib.exceptions import http_exception_handler, internal_server_error_handler
+
+
+def load_controllers() -> list:
+    """Load controllers from app.yaml configuration."""
+    config_path = Path.cwd() / "app.yaml"
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"app.yaml not found at {config_path}")
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    controllers = []
+    for controller_spec in config.get("controllers", []):
+        module_path, class_name = controller_spec.split(":")
+        module = importlib.import_module(module_path)
+        controller_class = getattr(module, class_name)
+        controllers.append(controller_class)
+
+    return controllers
 
 
 def create_app() -> Litestar:
     """Create and configure the Litestar application."""
     settings = get_settings()
+
+    # Load controllers from app.yaml
+    controllers = load_controllers()
 
     # Database configuration
     db_config = SQLAlchemyAsyncConfig(
@@ -60,7 +83,7 @@ def create_app() -> Litestar:
     )
 
     app = Litestar(
-        route_handlers=[AuthController, WebController, static_files_router],
+        route_handlers=[*controllers, static_files_router],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[session_config.middleware],
         template_config=template_config,
