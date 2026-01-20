@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import String, Text, Boolean, DateTime, Index, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from basesite.db.base import Base
+from skrift.db.base import Base
 
 
 class PageType(str, Enum):

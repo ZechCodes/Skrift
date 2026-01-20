@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Base Site{% endblock %}</title>
+    <title>{% block title %}Skrift{% endblock %}</title>
     <link rel="stylesheet" href="/static/css/style.css">
     {% block head %}{% endblock %}
 </head>
@@ -11,7 +11,7 @@
     <header class="container">
         <nav>
             <ul>
-                <li><strong><a href="/">Base Site</a></strong></li>
+                <li><strong><a href="/">Skrift</a></strong></li>
             </ul>
             <ul>
                 {% if user %}
@@ -43,7 +43,7 @@
 
     <footer class="container">
         <hr>
-        <p><small>&copy; {{ now().year }} Base Site. All rights reserved.</small></p>
+        <p><small>&copy; {{ now().year }} Skrift. All rights reserved.</small></p>
     </footer>
 
     {% block scripts %}{% endblock %}

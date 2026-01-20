@@ -17,7 +17,7 @@ class Template:
     Template Directory Hierarchy:
     Templates are searched in the following order:
     1. ./templates/ (working directory) - User overrides
-    2. basesite/templates/ (package directory) - Default templates
+    2. skrift/templates/ (package directory) - Default templates
 
     Available Templates for Override:
     - base.html - Base layout template

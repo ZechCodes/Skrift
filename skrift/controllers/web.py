@@ -9,10 +9,10 @@ from litestar.datastructures import FormMultiDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from basesite.db.models.user import User
-from basesite.db.models import PageType
-from basesite.db.services import page_service
-from basesite.lib.template import Template
+from skrift.db.models.user import User
+from skrift.db.models import PageType
+from skrift.db.services import page_service
+from skrift.lib.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
 

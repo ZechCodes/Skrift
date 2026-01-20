@@ -3,7 +3,7 @@ import uvicorn
 
 def main():
     uvicorn.run(
-        "basesite.asgi:app",
+        "skrift.asgi:app",
         host="0.0.0.0",
         port=8080,
         reload=True,

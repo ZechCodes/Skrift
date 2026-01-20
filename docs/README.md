@@ -1,4 +1,4 @@
-# Base Site Documentation
+# Skrift Documentation
 
 A Litestar-powered web application with Google OAuth authentication and WordPress-like template resolution.
 
@@ -20,8 +20,8 @@ For styling documentation, see: [CSS Framework](css-framework.md)
 ## Project Structure
 
 ```
-base-site/
-├── app/
+skrift/
+├── skrift/
 │   ├── __init__.py
 │   ├── asgi.py              # Application factory and Litestar setup
 │   ├── config.py            # Settings and environment configuration
@@ -93,7 +93,7 @@ Configuration is managed via environment variables, loaded from `.env` using Pyd
 
 ### Settings Class
 
-The `Settings` class in `app/config.py` defines all configuration options:
+The `Settings` class in `skrift/config.py` defines all configuration options:
 
 ```python
 class Settings(BaseSettings):
@@ -175,7 +175,7 @@ The application uses a WordPress-like template resolution system that selects te
 
 ### How Template Resolution Works
 
-The `Template` class in `app/lib/template.py` resolves templates from most specific to least specific:
+The `Template` class in `skrift/lib/template.py` resolves templates from most specific to least specific:
 
 ```python
 Template("post", "about")
@@ -238,7 +238,7 @@ The `base.html` template defines these blocks for child templates:
 
 | Block | Purpose |
 |-------|---------|
-| `title` | Page title (default: "Base Site") |
+| `title` | Page title (default: "Skrift") |
 | `head` | Additional `<head>` content |
 | `main_class` | Additional classes for `<main>` |
 | `content` | Main page content |
@@ -278,18 +278,18 @@ Controllers are loaded dynamically from `app.yaml` at startup. This allows you t
 **app.yaml format:**
 ```yaml
 controllers:
-  - app.controllers.auth:AuthController
-  - app.controllers.web:WebController
+  - skrift.controllers.auth:AuthController
+  - skrift.controllers.web:WebController
 ```
 
 Each controller entry uses the format `module.path:ControllerClass`, where the module path is relative to the current working directory.
 
 ### Adding New Routes
 
-1. **Create a controller** in `app/controllers/` (or any location within your project):
+1. **Create a controller** in `skrift/controllers/` (or any location within your project):
 
 ```python
-# app/controllers/my_controller.py
+# skrift/controllers/my_controller.py
 from litestar import Controller, get
 from litestar.response import Template as TemplateResponse
 from litestar import Request
@@ -309,9 +309,9 @@ class MyController(Controller):
 
 ```yaml
 controllers:
-  - app.controllers.auth:AuthController
-  - app.controllers.web:WebController
-  - app.controllers.my_controller:MyController  # Add your controller
+  - skrift.controllers.auth:AuthController
+  - skrift.controllers.web:WebController
+  - skrift.controllers.my_controller:MyController  # Add your controller
 ```
 
 3. **Restart the application** for the changes to take effect.
@@ -330,7 +330,7 @@ Stores OAuth authentication data. See [Authentication](#authentication) section 
 
 #### Page Model
 
-The `Page` model (`basesite/db/models/page.py`) manages all content including posts and pages.
+The `Page` model (`skrift/db/models/page.py`) manages all content including posts and pages.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -352,13 +352,13 @@ The `Page` model (`basesite/db/models/page.py`) manages all content including po
 
 ### Page Service
 
-The `page_service` module (`basesite/db/services/page_service.py`) provides CRUD operations for managing pages and posts.
+The `page_service` module (`skrift/db/services/page_service.py`) provides CRUD operations for managing pages and posts.
 
 #### List Pages
 
 ```python
-from basesite.db.services import page_service
-from basesite.db.models import PageType
+from skrift.db.services import page_service
+from skrift.db.models import PageType
 
 # List all published posts
 posts = await page_service.list_pages(
@@ -491,9 +491,9 @@ import asyncio
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-from basesite.config import get_settings
-from basesite.db.models import PageType
-from basesite.db.services import page_service
+from skrift.config import get_settings
+from skrift.db.models import PageType
+from skrift.db.services import page_service
 
 async def create_samples():
     settings = get_settings()
@@ -547,7 +547,7 @@ The application uses SQLAlchemy with async support via Advanced Alchemy:
 
 ### Base Model
 
-All models inherit from `Base` (`app/db/base.py`), which provides:
+All models inherit from `Base` (`skrift/db/base.py`), which provides:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -623,7 +623,7 @@ uv add gunicorn
 
 Run the application:
 ```bash
-gunicorn app.asgi:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+gunicorn skrift.asgi:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
 ```
 
 ### Database Considerations

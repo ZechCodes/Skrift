@@ -1,5 +1,5 @@
 [project]
-name = "basesite"
+name = "skrift"
 version = "0.1.0"
 description = "Litestar website with Google OAuth and WP-like templates"
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-base-site = "main:main"
+skrift = "main:main"
 
 [tool.ruff]
 line-length = 100

@@ -17,9 +17,9 @@ from litestar.middleware.session.client_side import CookieBackendConfig
 from litestar.static_files import create_static_files_router
 from litestar.template import TemplateConfig
 
-from basesite.config import get_settings
-from basesite.db.base import Base
-from basesite.lib.exceptions import http_exception_handler, internal_server_error_handler
+from skrift.config import get_settings
+from skrift.db.base import Base
+from skrift.lib.exceptions import http_exception_handler, internal_server_error_handler
 
 
 def load_controllers() -> list:

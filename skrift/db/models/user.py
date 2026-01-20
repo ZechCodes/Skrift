@@ -4,10 +4,10 @@ from typing import TYPE_CHECKING
 from sqlalchemy import String, Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from basesite.db.base import Base
+from skrift.db.base import Base
 
 if TYPE_CHECKING:
-    from basesite.db.models.page import Page
+    from skrift.db.models.page import Page
 
 
 class User(Base):
