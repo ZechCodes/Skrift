@@ -172,22 +172,10 @@ a {
     color: var(--color-primary);
     text-decoration: none;
     transition: color var(--transition-fast);
-}
-
-a:hover {
-    color: var(--color-primary-hover);
-}
-
-/* Animated underline for content links */
-.post-content a,
-.page-content a,
-.post-preview h2 a {
     position: relative;
 }
 
-.post-content a::after,
-.page-content a::after,
-.post-preview h2 a::after {
+a::after {
     content: '';
     position: absolute;
     left: 0;
@@ -197,12 +185,14 @@ a:hover {
     background-color: currentColor;
     transform: scaleX(0);
     transform-origin: right;
-    transition: transform var(--transition-normal) ease-out;
+    transition: transform 1s ease-out;
 }
 
-.post-content a:hover::after,
-.page-content a:hover::after,
-.post-preview h2 a:hover::after {
+a:hover {
+    color: var(--color-primary-hover);
+}
+
+a:hover::after {
     transform: scaleX(1);
     transform-origin: left;
 }
