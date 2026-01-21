@@ -178,6 +178,35 @@ a:hover {
     color: var(--color-primary-hover);
 }
 
+/* Animated underline for content links */
+.post-content a,
+.page-content a,
+.post-preview h2 a {
+    position: relative;
+}
+
+.post-content a::after,
+.page-content a::after,
+.post-preview h2 a::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 100%;
+    height: 1px;
+    background-color: currentColor;
+    transform: scaleX(0);
+    transform-origin: right;
+    transition: transform var(--transition-normal) ease-out;
+}
+
+.post-content a:hover::after,
+.page-content a:hover::after,
+.post-preview h2 a:hover::after {
+    transform: scaleX(1);
+    transform-origin: left;
+}
+
 code {
     font-family: var(--font-family-mono);
     font-size: 0.875em;
@@ -608,13 +637,13 @@ th {
 
 .posts-list .post-preview {
     background-color: transparent;
-    border-bottom: 1px solid var(--color-border);
     border-radius: 0;
-    padding: var(--spacing-lg) 0;
+    padding: 0;
+    margin-bottom: var(--spacing-xl);
 }
 
 .posts-list .post-preview:last-child {
-    border-bottom: none;
+    margin-bottom: 0;
 }
 
 .posts-list .post-preview header {
@@ -625,14 +654,6 @@ th {
     font-family: 'Cinzel', serif;
     font-size: 1.5rem;
     margin-bottom: var(--spacing-xs);
-}
-
-.posts-list .post-preview h2 a {
-    text-decoration: none;
-}
-
-.posts-list .post-preview h2 a:hover {
-    text-decoration: underline;
 }
 
 .post-meta {
