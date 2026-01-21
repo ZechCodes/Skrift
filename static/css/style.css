@@ -421,6 +421,11 @@ button.outline:hover,
     color: var(--color-text);
 }
 
+/* Ensure link buttons don't stretch in flex containers */
+a[role="button"] {
+    align-self: center;
+}
+
 /* ========================================
    Forms (Minimal Style)
    ======================================== */
