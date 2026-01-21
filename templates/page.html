@@ -22,14 +22,5 @@
         <strong>Draft:</strong> This page is not published and only visible to logged-in users.
     </aside>
     {% endif %}
-
-    <footer style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e0e0e0; font-size: 0.9em; color: #666;">
-        <p><em>To customize this page's template, create one of:</em></p>
-        <ul>
-            {% for i in range(slugs|length, 0, -1) %}
-            <li><code>templates/page-{{ slugs[:i]|join("-") }}.html</code></li>
-            {% endfor %}
-        </ul>
-    </footer>
 </article>
 {% endblock %}
