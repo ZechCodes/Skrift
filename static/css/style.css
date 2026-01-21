@@ -175,7 +175,7 @@ a {
     position: relative;
 }
 
-a::after {
+a:not([role="button"])::after {
     content: '';
     position: absolute;
     left: 0;
@@ -192,7 +192,7 @@ a:hover {
     color: var(--color-primary-hover);
 }
 
-a:hover::after {
+a:not([role="button"]):hover::after {
     transform: scaleX(1);
     transform-origin: left;
 }
