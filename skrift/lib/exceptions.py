@@ -4,6 +4,8 @@ from litestar import Request, Response
 from litestar.exceptions import HTTPException
 from litestar.status_codes import HTTP_500_INTERNAL_SERVER_ERROR
 
+from skrift.config import get_settings
+
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
 
 
@@ -34,6 +36,7 @@ def http_exception_handler(request: Request, exc: HTTPException) -> Response:
             status_code=status_code,
             message=detail,
             user=None,
+            site_name=get_settings().site_name,
         )
         return Response(
             content=content,
@@ -61,6 +64,7 @@ def internal_server_error_handler(request: Request, exc: Exception) -> Response:
             status_code=status_code,
             message="An unexpected error occurred.",
             user=None,
+            site_name=get_settings().site_name,
         )
         return Response(
             content=content,
