@@ -185,7 +185,7 @@ a::after {
     background-color: currentColor;
     transform: scaleX(0);
     transform-origin: right;
-    transition: transform 1s ease-out;
+    transition: transform 500ms ease-out;
 }
 
 a:hover {
