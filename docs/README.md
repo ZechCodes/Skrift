@@ -79,13 +79,18 @@ skrift/
 
 3. Edit `.env` with your configuration (see [Configuration](#configuration)).
 
-4. Install dependencies and run:
+4. Install dependencies and set up the database:
    ```bash
    uv sync
+   skrift-db upgrade head
+   ```
+
+5. Run the application:
+   ```bash
    uv run python main.py
    ```
 
-5. Open http://localhost:8080 in your browser.
+6. Open http://localhost:8080 in your browser.
 
 ## Configuration
 
@@ -527,13 +532,89 @@ asyncio.run(create_samples())
 
 ### Database Migrations
 
-The application uses SQLAlchemy's `create_all()` to automatically create tables on startup. This works well for development but is not recommended for production.
+Skrift uses [Alembic](https://alembic.sqlalchemy.org/) for database migrations. Migrations are required to set up and update the database schema.
 
-**For development:**
-Tables are automatically created when you first run the application. No manual migration needed.
+#### Quick Start
 
-**For production:**
-Consider using Alembic for proper database migrations to manage schema changes safely.
+**New installation (fresh database):**
+```bash
+# Apply all migrations to create the database schema
+skrift-db upgrade head
+```
+
+**Existing database (upgrading from create_all):**
+
+If you have an existing database that was created using the old `create_all=True` method, stamp it to mark existing migrations as applied:
+```bash
+# Mark the initial migration as already applied (don't run it)
+skrift-db stamp head
+
+# Now you can apply future migrations normally
+skrift-db upgrade head
+```
+
+#### Common Migration Commands
+
+```bash
+# Apply all pending migrations
+skrift-db upgrade head
+
+# Show current migration version
+skrift-db current
+
+# Show migration history
+skrift-db history
+
+# Rollback one migration
+skrift-db downgrade -1
+
+# Rollback to a specific revision
+skrift-db downgrade <revision_id>
+
+# Generate SQL without executing (for review)
+skrift-db upgrade head --sql
+```
+
+#### Creating New Migrations
+
+When you modify database models, create a new migration:
+
+```bash
+# Auto-generate migration from model changes
+skrift-db revision --autogenerate -m "add new field to pages"
+
+# Create an empty migration (for manual SQL)
+skrift-db revision -m "custom migration"
+```
+
+**Important:** Always review auto-generated migrations before applying them. Alembic may not detect all changes correctly (especially for column type changes or index modifications).
+
+#### Migration Files
+
+Migrations are stored in `alembic/versions/`. Each migration file contains:
+- `upgrade()`: Apply the migration
+- `downgrade()`: Reverse the migration
+
+Example migration structure:
+```
+alembic/
+├── env.py              # Alembic environment configuration
+├── script.py.mako      # Template for new migrations
+└── versions/           # Migration files
+    └── 20260120_..._initial_schema.py
+```
+
+#### Environment Configuration
+
+Migrations read the database URL from your `.env` file or `DATABASE_URL` environment variable. The same configuration used by the application is used for migrations.
+
+```bash
+# SQLite (development)
+DATABASE_URL=sqlite+aiosqlite:///./app.db
+
+# PostgreSQL (production)
+DATABASE_URL=postgresql+asyncpg://user:password@host:5432/dbname
+```
 
 ## Database (Technical Details)
 
@@ -542,7 +623,7 @@ Consider using Alembic for proper database migrations to manage schema changes s
 The application uses SQLAlchemy with async support via Advanced Alchemy:
 
 - **Session injection**: `AsyncSession` is automatically injected into route handlers
-- **Auto-create tables**: Tables are created on startup (`create_all=True`)
+- **Migrations**: Schema is managed via Alembic migrations (`skrift-db upgrade head`)
 - **Session config**: `expire_on_commit=False` for better async compatibility
 
 ### Base Model
@@ -630,9 +711,24 @@ gunicorn skrift.asgi:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
 
 For production with PostgreSQL:
 
-1. Ensure `asyncpg` is installed (included in dependencies)
-2. Set up your PostgreSQL database
-3. Update `DATABASE_URL` in your environment
-4. Consider using database migrations (e.g., Alembic) for schema changes
+1. Set up your PostgreSQL database
+2. Update `DATABASE_URL` in your environment
+3. Run migrations to create the schema:
+   ```bash
+   skrift-db upgrade head
+   ```
 
-The application will automatically create tables on first run, but for production deployments, you may want to manage schema migrations separately.
+**Deployment workflow:**
+```bash
+# 1. Pull latest code
+git pull
+
+# 2. Install dependencies
+uv sync
+
+# 3. Apply any new migrations
+skrift-db upgrade head
+
+# 4. Restart the application
+systemctl restart skrift  # or your process manager
+```

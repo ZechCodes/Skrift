@@ -50,10 +50,12 @@ def create_app() -> Litestar:
     controllers = load_controllers()
 
     # Database configuration
+    # Note: create_all is disabled - use migrations instead:
+    #   skrift-db upgrade head
     db_config = SQLAlchemyAsyncConfig(
         connection_string=settings.database_url,
         metadata=Base.metadata,
-        create_all=True,
+        create_all=False,
         session_config=AsyncSessionConfig(expire_on_commit=False),
     )
 
