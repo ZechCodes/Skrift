@@ -46,7 +46,7 @@
 
     <footer class="container">
         <hr>
-        <p><small>&copy; {{ now().year }} {{ site_name }}. All rights reserved.</small></p>
+        <p><small>&copy; {% if site_copyright_start_year and site_copyright_start_year != now().year %}{{ site_copyright_start_year }}-{% endif %}{{ now().year }} {{ site_copyright_holder or site_name }}. All rights reserved.</small></p>
     </footer>
 
     {% block scripts %}{% endblock %}
