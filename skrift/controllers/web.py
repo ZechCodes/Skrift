@@ -52,12 +52,11 @@ class WebController(Controller):
         user_ctx = await self._get_user_context(request, db_session)
         flash = request.session.pop("flash", None)
 
-        # Fetch published posts for display
+        # Fetch all published posts for display
         posts = await page_service.list_pages(
             db_session,
             page_type=PageType.POST,
             published_only=True,
-            limit=10,
         )
 
         return TemplateResponse(
