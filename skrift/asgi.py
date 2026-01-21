@@ -88,7 +88,13 @@ def create_app() -> Litestar:
     template_config = TemplateConfig(
         directory=template_dir,
         engine=JinjaTemplateEngine,
-        engine_callback=lambda engine: engine.engine.globals.update({"now": datetime.now}),
+        engine_callback=lambda engine: engine.engine.globals.update({
+            "now": datetime.now,
+            "site_name": settings.site_name,
+            "site_tagline": settings.site_tagline,
+            "site_copyright_holder": settings.site_copyright_holder,
+            "site_copyright_start_year": settings.site_copyright_start_year,
+        }),
     )
 
     # Static files
