@@ -583,9 +583,10 @@ label:has(input[type="radio"]) {
     cursor: pointer;
 }
 
-/* Form submit button spacing */
+/* Form button spacing */
 form button[type="submit"],
-form input[type="submit"] {
+form input[type="submit"],
+form [role="button"] {
     margin-top: var(--spacing-lg);
 }
 
