@@ -13,6 +13,7 @@ dependencies = [
     "alembic>=1.14.0",
     "httpx>=0.28.0",
     "pydantic-settings>=2.7.0",
+    "python-dotenv>=1.0.0",
     "uvicorn>=0.34.0",
     "pyyaml>=6.0.0",
 ]

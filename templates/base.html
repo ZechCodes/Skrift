@@ -22,7 +22,7 @@
                     <li><a href="/posts/new">New Post</a></li>
                     <li class="user-info">
                         {% if user.picture_url %}
-                            <img src="{{ user.picture_url }}" alt="{{ user.name }}">
+                            <img src="{{ user.picture_url }}" alt="{{ user.name }}" referrerpolicy="no-referrer">
                         {% endif %}
                         <span>{{ user.name or user.email }}</span>
                     </li>

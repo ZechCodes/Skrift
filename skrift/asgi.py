@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
+from advanced_alchemy.config import EngineConfig
 from advanced_alchemy.extensions.litestar import (
     AsyncSessionConfig,
     SQLAlchemyAsyncConfig,
@@ -52,11 +53,23 @@ def create_app() -> Litestar:
     # Database configuration
     # Note: create_all is disabled - use migrations instead:
     #   skrift-db upgrade head
+    # SQLite doesn't support connection pooling, so only set pool params for other DBs
+    if "sqlite" in settings.db.url:
+        engine_config = EngineConfig(echo=settings.db.echo)
+    else:
+        engine_config = EngineConfig(
+            pool_size=settings.db.pool_size,
+            max_overflow=settings.db.pool_overflow,
+            pool_timeout=settings.db.pool_timeout,
+            echo=settings.db.echo,
+        )
+
     db_config = SQLAlchemyAsyncConfig(
-        connection_string=settings.database_url,
+        connection_string=settings.db.url,
         metadata=Base.metadata,
         create_all=False,
         session_config=AsyncSessionConfig(expire_on_commit=False),
+        engine_config=engine_config,
     )
 
     # Session configuration (client-side encrypted cookies)

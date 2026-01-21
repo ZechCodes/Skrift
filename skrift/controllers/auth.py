@@ -27,16 +27,17 @@ class AuthController(Controller):
     async def google_login(self, request: Request) -> Redirect:
         """Redirect to Google OAuth consent screen."""
         settings = get_settings()
+        google_config = settings.auth.providers["google"]
 
         # Generate CSRF state token
         state = secrets.token_urlsafe(32)
         request.session["oauth_state"] = state
 
         params = {
-            "client_id": settings.google_client_id,
-            "redirect_uri": settings.google_redirect_uri,
+            "client_id": google_config.client_id,
+            "redirect_uri": settings.auth.get_redirect_uri("google"),
             "response_type": "code",
-            "scope": "openid email profile",
+            "scope": " ".join(google_config.scopes),
             "state": state,
             "access_type": "offline",
             "prompt": "select_account",
@@ -56,6 +57,7 @@ class AuthController(Controller):
     ) -> Redirect:
         """Handle Google OAuth callback."""
         settings = get_settings()
+        google_config = settings.auth.providers["google"]
 
         # Check for OAuth errors
         if error:
@@ -75,11 +77,11 @@ class AuthController(Controller):
             token_response = await client.post(
                 GOOGLE_TOKEN_URL,
                 data={
-                    "client_id": settings.google_client_id,
-                    "client_secret": settings.google_client_secret,
+                    "client_id": google_config.client_id,
+                    "client_secret": google_config.client_secret,
                     "code": code,
                     "grant_type": "authorization_code",
-                    "redirect_uri": settings.google_redirect_uri,
+                    "redirect_uri": settings.auth.get_redirect_uri("google"),
                 },
             )
 

@@ -1,11 +1,13 @@
 from pathlib import Path
 from uuid import UUID
 from datetime import datetime, UTC
+from typing import Annotated
 
 from litestar import Controller, Request, get, post
 from litestar.exceptions import NotFoundException, NotAuthorizedException
 from litestar.response import Template as TemplateResponse, Redirect
-from litestar.datastructures import FormMultiDict
+from litestar.params import Body
+from litestar.enums import RequestEncodingType
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,7 +123,10 @@ class WebController(Controller):
 
     @post("/posts/new")
     async def create_post(
-        self, request: "Request", db_session: AsyncSession, data: FormMultiDict
+        self,
+        request: "Request",
+        db_session: AsyncSession,
+        data: Annotated[dict, Body(media_type=RequestEncodingType.URL_ENCODED)],
     ) -> Redirect:
         """Create a new post."""
         user = await self._require_auth(request, db_session)
@@ -197,7 +202,11 @@ class WebController(Controller):
 
     @post("/posts/{post_id:uuid}/edit")
     async def update_post(
-        self, request: "Request", db_session: AsyncSession, post_id: UUID, data: FormMultiDict
+        self,
+        request: "Request",
+        db_session: AsyncSession,
+        post_id: UUID,
+        data: Annotated[dict, Body(media_type=RequestEncodingType.URL_ENCODED)],
     ) -> Redirect:
         """Update an existing post."""
         user = await self._require_auth(request, db_session)
