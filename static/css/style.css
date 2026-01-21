@@ -505,7 +505,7 @@ input[type="radio"] {
     width: 1.25rem;
     height: 1.25rem;
     border: 1px solid var(--color-border);
-    background-color: var(--color-bg);
+    background-color: var(--color-surface);
     cursor: pointer;
     transition: border-color var(--transition-fast),
                 background-color var(--transition-fast),
@@ -576,6 +576,12 @@ label:has(input[type="radio"]) {
     gap: var(--spacing-sm);
     font-weight: 400;
     cursor: pointer;
+}
+
+/* Form submit button spacing */
+form button[type="submit"],
+form input[type="submit"] {
+    margin-top: var(--spacing-lg);
 }
 
 /* ========================================
