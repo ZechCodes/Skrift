@@ -14,6 +14,7 @@ from skrift.db.base import Base
 # Import all models to ensure they're registered with Base.metadata
 from skrift.db.models.user import User  # noqa: F401
 from skrift.db.models.page import Page  # noqa: F401
+from skrift.db.models.role import Role, RolePermission  # noqa: F401
 
 # Alembic Config object
 config = context.config

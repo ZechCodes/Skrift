@@ -8,6 +8,7 @@ from skrift.db.base import Base
 
 if TYPE_CHECKING:
     from skrift.db.models.page import Page
+    from skrift.db.models.role import Role
 
 
 class User(Base):
@@ -30,3 +31,6 @@ class User(Base):
 
     # Relationships
     pages: Mapped[list["Page"]] = relationship("Page", back_populates="user")
+    roles: Mapped[list["Role"]] = relationship(
+        "Role", secondary="user_roles", back_populates="users", lazy="selectin"
+    )

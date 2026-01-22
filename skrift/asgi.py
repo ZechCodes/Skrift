@@ -18,6 +18,7 @@ from litestar.middleware.session.client_side import CookieBackendConfig
 from litestar.static_files import create_static_files_router
 from litestar.template import TemplateConfig
 
+from skrift.auth import sync_roles_to_database
 from skrift.config import get_settings
 from skrift.db.base import Base
 from skrift.lib.exceptions import http_exception_handler, internal_server_error_handler
@@ -103,7 +104,13 @@ def create_app() -> Litestar:
         directories=[Path(__file__).parent.parent / "static"],
     )
 
+    async def on_startup(_app: Litestar) -> None:
+        """Sync roles to database on application startup."""
+        async with db_config.get_session() as session:
+            await sync_roles_to_database(session)
+
     app = Litestar(
+        on_startup=[on_startup],
         route_handlers=[*controllers, static_files_router],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[session_config.middleware],
