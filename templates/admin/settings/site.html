@@ -1,0 +1,32 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Site Settings - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>Site Settings</h1>
+    <p>Configure your site's name, tagline, and other metadata</p>
+</hgroup>
+
+<form method="post" action="/admin/settings">
+    <label for="site_name">Site Name</label>
+    <input type="text" id="site_name" name="site_name" value="{{ settings.site_name }}" required>
+    <small class="text-muted">The name displayed in the header and browser title</small>
+
+    <label for="site_tagline">Site Tagline</label>
+    <input type="text" id="site_tagline" name="site_tagline" value="{{ settings.site_tagline }}">
+    <small class="text-muted">A short description or slogan for your site</small>
+
+    <label for="site_copyright_holder">Copyright Holder</label>
+    <input type="text" id="site_copyright_holder" name="site_copyright_holder" value="{{ settings.site_copyright_holder }}">
+    <small class="text-muted">Name displayed in the copyright notice (defaults to site name if empty)</small>
+
+    <label for="site_copyright_start_year">Copyright Start Year</label>
+    <input type="number" id="site_copyright_start_year" name="site_copyright_start_year" value="{{ settings.site_copyright_start_year }}" min="1900" max="2100">
+    <small class="text-muted">If different from current year, will show a range (e.g., 2020-2026)</small>
+
+    <div class="form-actions">
+        <button type="submit">Save Settings</button>
+    </div>
+</form>
+{% endblock %}

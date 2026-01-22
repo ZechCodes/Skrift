@@ -1,6 +1,6 @@
 {% extends "admin/base.html" %}
 
-{% block title %}Edit Roles - {{ target_user.name or target_user.email }} - Admin - {{ site_name }}{% endblock %}
+{% block title %}Edit Roles - {{ target_user.name or target_user.email }} - Admin - {{ site_name() }}{% endblock %}
 
 {% block admin_content %}
 <hgroup>

@@ -27,6 +27,7 @@ from skrift.admin.navigation import build_admin_nav, ADMIN_NAV_TAG
 from skrift.db.models.user import User
 from skrift.db.models import Page
 from skrift.db.services import page_service
+from skrift.db.services import setting_service
 
 
 class AdminController(Controller):
@@ -395,3 +396,57 @@ class AdminController(Controller):
 
         request.session["flash"] = f"'{page_title}' has been deleted"
         return Redirect(path="/admin/pages")
+
+    @get(
+        "/settings",
+        tags=[ADMIN_NAV_TAG],
+        guards=[auth_guard, Permission("modify-site")],
+        opt={"label": "Settings", "icon": "settings", "order": 100},
+    )
+    async def site_settings(
+        self, request: Request, db_session: AsyncSession
+    ) -> TemplateResponse:
+        """Site settings page."""
+        ctx = await self._get_admin_context(request, db_session)
+        site_settings = await setting_service.get_site_settings(db_session)
+
+        flash = request.session.pop("flash", None)
+        return TemplateResponse(
+            "admin/settings/site.html",
+            context={"flash": flash, "settings": site_settings, **ctx},
+        )
+
+    @post(
+        "/settings",
+        guards=[auth_guard, Permission("modify-site")],
+    )
+    async def save_site_settings(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        data: Annotated[dict, Body(media_type=RequestEncodingType.URL_ENCODED)],
+    ) -> Redirect:
+        """Save site settings."""
+        site_name = data.get("site_name", "").strip()
+        site_tagline = data.get("site_tagline", "").strip()
+        site_copyright_holder = data.get("site_copyright_holder", "").strip()
+        site_copyright_start_year = data.get("site_copyright_start_year", "").strip()
+
+        await setting_service.set_setting(
+            db_session, setting_service.SITE_NAME_KEY, site_name
+        )
+        await setting_service.set_setting(
+            db_session, setting_service.SITE_TAGLINE_KEY, site_tagline
+        )
+        await setting_service.set_setting(
+            db_session, setting_service.SITE_COPYRIGHT_HOLDER_KEY, site_copyright_holder
+        )
+        await setting_service.set_setting(
+            db_session, setting_service.SITE_COPYRIGHT_START_YEAR_KEY, site_copyright_start_year
+        )
+
+        # Refresh the site settings cache
+        await setting_service.load_site_settings_cache(db_session)
+
+        request.session["flash"] = "Site settings saved successfully"
+        return Redirect(path="/admin/settings")

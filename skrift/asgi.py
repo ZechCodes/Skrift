@@ -21,6 +21,13 @@ from litestar.template import TemplateConfig
 from skrift.auth import sync_roles_to_database
 from skrift.config import get_settings
 from skrift.db.base import Base
+from skrift.db.services.setting_service import (
+    load_site_settings_cache,
+    get_cached_site_name,
+    get_cached_site_tagline,
+    get_cached_site_copyright_holder,
+    get_cached_site_copyright_start_year,
+)
 from skrift.lib.exceptions import http_exception_handler, internal_server_error_handler
 
 
@@ -85,16 +92,18 @@ def create_app() -> Litestar:
     )
 
     # Template configuration
+    # Site settings are loaded from the database cache via callable functions
+    # so they're always current without requiring a restart
     template_dir = Path(__file__).parent.parent / "templates"
     template_config = TemplateConfig(
         directory=template_dir,
         engine=JinjaTemplateEngine,
         engine_callback=lambda engine: engine.engine.globals.update({
             "now": datetime.now,
-            "site_name": settings.site_name,
-            "site_tagline": settings.site_tagline,
-            "site_copyright_holder": settings.site_copyright_holder,
-            "site_copyright_start_year": settings.site_copyright_start_year,
+            "site_name": get_cached_site_name,
+            "site_tagline": get_cached_site_tagline,
+            "site_copyright_holder": get_cached_site_copyright_holder,
+            "site_copyright_start_year": get_cached_site_copyright_start_year,
         }),
     )
 
@@ -105,9 +114,10 @@ def create_app() -> Litestar:
     )
 
     async def on_startup(_app: Litestar) -> None:
-        """Sync roles to database on application startup."""
+        """Sync roles and load site settings on application startup."""
         async with db_config.get_session() as session:
             await sync_roles_to_database(session)
+            await load_site_settings_cache(session)
 
     app = Litestar(
         on_startup=[on_startup],

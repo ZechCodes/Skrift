@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}{{ site_name }}{% endblock %}</title>
+    <title>{% block title %}{{ site_name() }}{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Lora:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet">
@@ -14,7 +14,7 @@
     <header class="container">
         <nav>
             <ul>
-                <li><a href="/" class="site-name">{{ site_name }}</a></li>
+                <li><a href="/" class="site-name">{{ site_name() }}</a></li>
             </ul>
             <ul>
                 {% if user %}
@@ -44,7 +44,7 @@
 
     <footer class="container">
         <hr>
-        <p><small>&copy; {% if site_copyright_start_year and site_copyright_start_year != now().year %}{{ site_copyright_start_year }}-{% endif %}{{ now().year }} {{ site_copyright_holder or site_name }}. All rights reserved.</small></p>
+        <p><small>&copy; {% if site_copyright_start_year() and site_copyright_start_year() != now().year %}{{ site_copyright_start_year() }}-{% endif %}{{ now().year }} {{ site_copyright_holder() or site_name() }}. All rights reserved.</small></p>
     </footer>
 
     {% block scripts %}{% endblock %}

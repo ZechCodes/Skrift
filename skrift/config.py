@@ -85,12 +85,6 @@ class Settings(BaseSettings):
     debug: bool = False
     secret_key: str
 
-    # Site branding
-    site_name: str = "My Site"
-    site_tagline: str = "Welcome to my site"
-    site_copyright_holder: str | None = None
-    site_copyright_start_year: int | None = None
-
     # Database config (loaded from app.yaml)
     db: DatabaseConfig = DatabaseConfig()
 

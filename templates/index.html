@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Home - {{ site_name }}{% endblock %}
+{% block title %}Home - {{ site_name() }}{% endblock %}
 
 {% block content %}
 <hgroup>
-    <h1>{{ site_tagline }}</h1>
+    <h1>{{ site_tagline() }}</h1>
 </hgroup>
 {% endblock %}
