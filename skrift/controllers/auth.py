@@ -9,10 +9,11 @@ from litestar import Controller, Request, get
 from litestar.params import Parameter
 from litestar.exceptions import HTTPException
 from litestar.response import Redirect, Template as TemplateResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.config import get_settings
+from skrift.db.models.role import Role
 from skrift.db.models.user import User
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -115,6 +116,10 @@ class AuthController(Controller):
             user.picture_url = userinfo.get("picture")
             user.last_login_at = datetime.now(UTC)
         else:
+            # Check if this will be the first user
+            user_count = await db_session.scalar(select(func.count()).select_from(User))
+            is_first_user = user_count == 0
+
             # Create new user
             user = User(
                 oauth_provider="google",
@@ -125,6 +130,15 @@ class AuthController(Controller):
                 last_login_at=datetime.now(UTC),
             )
             db_session.add(user)
+            await db_session.flush()  # Get the user ID
+
+            # Assign admin role to the first user
+            if is_first_user:
+                admin_role = await db_session.scalar(
+                    select(Role).where(Role.name == "admin")
+                )
+                if admin_role:
+                    user.roles.append(admin_role)
 
         await db_session.commit()
 
