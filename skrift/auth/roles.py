@@ -46,36 +46,29 @@ def create_role(
 ADMIN = create_role(
     "admin",
     "administrator",
+    "manage-users",
+    "manage-pages",
     display_name="Administrator",
     description="Full system access with all permissions",
 )
 
 AUTHOR = create_role(
     "author",
-    "create-post",
-    "edit-own-post",
-    "delete-own-post",
     "view-drafts",
     display_name="Author",
-    description="Can create and manage their own posts",
+    description="Can view draft content",
 )
 
 EDITOR = create_role(
     "editor",
-    "create-post",
-    "edit-any-post",
-    "delete-any-post",
-    "publish-post",
-    "unpublish-post",
     "view-drafts",
+    "manage-pages",
     display_name="Editor",
-    description="Can manage all posts and publishing",
+    description="Can manage pages and view drafts",
 )
 
 MODERATOR = create_role(
     "moderator",
-    "edit-any-post",
-    "unpublish-post",
     "view-drafts",
     display_name="Moderator",
     description="Can moderate content",

@@ -5,7 +5,7 @@ A Litestar website framework with Google OAuth authentication and WordPress-like
 ## Features
 
 - **Google OAuth Authentication**: Secure user authentication via Google
-- **WordPress-like Templates**: Hierarchical template resolution for posts and pages
+- **WordPress-like Templates**: Hierarchical template resolution for pages
 - **Dynamic Controllers**: Load controllers from `app.yaml` configuration
 - **SQLAlchemy Integration**: Async database support with SQLite/PostgreSQL
 - **Session Management**: Client-side encrypted cookie sessions
@@ -91,11 +91,7 @@ skrift/
 
 Templates follow WordPress-like hierarchical resolution:
 
-### Posts (`/post/{slug}`)
-1. `post-{slug}.html`
-2. `post.html`
-
-### Pages (`/page/{path}`)
+### Pages (`/{path}`)
 1. `page-{full-path}.html` (e.g., `page-services-web.html`)
 2. `page-{slug}.html` (e.g., `page-web.html`)
 3. `page.html`

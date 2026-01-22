@@ -6,26 +6,4 @@
 <hgroup>
     <h1>{{ site_tagline }}</h1>
 </hgroup>
-
-<section class="posts-list">
-    {% if posts %}
-        {% for post in posts %}
-        <article class="post-preview">
-            <header>
-                <h2><a href="/post/{{ post.slug }}">{{ post.title }}</a></h2>
-                {% if post.published_at %}
-                <p class="post-meta">
-                    <time datetime="{{ post.published_at.isoformat() }}">{{ post.published_at.strftime('%B %d, %Y') }}</time>
-                </p>
-                {% endif %}
-            </header>
-            {% if post.content %}
-            <p class="post-excerpt">{{ post.content|striptags|truncate(200) }}</p>
-            {% endif %}
-        </article>
-        {% endfor %}
-    {% else %}
-        <p class="no-posts">No posts yet. Check back soon.</p>
-    {% endif %}
-</section>
 {% endblock %}

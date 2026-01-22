@@ -1,4 +1,4 @@
-"""Page service for CRUD operations on pages and posts."""
+"""Page service for CRUD operations on pages."""
 
 from datetime import datetime
 from uuid import UUID
@@ -6,12 +6,11 @@ from uuid import UUID
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from skrift.db.models import Page, PageType
+from skrift.db.models import Page
 
 
 async def list_pages(
     db_session: AsyncSession,
-    page_type: PageType | None = None,
     published_only: bool = False,
     user_id: UUID | None = None,
     limit: int | None = None,
@@ -21,7 +20,6 @@ async def list_pages(
 
     Args:
         db_session: Database session
-        page_type: Filter by page type (post, page, etc.)
         published_only: Only return published pages
         user_id: Filter by user ID (author)
         limit: Maximum number of results
@@ -34,8 +32,6 @@ async def list_pages(
 
     # Build filters
     filters = []
-    if page_type:
-        filters.append(Page.type == page_type)
     if published_only:
         filters.append(Page.is_published == True)
     if user_id:
@@ -103,7 +99,6 @@ async def create_page(
     slug: str,
     title: str,
     content: str = "",
-    page_type: PageType = PageType.PAGE,
     is_published: bool = False,
     published_at: datetime | None = None,
     user_id: UUID | None = None,
@@ -115,7 +110,6 @@ async def create_page(
         slug: Unique page slug
         title: Page title
         content: Page content (HTML or markdown)
-        page_type: Type of page (post, page, etc.)
         is_published: Whether page is published
         published_at: Publication timestamp
         user_id: Author user ID (optional)
@@ -127,7 +121,6 @@ async def create_page(
         slug=slug,
         title=title,
         content=content,
-        type=page_type,
         is_published=is_published,
         published_at=published_at,
         user_id=user_id,
@@ -144,7 +137,6 @@ async def update_page(
     slug: str | None = None,
     title: str | None = None,
     content: str | None = None,
-    page_type: PageType | None = None,
     is_published: bool | None = None,
     published_at: datetime | None = None,
 ) -> Page | None:
@@ -156,7 +148,6 @@ async def update_page(
         slug: New slug (optional)
         title: New title (optional)
         content: New content (optional)
-        page_type: New type (optional)
         is_published: New published status (optional)
         published_at: New publication timestamp (optional)
 
@@ -173,8 +164,6 @@ async def update_page(
         page.title = title
     if content is not None:
         page.content = content
-    if page_type is not None:
-        page.type = page_type
     if is_published is not None:
         page.is_published = is_published
     if published_at is not None:

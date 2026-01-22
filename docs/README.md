@@ -27,12 +27,12 @@ skrift/
 │   ├── config.py            # Settings and environment configuration
 │   ├── controllers/
 │   │   ├── auth.py          # Google OAuth authentication routes
-│   │   └── web.py           # Main web routes (pages, posts)
+│   │   └── web.py           # Main web routes (pages)
 │   ├── db/
 │   │   ├── base.py          # SQLAlchemy base model
 │   │   ├── models/
 │   │   │   ├── user.py      # User model
-│   │   │   └── page.py      # Page/Post model
+│   │   │   └── page.py      # Page model
 │   │   └── services/
 │   │       └── page_service.py  # Page CRUD operations
 │   └── lib/
@@ -48,7 +48,6 @@ skrift/
 │   ├── base.html            # Base layout template
 │   ├── index.html           # Home page
 │   ├── page.html            # Default page template
-│   ├── post.html            # Default post template
 │   ├── error.html           # Default error template
 │   ├── error-404.html       # 404 error template
 │   ├── error-500.html       # 500 error template
@@ -183,9 +182,6 @@ The application uses a WordPress-like template resolution system that selects te
 The `Template` class in `skrift/lib/template.py` resolves templates from most specific to least specific:
 
 ```python
-Template("post", "about")
-# Tries: post-about.html → post.html
-
 Template("page", "services", "web")
 # Tries: page-services-web.html → page-services.html → page.html
 ```
@@ -196,7 +192,7 @@ The `Template` class accepts a `context` parameter and provides a `render()` met
 
 ```python
 # Create template with initial context
-template = Template("post", slug, context={"slug": slug})
+template = Template("page", *slugs, context={"path": path, "slugs": slugs})
 
 # Render with additional context (merged with initial context)
 return template.render(TEMPLATE_DIR, flash=flash, user=user)
@@ -207,21 +203,17 @@ return template.render(TEMPLATE_DIR, flash=flash, user=user)
 You can also use `resolve()` directly if you need more control:
 
 ```python
-template = Template("post", slug)
-template_name = template.resolve(TEMPLATE_DIR)  # Returns "post-slug.html" or "post.html"
+template = Template("page", *slugs)
+template_name = template.resolve(TEMPLATE_DIR)  # Returns "page-services-web.html" or "page.html"
 return TemplateResponse(template_name, context={...})
 ```
 
 ### Template Hierarchy Examples
 
-**Posts** (`/post/{slug}`):
-- `/post/about` → `post-about.html` → `post.html`
-- `/post/contact` → `post-contact.html` → `post.html`
-
-**Pages** (`/page/{path}`):
-- `/page/services` → `page-services.html` → `page.html`
-- `/page/services/web` → `page-services-web.html` → `page-services.html` → `page.html`
-- `/page/about/team/leadership` → `page-about-team-leadership.html` → `page-about-team.html` → `page-about.html` → `page.html`
+**Pages** (`/{path}`):
+- `/services` → `page-services.html` → `page.html`
+- `/services/web` → `page-services-web.html` → `page-services.html` → `page.html`
+- `/about/team/leadership` → `page-about-team-leadership.html` → `page-about-team.html` → `page-about.html` → `page.html`
 
 ### Template Context Variables
 
@@ -234,7 +226,6 @@ All templates receive these context variables:
 | `now` | callable | Function returning current datetime |
 
 Route-specific variables:
-- **Posts**: `slug` (the post slug), `page` (Page object from database)
 - **Pages**: `path` (full path), `slugs` (list of path segments), `page` (Page object from database)
 
 ### Base Template Blocks
@@ -268,8 +259,7 @@ Example usage:
 | Method | Path | Controller | Handler | Description |
 |--------|------|------------|---------|-------------|
 | GET | `/` | WebController | `index` | Home page |
-| GET | `/post/{slug}` | WebController | `post` | Post page from database with template resolution |
-| GET | `/page/{path:path}` | WebController | `page` | Page from database with nested path support |
+| GET | `/{path:path}` | WebController | `view_page` | Page from database with nested path support (catch-all) |
 | GET | `/auth/login` | AuthController | `login_page` | Login page |
 | GET | `/auth/logout` | AuthController | `logout` | Clear session and redirect |
 | GET | `/auth/google/login` | AuthController | `google_login` | Initiate Google OAuth |
@@ -335,15 +325,14 @@ Stores OAuth authentication data. See [Authentication](#authentication) section 
 
 #### Page Model
 
-The `Page` model (`skrift/db/models/page.py`) manages all content including posts and pages.
+The `Page` model (`skrift/db/models/page.py`) manages page content.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | UUID | Primary key (auto-generated) |
-| `type` | PageType | Content type: "post" or "page" |
 | `slug` | String | Unique URL slug (indexed) |
-| `title` | String | Page/post title |
-| `content` | Text | Page/post content (HTML) |
+| `title` | String | Page title |
+| `content` | Text | Page content (HTML) |
 | `is_published` | Boolean | Publication status |
 | `published_at` | DateTime | Publication timestamp (nullable) |
 | `created_at` | DateTime | Creation timestamp (auto) |
@@ -351,38 +340,31 @@ The `Page` model (`skrift/db/models/page.py`) manages all content including post
 
 **Indexes:**
 - `slug` - Unique index for fast lookups
-- `(type, is_published)` - Composite index for filtering
 
 ## Content Management
 
 ### Page Service
 
-The `page_service` module (`skrift/db/services/page_service.py`) provides CRUD operations for managing pages and posts.
+The `page_service` module (`skrift/db/services/page_service.py`) provides CRUD operations for managing pages.
 
 #### List Pages
 
 ```python
 from skrift.db.services import page_service
-from skrift.db.models import PageType
 
-# List all published posts
-posts = await page_service.list_pages(
+# List all published pages
+pages = await page_service.list_pages(
     db_session,
-    page_type=PageType.POST,
     published_only=True,
     limit=10
 )
 
 # List all pages (including drafts)
-pages = await page_service.list_pages(
-    db_session,
-    page_type=PageType.PAGE
-)
+pages = await page_service.list_pages(db_session)
 ```
 
 **Parameters:**
 - `db_session` (required): Database session
-- `page_type`: Filter by PageType.POST or PageType.PAGE
 - `published_only`: Only return published content
 - `limit`: Maximum number of results
 - `offset`: Number of results to skip (for pagination)
@@ -416,10 +398,9 @@ from datetime import datetime, timezone
 
 page = await page_service.create_page(
     db_session,
-    slug="my-post",
-    title="My First Post",
-    content="<p>Welcome to my blog!</p>",
-    page_type=PageType.POST,
+    slug="about",
+    title="About Us",
+    content="<p>Learn more about our company.</p>",
     is_published=True,
     published_at=datetime.now(timezone.utc)
 )
@@ -430,7 +411,6 @@ page = await page_service.create_page(
 - `slug` (required): Unique URL slug
 - `title` (required): Page title
 - `content`: HTML content (default: "")
-- `page_type`: PageType.POST or PageType.PAGE (default: PAGE)
 - `is_published`: Publication status (default: False)
 - `published_at`: Publication timestamp (optional)
 
@@ -454,7 +434,6 @@ updated_page = await page_service.update_page(
 - `slug`: New slug (optional)
 - `title`: New title (optional)
 - `content`: New content (optional)
-- `page_type`: New type (optional)
 - `is_published`: New publication status (optional)
 - `published_at`: New publication timestamp (optional)
 
@@ -479,8 +458,7 @@ Returns True if deleted, False if not found.
 
 The web controller automatically fetches pages from the database:
 
-- **Posts** (`/post/{slug}`): Looks up pages where `type=POST` and `slug` matches
-- **Pages** (`/page/{path}`): Looks up pages where `type=PAGE` and `slug` matches the full path
+- **Pages** (`/{path}`): Looks up pages where `slug` matches the full path (catch-all route)
 
 **Authentication behavior:**
 - Logged-in users can view unpublished content
@@ -497,7 +475,6 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from skrift.config import get_settings
-from skrift.db.models import PageType
 from skrift.db.services import page_service
 
 async def create_samples():
@@ -506,24 +483,22 @@ async def create_samples():
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
-        # Create a published post
-        await page_service.create_page(
-            session,
-            slug="hello-world",
-            title="Hello World",
-            content="<p>This is my first post!</p>",
-            page_type=PageType.POST,
-            is_published=True,
-            published_at=datetime.now(timezone.utc)
-        )
-
-        # Create a page
+        # Create a published page
         await page_service.create_page(
             session,
             slug="about",
             title="About Us",
             content="<p>Learn more about our company.</p>",
-            page_type=PageType.PAGE,
+            is_published=True,
+            published_at=datetime.now(timezone.utc)
+        )
+
+        # Create a nested page
+        await page_service.create_page(
+            session,
+            slug="services/web",
+            title="Web Services",
+            content="<p>Our web development services.</p>",
             is_published=True
         )
 
