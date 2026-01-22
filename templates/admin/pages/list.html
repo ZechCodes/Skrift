@@ -1,0 +1,62 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Pages - Admin - {{ site_name }}{% endblock %}
+
+{% block admin_content %}
+<div class="admin-header">
+    <hgroup>
+        <h1>Pages</h1>
+        <p>Manage site pages</p>
+    </hgroup>
+    <a href="/admin/pages/new" role="button">New Page</a>
+</div>
+
+<table class="admin-table">
+    <thead>
+        <tr>
+            <th>Title</th>
+            <th>Slug</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for page in pages %}
+        <tr>
+            <td>
+                <a href="/{{ page.slug }}">{{ page.title }}</a>
+            </td>
+            <td class="text-muted">/{{ page.slug }}</td>
+            <td>
+                {% if page.is_published %}
+                    <span class="status-badge status-published">Published</span>
+                {% else %}
+                    <span class="status-badge status-draft">Draft</span>
+                {% endif %}
+            </td>
+            <td>{{ page.created_at.strftime('%Y-%m-%d') }}</td>
+            <td class="actions-cell">
+                <a href="/admin/pages/{{ page.id }}/edit" role="button" class="outline small">Edit</a>
+                {% if page.is_published %}
+                <form method="post" action="/admin/pages/{{ page.id }}/unpublish" class="inline-form">
+                    <button type="submit" class="outline small">Unpublish</button>
+                </form>
+                {% else %}
+                <form method="post" action="/admin/pages/{{ page.id }}/publish" class="inline-form">
+                    <button type="submit" class="outline small">Publish</button>
+                </form>
+                {% endif %}
+                <form method="post" action="/admin/pages/{{ page.id }}/delete" class="inline-form" onsubmit="return confirm('Are you sure you want to delete this page?');">
+                    <button type="submit" class="outline small danger">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not pages %}
+<p class="no-items">No pages found.</p>
+{% endif %}
+{% endblock %}

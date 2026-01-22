@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.config import get_settings
-from skrift.db.models.role import Role
+from skrift.db.models.role import Role, user_roles
 from skrift.db.models.user import User
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -138,12 +138,18 @@ class AuthController(Controller):
                     select(Role).where(Role.name == "admin")
                 )
                 if admin_role:
-                    user.roles.append(admin_role)
+                    # Use direct insert to avoid lazy loading issues in async context
+                    await db_session.execute(
+                        user_roles.insert().values(user_id=user.id, role_id=admin_role.id)
+                    )
 
         await db_session.commit()
 
-        # Set session
+        # Set session with user info for display in templates (including error pages)
         request.session["user_id"] = str(user.id)
+        request.session["user_name"] = user.name
+        request.session["user_email"] = user.email
+        request.session["user_picture_url"] = user.picture_url
         request.session["flash"] = "Successfully logged in!"
 
         return Redirect(path="/")

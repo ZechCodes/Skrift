@@ -1,5 +1,6 @@
 controllers:
   - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
   - skrift.controllers.web:WebController
 
 db:

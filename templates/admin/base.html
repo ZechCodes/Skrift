@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block main_class %} admin-layout{% endblock %}
+
+{% block content %}
+<div class="admin-container">
+    <aside class="admin-sidebar">
+        <nav class="admin-nav">
+            <ul>
+                {% for item in admin_nav %}
+                <li>
+                    <a href="{{ item.path }}" {% if current_path == item.path %}class="active"{% endif %}>
+                        {{ item.label }}
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+        </nav>
+    </aside>
+    <div class="admin-content">
+        {% block admin_content %}{% endblock %}
+    </div>
+</div>
+{% endblock %}

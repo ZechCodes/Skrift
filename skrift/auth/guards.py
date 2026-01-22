@@ -120,8 +120,8 @@ async def auth_guard(
         return  # No auth requirements, just needs to be logged in
 
     # Get user's permissions and roles
-    db_session = connection.app.state.db.provide_session()
-    async with db_session as session:
+    session_maker = connection.app.state.session_maker_class
+    async with session_maker() as session:
         permissions = await get_user_permissions(session, user_id)
 
     # Check all requirements

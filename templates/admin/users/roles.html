@@ -1,0 +1,42 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Edit Roles - {{ target_user.name or target_user.email }} - Admin - {{ site_name }}{% endblock %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>Edit Roles</h1>
+    <p>Assign roles to {{ target_user.name or target_user.email }}</p>
+</hgroup>
+
+<div class="user-info-card">
+    {% if target_user.picture_url %}
+    <img src="{{ target_user.picture_url }}" alt="{{ target_user.name }}" class="user-avatar-large" referrerpolicy="no-referrer">
+    {% endif %}
+    <div>
+        <strong>{{ target_user.name or "—" }}</strong>
+        <p class="text-muted">{{ target_user.email }}</p>
+    </div>
+</div>
+
+<form method="post" action="/admin/users/{{ target_user.id }}/roles">
+    <fieldset>
+        <legend>Roles</legend>
+        {% for role_name, role_def in available_roles.items() %}
+        <label>
+            <input type="checkbox" name="role_{{ role_name }}" {% if role_name in current_roles %}checked{% endif %}>
+            <span>
+                <strong>{{ role_def.display_name or role_name }}</strong>
+                {% if role_def.description %}
+                <small class="text-muted"> — {{ role_def.description }}</small>
+                {% endif %}
+            </span>
+        </label>
+        {% endfor %}
+    </fieldset>
+
+    <div class="form-actions">
+        <button type="submit">Save Roles</button>
+        <a href="/admin/users" role="button" class="outline">Cancel</a>
+    </div>
+</form>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Users - Admin - {{ site_name }}{% endblock %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>Users</h1>
+    <p>Manage user accounts and roles</p>
+</hgroup>
+
+<table class="admin-table">
+    <thead>
+        <tr>
+            <th>User</th>
+            <th>Email</th>
+            <th>Roles</th>
+            <th>Last Login</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for user in users %}
+        <tr>
+            <td class="user-cell">
+                {% if user.picture_url %}
+                <img src="{{ user.picture_url }}" alt="{{ user.name }}" class="user-avatar" referrerpolicy="no-referrer">
+                {% endif %}
+                <span>{{ user.name or "—" }}</span>
+            </td>
+            <td>{{ user.email }}</td>
+            <td>
+                {% if user.roles %}
+                    {% for role in user.roles %}
+                    <span class="role-badge">{{ role.display_name or role.name }}</span>
+                    {% endfor %}
+                {% else %}
+                    <span class="text-muted">No roles</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if user.last_login_at %}
+                    {{ user.last_login_at.strftime('%Y-%m-%d %H:%M') }}
+                {% else %}
+                    <span class="text-muted">Never</span>
+                {% endif %}
+            </td>
+            <td>
+                <a href="/admin/users/{{ user.id }}/roles" role="button" class="outline small">Edit Roles</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not users %}
+<p class="no-items">No users found.</p>
+{% endif %}
+{% endblock %}
