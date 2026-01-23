@@ -1,0 +1,125 @@
+{% extends "setup/base.html" %}
+
+{% block title %}Database Setup - Skrift{% endblock %}
+
+{% block content %}
+<h2>Database Configuration</h2>
+<p class="description">Choose your database type and configure the connection.</p>
+
+<form method="post" action="/setup/database">
+    <div class="radio-group">
+        <label class="radio-option{% if db_type == 'sqlite' %} selected{% endif %}" id="sqlite-option">
+            <input type="radio" name="db_type" value="sqlite" {% if db_type == 'sqlite' %}checked{% endif %}>
+            <div class="radio-content">
+                <strong>SQLite</strong>
+                <small>Perfect for personal sites. No setup required.</small>
+            </div>
+        </label>
+        <label class="radio-option{% if db_type == 'postgresql' %} selected{% endif %}" id="postgresql-option">
+            <input type="radio" name="db_type" value="postgresql" {% if db_type == 'postgresql' %}checked{% endif %}>
+            <div class="radio-content">
+                <strong>PostgreSQL</strong>
+                <small>For production deployments.</small>
+            </div>
+        </label>
+    </div>
+
+    <div class="conditional-fields{% if db_type == 'sqlite' %} visible{% endif %}" id="sqlite-fields">
+        <div class="form-group">
+            <label for="sqlite_path">Database File Path</label>
+            <input type="text" id="sqlite_path" name="sqlite_path" value="./app.db" placeholder="./app.db">
+            <small>Path relative to the application directory</small>
+        </div>
+        <div class="form-group env-toggle">
+            <input type="checkbox" id="sqlite_path_env" name="sqlite_path_env">
+            <label for="sqlite_path_env">Use environment variable (enter env var name in field above)</label>
+        </div>
+    </div>
+
+    <div class="conditional-fields{% if db_type == 'postgresql' %} visible{% endif %}" id="postgresql-fields">
+        <div class="form-group env-toggle" style="margin-bottom: 1rem;">
+            <input type="checkbox" id="pg_url_env" name="pg_url_env">
+            <label for="pg_url_env">Use a single DATABASE_URL environment variable</label>
+        </div>
+
+        <div id="pg-env-field" style="display: none;">
+            <div class="form-group">
+                <label for="pg_url_envvar">Environment Variable Name</label>
+                <input type="text" id="pg_url_envvar" name="pg_url_envvar" value="DATABASE_URL">
+                <small>The environment variable containing the full connection URL</small>
+            </div>
+        </div>
+
+        <div id="pg-manual-fields">
+            <div class="form-group">
+                <label for="pg_host">Host</label>
+                <input type="text" id="pg_host" name="pg_host" value="localhost" placeholder="localhost">
+            </div>
+
+            <div class="form-group">
+                <label for="pg_port">Port</label>
+                <input type="number" id="pg_port" name="pg_port" value="5432" placeholder="5432">
+            </div>
+
+            <div class="form-group">
+                <label for="pg_database">Database Name</label>
+                <input type="text" id="pg_database" name="pg_database" value="skrift" placeholder="skrift">
+            </div>
+
+            <div class="form-group">
+                <label for="pg_username">Username</label>
+                <input type="text" id="pg_username" name="pg_username" value="postgres" placeholder="postgres">
+            </div>
+
+            <div class="form-group">
+                <label for="pg_password">Password</label>
+                <input type="password" id="pg_password" name="pg_password" placeholder="Enter password">
+            </div>
+        </div>
+    </div>
+
+    <div class="form-actions">
+        <button type="submit">Test Connection &amp; Continue</button>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const sqliteOption = document.getElementById('sqlite-option');
+        const postgresqlOption = document.getElementById('postgresql-option');
+        const sqliteFields = document.getElementById('sqlite-fields');
+        const postgresqlFields = document.getElementById('postgresql-fields');
+        const radioInputs = document.querySelectorAll('input[name="db_type"]');
+
+        function updateVisibility() {
+            const selected = document.querySelector('input[name="db_type"]:checked').value;
+
+            sqliteOption.classList.toggle('selected', selected === 'sqlite');
+            postgresqlOption.classList.toggle('selected', selected === 'postgresql');
+
+            sqliteFields.classList.toggle('visible', selected === 'sqlite');
+            postgresqlFields.classList.toggle('visible', selected === 'postgresql');
+        }
+
+        radioInputs.forEach(input => {
+            input.addEventListener('change', updateVisibility);
+        });
+
+        // PostgreSQL env var toggle
+        const pgEnvCheckbox = document.getElementById('pg_url_env');
+        const pgEnvField = document.getElementById('pg-env-field');
+        const pgManualFields = document.getElementById('pg-manual-fields');
+
+        function updatePgFields() {
+            const useEnv = pgEnvCheckbox.checked;
+            pgEnvField.style.display = useEnv ? 'block' : 'none';
+            pgManualFields.style.display = useEnv ? 'none' : 'block';
+        }
+
+        pgEnvCheckbox.addEventListener('change', updatePgFields);
+        updatePgFields();
+    });
+</script>
+{% endblock %}

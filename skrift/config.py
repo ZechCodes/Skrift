@@ -17,27 +17,43 @@ load_dotenv(_env_file)
 ENV_VAR_PATTERN = re.compile(r"\$([A-Z_][A-Z0-9_]*)")
 
 
-def interpolate_env_vars(value):
-    """Recursively replace $VAR_NAME with os.environ values."""
+def interpolate_env_vars(value, strict: bool = True):
+    """Recursively replace $VAR_NAME with os.environ values.
+
+    Args:
+        value: The value to interpolate
+        strict: If True, raise an error when env var is not set.
+                If False, return the original $VAR_NAME reference.
+    """
     if isinstance(value, str):
 
         def replace(match):
             var = match.group(1)
             val = os.environ.get(var)
             if val is None:
-                raise ValueError(f"Environment variable ${var} not set")
+                if strict:
+                    raise ValueError(f"Environment variable ${var} not set")
+                return match.group(0)  # Return original $VAR_NAME
             return val
 
         return ENV_VAR_PATTERN.sub(replace, value)
     elif isinstance(value, dict):
-        return {k: interpolate_env_vars(v) for k, v in value.items()}
+        return {k: interpolate_env_vars(v, strict) for k, v in value.items()}
     elif isinstance(value, list):
-        return [interpolate_env_vars(item) for item in value]
+        return [interpolate_env_vars(item, strict) for item in value]
     return value
 
 
-def load_app_config() -> dict:
-    """Load and parse app.yaml with environment variable interpolation."""
+def load_app_config(interpolate: bool = True, strict: bool = True) -> dict:
+    """Load and parse app.yaml with optional environment variable interpolation.
+
+    Args:
+        interpolate: Whether to interpolate environment variables
+        strict: If interpolating, whether to raise errors for missing env vars
+
+    Returns:
+        Parsed configuration dictionary
+    """
     config_path = Path.cwd() / "app.yaml"
 
     if not config_path.exists():
@@ -46,7 +62,20 @@ def load_app_config() -> dict:
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    return interpolate_env_vars(config)
+    if interpolate:
+        return interpolate_env_vars(config, strict=strict)
+    return config
+
+
+def load_raw_app_config() -> dict | None:
+    """Load app.yaml without any processing. Returns None if file doesn't exist."""
+    config_path = Path.cwd() / "app.yaml"
+
+    if not config_path.exists():
+        return None
+
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
 
 
 class DatabaseConfig(BaseModel):
@@ -65,6 +94,8 @@ class OAuthProviderConfig(BaseModel):
     client_id: str
     client_secret: str
     scopes: list[str] = ["openid", "email", "profile"]
+    # Optional tenant ID for Microsoft/Azure AD
+    tenant_id: str | None = None
 
 
 class AuthConfig(BaseModel):
@@ -92,6 +123,45 @@ class Settings(BaseSettings):
     auth: AuthConfig = AuthConfig()
 
 
+def clear_settings_cache() -> None:
+    """Clear the settings cache to force reload."""
+    get_settings.cache_clear()
+
+
+def is_config_valid() -> tuple[bool, str | None]:
+    """Check if the current configuration is valid and complete.
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        config = load_raw_app_config()
+        if config is None:
+            return False, "app.yaml not found"
+
+        # Check database URL
+        db_config = config.get("db", {})
+        db_url = db_config.get("url")
+        if not db_url:
+            return False, "Database URL not configured"
+
+        # If it's an env var reference, check if env var is set
+        if isinstance(db_url, str) and db_url.startswith("$"):
+            env_var = db_url[1:]
+            if not os.environ.get(env_var):
+                return False, f"Database environment variable ${env_var} not set"
+
+        # Check auth providers
+        auth_config = config.get("auth", {})
+        providers = auth_config.get("providers", {})
+        if not providers:
+            return False, "No authentication providers configured"
+
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Load settings from .env and app.yaml."""
@@ -102,6 +172,9 @@ def get_settings() -> Settings:
     try:
         app_config = load_app_config()
     except FileNotFoundError:
+        return base_settings
+    except ValueError:
+        # Missing environment variables - return base settings
         return base_settings
 
     # Merge YAML config with settings

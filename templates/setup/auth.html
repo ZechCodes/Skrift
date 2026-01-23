@@ -1,0 +1,110 @@
+{% extends "setup/base.html" %}
+
+{% block title %}Authentication Setup - Skrift{% endblock %}
+
+{% block content %}
+<h2>Authentication Providers</h2>
+<p class="description">Configure at least one OAuth provider for user authentication.</p>
+
+<form method="post" action="/setup/auth">
+    <div class="form-group">
+        <label for="redirect_base_url">OAuth Redirect Base URL</label>
+        <input type="url" id="redirect_base_url" name="redirect_base_url" value="{{ redirect_base_url }}" required>
+        <small>The base URL for OAuth callbacks (auto-detected from your current URL)</small>
+    </div>
+
+    <hr style="margin: 2rem 0;">
+
+    {% for key, provider in providers.items() %}
+    <div class="provider-card{% if key in configured_providers %} enabled{% endif %}" id="provider-{{ key }}">
+        <div class="provider-header" onclick="toggleProvider('{{ key }}')">
+            <input type="checkbox" name="{{ key }}_enabled" id="{{ key }}_enabled" {% if key in configured_providers %}checked{% endif %} onclick="event.stopPropagation(); toggleProvider('{{ key }}')">
+            <h3>{{ provider.name }}</h3>
+        </div>
+        <div class="provider-fields">
+            <div class="provider-instructions">
+                <details>
+                    <summary>Setup Instructions</summary>
+                    <pre>{{ provider.instructions }}</pre>
+                    <p><a href="{{ provider.console_url }}" target="_blank" rel="noopener">Open Developer Console</a></p>
+                </details>
+            </div>
+
+            <div class="form-group">
+                <label>Redirect URI (copy this to your OAuth app settings)</label>
+                <div class="redirect-url" id="redirect-url-{{ key }}">{{ redirect_base_url }}/auth/{{ key }}/callback</div>
+            </div>
+
+            {% for field in provider.fields %}
+            <div class="form-group">
+                <label for="{{ key }}_{{ field.key }}">{{ field.label }}{% if not field.optional %} *{% endif %}</label>
+                <input type="{{ field.type }}"
+                       id="{{ key }}_{{ field.key }}"
+                       name="{{ key }}_{{ field.key }}"
+                       value="{{ configured_providers.get(key, {}).get(field.key, '') }}"
+                       {% if field.placeholder %}placeholder="{{ field.placeholder }}"{% endif %}
+                       {% if not field.optional %}required{% endif %}>
+                <div class="form-group env-toggle">
+                    <input type="checkbox" id="{{ key }}_{{ field.key }}_env" name="{{ key }}_{{ field.key }}_env">
+                    <label for="{{ key }}_{{ field.key }}_env">Use environment variable (enter env var name above)</label>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+
+    <div class="form-actions">
+        <a href="/setup/database" class="btn-secondary" role="button">Back</a>
+        <button type="submit">Save &amp; Continue</button>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function toggleProvider(key) {
+        const card = document.getElementById('provider-' + key);
+        const checkbox = document.getElementById(key + '_enabled');
+
+        // Toggle the checkbox when clicking the header (but not when clicking the checkbox itself)
+        if (event.target !== checkbox) {
+            checkbox.checked = !checkbox.checked;
+        }
+
+        card.classList.toggle('enabled', checkbox.checked);
+
+        // Toggle required attribute on fields
+        const fields = card.querySelectorAll('input[required]');
+        fields.forEach(field => {
+            if (checkbox.checked) {
+                field.setAttribute('required', '');
+            } else {
+                field.removeAttribute('required');
+            }
+        });
+    }
+
+    // Update redirect URLs when base URL changes
+    document.getElementById('redirect_base_url').addEventListener('input', function() {
+        const baseUrl = this.value;
+        {% for key in providers.keys() %}
+        document.getElementById('redirect-url-{{ key }}').textContent = baseUrl + '/auth/{{ key }}/callback';
+        {% endfor %}
+    });
+
+    // Initialize required attributes based on initial state
+    document.addEventListener('DOMContentLoaded', function() {
+        {% for key in providers.keys() %}
+        const card{{ key }} = document.getElementById('provider-{{ key }}');
+        const checkbox{{ key }} = document.getElementById('{{ key }}_enabled');
+        const fields{{ key }} = card{{ key }}.querySelectorAll('.provider-fields input[type="text"], .provider-fields input[type="password"]');
+        fields{{ key }}.forEach(field => {
+            if (!checkbox{{ key }}.checked && !field.closest('.form-group').querySelector('label').textContent.includes('optional')) {
+                field.removeAttribute('required');
+            }
+        });
+        {% endfor %}
+    });
+</script>
+{% endblock %}

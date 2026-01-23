@@ -127,6 +127,9 @@ SITE_TAGLINE_KEY = "site_tagline"
 SITE_COPYRIGHT_HOLDER_KEY = "site_copyright_holder"
 SITE_COPYRIGHT_START_YEAR_KEY = "site_copyright_start_year"
 
+# Setup wizard key
+SETUP_COMPLETED_AT_KEY = "setup_completed_at"
+
 # Default values
 SITE_DEFAULTS = {
     SITE_NAME_KEY: "My Site",

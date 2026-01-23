@@ -1,0 +1,17 @@
+{% extends "setup/base.html" %}
+
+{% block title %}Setup Complete - Skrift{% endblock %}
+
+{% block content %}
+<div class="complete-message">
+    <div class="complete-icon">&#10003;</div>
+    <h2>Setup Complete!</h2>
+    <p>Your Skrift site is now configured and ready to use.</p>
+    <p style="color: var(--muted-color, #666);">You can manage your site settings, users, and content from the admin panel.</p>
+
+    <div style="margin-top: 2rem;">
+        <a href="/" role="button" style="margin-right: 1rem;">Go to Site</a>
+        <a href="/admin" role="button" class="outline">Open Admin Panel</a>
+    </div>
+</div>
+{% endblock %}

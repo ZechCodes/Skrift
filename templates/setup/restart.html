@@ -1,0 +1,28 @@
+{% extends "setup/base.html" %}
+
+{% block title %}Restart Required - Skrift{% endblock %}
+
+{% block content %}
+<h2>Database Configured Successfully!</h2>
+<p class="description">The database has been set up and migrations have been run. To continue with setup, you need to restart the server.</p>
+
+<div style="background: var(--color-bg); padding: 1.5rem; border-radius: var(--radius-md); margin: 1.5rem 0; border: 1px solid var(--color-border);">
+    <h3 style="margin-top: 0;">Why restart?</h3>
+    <p style="margin-bottom: 0; color: var(--color-text-muted);">
+        The server needs to reload to enable authentication features that require the database connection you just configured.
+    </p>
+</div>
+
+<div style="background: var(--color-surface); padding: 1.5rem; border-radius: var(--radius-md); margin: 1.5rem 0; border: 1px solid var(--color-border);">
+    <h3 style="margin-top: 0;">To restart:</h3>
+    <ol style="margin-bottom: 0; padding-left: 1.5rem;">
+        <li>Stop the current server (press <code>Ctrl+C</code> in the terminal)</li>
+        <li>Start it again with the same command you used before</li>
+        <li>Return to this page - setup will continue automatically</li>
+    </ol>
+</div>
+
+<div class="form-actions">
+    <a href="/setup/restart" role="button" class="button">I've Restarted - Continue Setup</a>
+</div>
+{% endblock %}
