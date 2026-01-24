@@ -18,35 +18,72 @@ A modern Litestar-powered content management framework with multi-provider OAuth
 ### Prerequisites
 
 - Python 3.13+
-- [uv](https://github.com/astral-sh/uv) package manager
 
 ### Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/skrift.git
-cd skrift
+# Install Skrift
+pip install skrift
 
-# Install dependencies
-uv sync
-
-# Create minimal environment
-echo "SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" > .env
-
-# Run the application
-uv run python main.py
+# Or install from git
+pip install git+https://github.com/ZechCodes/skrift.git
 ```
 
-Open http://localhost:8080 to start the setup wizard.
+### Getting Started
+
+Create a project directory and set up your environment:
+
+```bash
+mkdir mysite && cd mysite
+
+# Create minimal environment file
+echo "SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" > .env
+
+# Start Skrift
+skrift
+```
+
+Open http://localhost:8080 to launch the setup wizard.
 
 ### Setup Wizard
 
-The setup wizard guides you through:
+The setup wizard guides you through initial configuration:
 
 1. **Database Configuration**: Choose SQLite (dev) or PostgreSQL (production)
 2. **Authentication Providers**: Configure OAuth credentials
 3. **Site Settings**: Set site name, tagline, and copyright info
 4. **Admin Account**: Create your first admin user via OAuth login
+
+After completing the wizard, an `app.yaml` configuration file is created in your project directory.
+
+### Manual Configuration
+
+Alternatively, create `app.yaml` manually:
+
+```yaml
+controllers:
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+  - skrift.controllers.web:WebController
+
+db:
+  url: sqlite+aiosqlite:///./app.db
+
+auth:
+  redirect_base_url: http://localhost:8080
+  providers:
+    google:
+      client_id: $GOOGLE_CLIENT_ID
+      client_secret: $GOOGLE_CLIENT_SECRET
+      scopes: [openid, email, profile]
+```
+
+Then run migrations and start the server:
+
+```bash
+skrift-db upgrade head
+skrift
+```
 
 ## Documentation
 
@@ -117,57 +154,31 @@ Environment variables (prefixed with `$`) are interpolated at runtime.
 ### Minimal VPS Deployment
 
 ```bash
-# Install on server
-git clone https://github.com/yourusername/skrift.git /opt/skrift
-cd /opt/skrift && uv sync
+# Install Skrift
+pip install skrift
+
+# Create project directory
+mkdir -p /opt/skrift && cd /opt/skrift
 
 # Configure environment
-cp .env.example .env
-# Edit .env with your settings
+cat > .env << EOF
+SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+DATABASE_URL=sqlite+aiosqlite:///./app.db
+OAUTH_REDIRECT_BASE_URL=https://yourdomain.com
+EOF
 
-# Run with uvicorn
-uvicorn skrift.asgi:app --host 0.0.0.0 --port 8080 --workers 2
+# Start server (use setup wizard or create app.yaml manually)
+skrift
 ```
 
-### Docker Deployment
+### Production with Gunicorn
 
 ```bash
-# Build and run
-docker build -t skrift .
-docker run -d -p 8080:8080 \
-  -e SECRET_KEY="your-secret-key" \
-  -e DATABASE_URL="sqlite+aiosqlite:///./data/app.db" \
-  skrift
+pip install gunicorn
+gunicorn skrift.asgi:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8080
 ```
 
-### Production with Docker Compose
-
-```yaml
-services:
-  skrift:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - SECRET_KEY=${SECRET_KEY}
-      - DATABASE_URL=postgresql+asyncpg://skrift:${DB_PASSWORD}@db:5432/skrift
-    depends_on:
-      - db
-
-  db:
-    image: postgres:16-alpine
-    environment:
-      - POSTGRES_USER=skrift
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DB=skrift
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
-volumes:
-  postgres-data:
-```
-
-See the [Deployment Guide](docs/deployment.md) for detailed instructions including ephemeral Docker deployments and Kubernetes.
+See the [Deployment Guide](docs/deployment.md) for detailed instructions including Docker, Docker Compose, and Kubernetes deployments.
 
 ## Database Migrations
 

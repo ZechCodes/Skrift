@@ -34,29 +34,28 @@ This section covers deploying Skrift directly on a VPS with minimal configuratio
 
 ### Step 1: Server Setup
 
-Update your system and install dependencies:
+Update your system and install Python:
 
 ```bash
 # Ubuntu/Debian
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y git curl
-
-# Install uv (Python package manager)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc
+sudo apt install -y python3.13 python3.13-venv python3-pip
 ```
 
 ### Step 2: Install Skrift
 
-Clone and set up Skrift:
+Create a project directory and install Skrift:
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/skrift.git /opt/skrift
+# Create project directory
+sudo mkdir -p /opt/skrift
+sudo chown $USER:$USER /opt/skrift
 cd /opt/skrift
 
-# Install dependencies
-uv sync
+# Create virtual environment and install
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install skrift
 ```
 
 ### Step 3: Configure Environment
@@ -91,10 +90,39 @@ Start the application to complete the setup wizard:
 
 ```bash
 cd /opt/skrift
-uv run python main.py
+source .venv/bin/activate
+skrift
 ```
 
-Access `http://your-server-ip:8080` and complete the setup wizard. Once complete, stop the development server (Ctrl+C).
+Access `http://your-server-ip:8080` and complete the setup wizard. This creates an `app.yaml` configuration file. Once complete, stop the development server (Ctrl+C).
+
+**Alternative: Manual Configuration**
+
+Instead of using the wizard, you can create `app.yaml` manually:
+
+```yaml
+controllers:
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+  - skrift.controllers.web:WebController
+
+db:
+  url: $DATABASE_URL
+
+auth:
+  redirect_base_url: $OAUTH_REDIRECT_BASE_URL
+  providers:
+    google:
+      client_id: $GOOGLE_CLIENT_ID
+      client_secret: $GOOGLE_CLIENT_SECRET
+      scopes: [openid, email, profile]
+```
+
+Then run migrations:
+
+```bash
+skrift-db upgrade head
+```
 
 ### Step 5: Create Systemd Service
 
@@ -111,8 +139,8 @@ Type=exec
 User=www-data
 Group=www-data
 WorkingDirectory=/opt/skrift
-Environment="PATH=/opt/skrift/.venv/bin"
-ExecStart=/opt/skrift/.venv/bin/uvicorn skrift.asgi:app --host 127.0.0.1 --port 8080 --workers 2
+EnvironmentFile=/opt/skrift/.env
+ExecStart=/opt/skrift/.venv/bin/gunicorn skrift.asgi:app -w 2 -k uvicorn.workers.UvicornWorker -b 127.0.0.1:8080
 Restart=always
 RestartSec=5
 
@@ -121,9 +149,13 @@ WantedBy=multi-user.target
 EOF
 ```
 
-Set permissions and start the service:
+Install gunicorn and set permissions:
 
 ```bash
+cd /opt/skrift
+source .venv/bin/activate
+pip install gunicorn
+
 # Set ownership
 sudo chown -R www-data:www-data /opt/skrift
 
@@ -187,7 +219,7 @@ Your site is now live at `https://yourdomain.com`.
 
 ### Basic Docker Deployment
 
-Create a Dockerfile if one doesn't exist:
+Create a `Dockerfile` in your project directory:
 
 ```dockerfile
 # Dockerfile
@@ -195,54 +227,82 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install uv
-RUN pip install uv
+# Install Skrift
+RUN pip install --no-cache-dir skrift gunicorn
 
-# Copy project files
-COPY pyproject.toml .
-COPY uv.lock .
-COPY skrift/ ./skrift/
-COPY templates/ ./templates/
-COPY static/ ./static/
-COPY alembic/ ./alembic/
-COPY alembic.ini .
-COPY main.py .
-
-# Install dependencies
-RUN uv sync --no-dev
-
-# Create data directory
+# Create data directory for SQLite
 RUN mkdir -p /app/data
+
+# Copy configuration (if pre-configured)
+# COPY app.yaml .
 
 EXPOSE 8080
 
-CMD ["uv", "run", "uvicorn", "skrift.asgi:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["gunicorn", "skrift.asgi:app", "-w", "2", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8080"]
 ```
 
 Build and run:
 
 ```bash
 # Build
-docker build -t skrift .
+docker build -t mysite .
 
-# Run
+# Run (setup wizard mode - no app.yaml)
 docker run -d \
-  --name skrift \
+  --name mysite \
   -p 8080:8080 \
-  -v skrift-data:/app/data \
+  -v mysite-data:/app/data \
+  -v mysite-config:/app/config \
+  -e SECRET_KEY="your-secret-key" \
+  mysite
+
+# Access http://localhost:8080 to complete setup wizard
+```
+
+After completing setup, the container will have an `app.yaml` in the config volume.
+
+### Running with Pre-configured app.yaml
+
+For automated deployments, create `app.yaml` beforehand:
+
+```bash
+# Run with pre-configured app.yaml
+docker run -d \
+  --name mysite \
+  -p 8080:8080 \
+  -v $(pwd)/app.yaml:/app/app.yaml:ro \
+  -v mysite-data:/app/data \
   -e SECRET_KEY="your-secret-key" \
   -e DATABASE_URL="sqlite+aiosqlite:///./data/app.db" \
   -e OAUTH_REDIRECT_BASE_URL="https://yourdomain.com" \
   -e GOOGLE_CLIENT_ID="your-client-id" \
   -e GOOGLE_CLIENT_SECRET="your-client-secret" \
-  skrift
+  mysite
+
+# Run migrations
+docker exec mysite skrift-db upgrade head
 ```
 
 ---
 
 ## Docker Compose with PostgreSQL
 
-For production deployments, use Docker Compose with PostgreSQL:
+For production deployments, use Docker Compose with PostgreSQL.
+
+First, create a `Dockerfile`:
+
+```dockerfile
+# Dockerfile
+FROM python:3.13-slim
+
+WORKDIR /app
+RUN pip install --no-cache-dir skrift gunicorn
+
+EXPOSE 8080
+CMD ["gunicorn", "skrift.asgi:app", "-w", "2", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8080"]
+```
+
+Create `docker-compose.yml`:
 
 ```yaml
 # docker-compose.yml
@@ -299,6 +359,8 @@ GITHUB_CLIENT_ID=your-github-client-id
 GITHUB_CLIENT_SECRET=your-github-client-secret
 ```
 
+Create `app.yaml` (see [Manual Configuration](#manual-configuration) in docs/README.md).
+
 Deploy:
 
 ```bash
@@ -309,7 +371,7 @@ docker compose up -d
 docker compose logs -f
 
 # Run migrations
-docker compose exec skrift uv run skrift-db upgrade head
+docker compose exec skrift skrift-db upgrade head
 ```
 
 ---
@@ -425,7 +487,7 @@ auth:
         - user:email
 ```
 
-### Updated Dockerfile for Ephemeral Deployment
+### Dockerfile for Ephemeral Deployment
 
 ```dockerfile
 # Dockerfile.ephemeral
@@ -433,21 +495,8 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install dependencies
-RUN pip install uv curl
-
-# Copy project files
-COPY pyproject.toml .
-COPY uv.lock .
-COPY skrift/ ./skrift/
-COPY templates/ ./templates/
-COPY static/ ./static/
-COPY alembic/ ./alembic/
-COPY alembic.ini .
-COPY main.py .
-
-# Install dependencies (no dev dependencies)
-RUN uv sync --no-dev
+# Install Skrift and dependencies
+RUN pip install --no-cache-dir skrift gunicorn curl
 
 # Copy preconfigured app.yaml
 COPY app.yaml .
@@ -461,7 +510,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:8080/ || exit 1
 
 # Run with multiple workers
-CMD ["uv", "run", "uvicorn", "skrift.asgi:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]
+CMD ["gunicorn", "skrift.asgi:app", "-w", "2", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8080"]
 ```
 
 ### Deployment Steps
@@ -493,7 +542,7 @@ GITHUB_CLIENT_SECRET=your-github-client-secret
 
 ```bash
 docker compose -f docker-compose.ephemeral.yml run --rm skrift \
-  uv run skrift-db upgrade head
+  skrift-db upgrade head
 ```
 
 4. **Create initial admin** (if not using setup wizard):
@@ -516,7 +565,13 @@ docker compose -f docker-compose.ephemeral.yml up -d
 
 ### Kubernetes Deployment
 
-For Kubernetes, create these manifests:
+Build and push your Docker image, then create these manifests:
+
+```bash
+# Build and push image
+docker build -f Dockerfile.ephemeral -t your-registry/mysite:latest .
+docker push your-registry/mysite:latest
+```
 
 ```yaml
 # k8s/deployment.yaml
@@ -536,7 +591,7 @@ spec:
     spec:
       containers:
         - name: skrift
-          image: your-registry/skrift:latest
+          image: your-registry/mysite:latest
           ports:
             - containerPort: 8080
           envFrom:

@@ -106,30 +106,70 @@ skrift/
 ### Prerequisites
 
 - Python 3.13+
-- [uv](https://github.com/astral-sh/uv) package manager
 
 ### Installation
 
-1. Clone the repository and navigate to the project directory.
+Install Skrift using pip:
 
-2. Install dependencies:
+```bash
+pip install skrift
+```
+
+Or install from the git repository:
+
+```bash
+pip install git+https://github.com/ZechCodes/skrift.git
+```
+
+### Creating a New Site
+
+1. Create a project directory:
    ```bash
-   uv sync
+   mkdir mysite && cd mysite
    ```
 
-3. Create a minimal `.env` file:
+2. Create a minimal `.env` file:
    ```bash
    echo "SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" > .env
    ```
 
-4. Run the application:
+3. Start Skrift:
    ```bash
-   uv run python main.py
+   skrift
    ```
 
-5. Open http://localhost:8080 in your browser to start the setup wizard.
+4. Open http://localhost:8080 in your browser to start the setup wizard.
 
-The setup wizard will guide you through configuring the database, authentication providers, site settings, and creating your admin account.
+The setup wizard will guide you through configuring the database, authentication providers, site settings, and creating your admin account. Upon completion, it generates an `app.yaml` configuration file in your project directory.
+
+### Manual Configuration
+
+If you prefer to skip the wizard, create `app.yaml` manually in your project directory:
+
+```yaml
+controllers:
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+  - skrift.controllers.web:WebController
+
+db:
+  url: sqlite+aiosqlite:///./app.db
+
+auth:
+  redirect_base_url: http://localhost:8080
+  providers:
+    google:
+      client_id: $GOOGLE_CLIENT_ID
+      client_secret: $GOOGLE_CLIENT_SECRET
+      scopes: [openid, email, profile]
+```
+
+Then run migrations and start the server:
+
+```bash
+skrift-db upgrade head
+skrift
+```
 
 ## Setup Wizard
 
