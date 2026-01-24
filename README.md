@@ -1,100 +1,202 @@
 # Skrift
 
-A Litestar website framework with Google OAuth authentication and WordPress-like template resolution.
+A modern Litestar-powered content management framework with multi-provider OAuth authentication, role-based access control, and WordPress-like template resolution.
 
 ## Features
 
-- **Google OAuth Authentication**: Secure user authentication via Google
-- **WordPress-like Templates**: Hierarchical template resolution for pages
+- **Multi-Provider OAuth**: Authenticate with Google, GitHub, Microsoft, Discord, Facebook, or Twitter/X
+- **Role-Based Access Control**: Flexible permission system with Admin, Editor, Author, and Moderator roles
+- **Setup Wizard**: Guided first-time configuration without manual file editing
+- **Admin Interface**: Web-based management for users, pages, and site settings
+- **WordPress-like Templates**: Hierarchical template resolution for content pages
 - **Dynamic Controllers**: Load controllers from `app.yaml` configuration
 - **SQLAlchemy Integration**: Async database support with SQLite/PostgreSQL
-- **Session Management**: Client-side encrypted cookie sessions
+- **Client-Side Sessions**: Encrypted cookie sessions for horizontal scalability
 
-## Installation
+## Quick Start
 
-### From Git Repository
+### Prerequisites
+
+- Python 3.13+
+- [uv](https://github.com/astral-sh/uv) package manager
+
+### Installation
 
 ```bash
-uv pip install git+https://github.com/yourusername/skrift.git
-```
-
-### Local Development
-
-```bash
+# Clone the repository
 git clone https://github.com/yourusername/skrift.git
 cd skrift
+
+# Install dependencies
 uv sync
+
+# Create minimal environment
+echo "SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" > .env
+
+# Run the application
+uv run python main.py
 ```
 
-## Configuration
+Open http://localhost:8080 to start the setup wizard.
 
-1. Copy `.env.example` to `.env` and configure:
+### Setup Wizard
 
-```env
-SECRET_KEY=your-secret-key-here
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
-GOOGLE_REDIRECT_URI=http://localhost:8080/auth/google/callback
-DATABASE_URL=sqlite+aiosqlite:///app.db
-DEBUG=true
-```
+The setup wizard guides you through:
 
-2. Configure controllers in `app.yaml`:
+1. **Database Configuration**: Choose SQLite (dev) or PostgreSQL (production)
+2. **Authentication Providers**: Configure OAuth credentials
+3. **Site Settings**: Set site name, tagline, and copyright info
+4. **Admin Account**: Create your first admin user via OAuth login
 
-```yaml
-controllers:
-  - skrift.controllers.auth:AuthController
-  - skrift.controllers.web:WebController
-```
+## Documentation
 
-## Running the Application
-
-### Development Server
-
-```bash
-python -m skrift
-```
-
-Or using the main entry point:
-
-```bash
-python main.py
-```
-
-The application will start on `http://localhost:8080` with hot reload enabled.
-
-### Production
-
-For production deployments, use a production ASGI server:
-
-```bash
-uvicorn skrift.asgi:app --host 0.0.0.0 --port 8080 --workers 4
-```
+- **[Full Documentation](docs/README.md)**: Comprehensive guide covering all features
+- **[Deployment Guide](docs/deployment.md)**: VPS, Docker, and Kubernetes deployment
+- **[CSS Framework](docs/css-framework.md)**: Styling documentation
 
 ## Project Structure
 
 ```
 skrift/
-   skrift/           # Main package
-      asgi.py        # Application factory
-      config.py      # Settings management
-      controllers/   # Route handlers
-      db/           # Database models
-      lib/          # Utilities (Template class, etc.)
-   templates/         # Jinja2 templates
-   static/           # Static assets
-   app.yaml          # Controller configuration
-   main.py           # Development entry point
+├── skrift/              # Main Python package
+│   ├── asgi.py          # Application factory
+│   ├── config.py        # Settings management
+│   ├── controllers/     # Route handlers
+│   ├── admin/           # Admin panel
+│   ├── auth/            # RBAC and guards
+│   ├── db/              # Models and services
+│   ├── lib/             # Template resolver
+│   └── setup/           # Setup wizard
+├── templates/           # Jinja2 templates
+├── static/              # Static assets
+├── alembic/             # Database migrations
+├── docs/                # Documentation
+├── app.yaml             # Application config (generated)
+└── main.py              # Development entry point
+```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SECRET_KEY` | Yes | Session encryption key |
+| `DEBUG` | No | Enable debug mode (default: false) |
+| `DATABASE_URL` | No | Database connection string |
+| `OAUTH_REDIRECT_BASE_URL` | No | OAuth callback base URL |
+
+OAuth credentials are configured per-provider (e.g., `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`).
+
+### app.yaml
+
+Application configuration is stored in `app.yaml` (generated by setup wizard):
+
+```yaml
+controllers:
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+  - skrift.controllers.web:WebController
+
+db:
+  url: $DATABASE_URL
+  pool_size: 5
+
+auth:
+  redirect_base_url: $OAUTH_REDIRECT_BASE_URL
+  providers:
+    google:
+      client_id: $GOOGLE_CLIENT_ID
+      client_secret: $GOOGLE_CLIENT_SECRET
+```
+
+Environment variables (prefixed with `$`) are interpolated at runtime.
+
+## Deployment
+
+### Minimal VPS Deployment
+
+```bash
+# Install on server
+git clone https://github.com/yourusername/skrift.git /opt/skrift
+cd /opt/skrift && uv sync
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your settings
+
+# Run with uvicorn
+uvicorn skrift.asgi:app --host 0.0.0.0 --port 8080 --workers 2
+```
+
+### Docker Deployment
+
+```bash
+# Build and run
+docker build -t skrift .
+docker run -d -p 8080:8080 \
+  -e SECRET_KEY="your-secret-key" \
+  -e DATABASE_URL="sqlite+aiosqlite:///./data/app.db" \
+  skrift
+```
+
+### Production with Docker Compose
+
+```yaml
+services:
+  skrift:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - DATABASE_URL=postgresql+asyncpg://skrift:${DB_PASSWORD}@db:5432/skrift
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=skrift
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=skrift
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:
+```
+
+See the [Deployment Guide](docs/deployment.md) for detailed instructions including ephemeral Docker deployments and Kubernetes.
+
+## Database Migrations
+
+```bash
+# Apply migrations
+skrift-db upgrade head
+
+# Create new migration
+skrift-db revision --autogenerate -m "description"
+
+# Rollback
+skrift-db downgrade -1
 ```
 
 ## Template Resolution
 
 Templates follow WordPress-like hierarchical resolution:
 
-### Pages (`/{path}`)
-1. `page-{full-path}.html` (e.g., `page-services-web.html`)
-2. `page-{slug}.html` (e.g., `page-web.html`)
-3. `page.html`
+| URL Path | Templates Tried |
+|----------|-----------------|
+| `/about` | `page-about.html` -> `page.html` |
+| `/services/web` | `page-services-web.html` -> `page-services.html` -> `page.html` |
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
 ## License
 
