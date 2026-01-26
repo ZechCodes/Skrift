@@ -1,21 +1,26 @@
 # Skrift Documentation
 
-A Litestar-powered web application with Google OAuth authentication and WordPress-like template resolution.
+A modern Litestar-powered web application framework with multi-provider OAuth authentication, role-based access control, and WordPress-like template resolution.
 
 For styling documentation, see: [CSS Framework](css-framework.md)
+For deployment guides, see: [Deployment Guide](deployment.md)
 
 ## Table of Contents
 
 - [Project Structure](#project-structure)
 - [Quick Start](#quick-start)
+- [Setup Wizard](#setup-wizard)
 - [Configuration](#configuration)
 - [Authentication](#authentication)
+- [Role-Based Access Control](#role-based-access-control)
+- [Admin Interface](#admin-interface)
+- [Settings System](#settings-system)
 - [Template System](#template-system)
 - [Controllers & Routes](#controllers--routes)
 - [Database](#database)
 - [Content Management](#content-management)
 - [Error Handling](#error-handling)
-- [Production Deployment](#production-deployment)
+- [Architecture](#architecture)
 
 ## Project Structure
 
@@ -23,41 +28,77 @@ For styling documentation, see: [CSS Framework](css-framework.md)
 skrift/
 ├── skrift/
 │   ├── __init__.py
-│   ├── asgi.py              # Application factory and Litestar setup
-│   ├── config.py            # Settings and environment configuration
+│   ├── asgi.py                    # Application factory and AppDispatcher
+│   ├── config.py                  # Settings and environment configuration
+│   ├── cli.py                     # Database migration CLI (skrift-db)
 │   ├── controllers/
-│   │   ├── auth.py          # Google OAuth authentication routes
-│   │   └── web.py           # Main web routes (pages)
+│   │   ├── auth.py                # Multi-provider OAuth authentication
+│   │   └── web.py                 # Main web routes (pages)
+│   ├── admin/
+│   │   ├── controller.py          # Admin panel routes
+│   │   └── navigation.py          # Admin nav introspection
+│   ├── auth/
+│   │   ├── guards.py              # Permission and role guards
+│   │   ├── roles.py               # Role definitions
+│   │   └── services.py            # Permission lookup with caching
 │   ├── db/
-│   │   ├── base.py          # SQLAlchemy base model
+│   │   ├── base.py                # SQLAlchemy base model
 │   │   ├── models/
-│   │   │   ├── user.py      # User model
-│   │   │   └── page.py      # Page model
+│   │   │   ├── user.py            # User model
+│   │   │   ├── page.py            # Page model
+│   │   │   ├── role.py            # Role and permission models
+│   │   │   └── setting.py         # Settings model
 │   │   └── services/
-│   │       └── page_service.py  # Page CRUD operations
-│   └── lib/
-│       ├── exceptions.py    # Custom exception handlers
-│       └── template.py      # WordPress-like template resolver
+│   │       ├── page_service.py    # Page CRUD operations
+│   │       └── setting_service.py # Settings CRUD with caching
+│   ├── lib/
+│   │   ├── exceptions.py          # Custom exception handlers
+│   │   └── template.py            # WordPress-like template resolver
+│   └── setup/
+│       ├── controller.py          # Setup wizard routes
+│       ├── providers.py           # OAuth provider definitions
+│       ├── config_writer.py       # app.yaml configuration management
+│       ├── state.py               # Setup progress detection
+│       └── middleware.py          # Setup-related middleware
+├── templates/
+│   ├── base.html                  # Base layout template
+│   ├── index.html                 # Home page
+│   ├── page.html                  # Default page template
+│   ├── error.html                 # Default error template
+│   ├── error-404.html             # 404 error template
+│   ├── error-500.html             # 500 error template
+│   ├── auth/
+│   │   └── login.html             # Login page with provider buttons
+│   ├── admin/
+│   │   ├── admin.html             # Admin dashboard
+│   │   ├── base.html              # Admin layout
+│   │   ├── users/                 # User management templates
+│   │   ├── pages/                 # Page management templates
+│   │   └── settings/              # Site settings templates
+│   └── setup/
+│       ├── base.html              # Setup wizard layout
+│       ├── database.html          # Database configuration step
+│       ├── auth.html              # Auth providers step
+│       ├── site.html              # Site settings step
+│       ├── admin.html             # Admin creation step
+│       └── complete.html          # Setup completion
+├── alembic/
+│   ├── env.py                     # Alembic environment configuration
+│   ├── script.py.mako             # Migration template
+│   └── versions/                  # Migration files
 ├── docs/
-│   ├── README.md            # This file
-│   └── css-framework.md     # CSS styling documentation
+│   ├── README.md                  # This file
+│   ├── css-framework.md           # CSS styling documentation
+│   └── deployment.md              # Deployment guides
 ├── static/
 │   └── css/
-│       └── style.css        # Application styles
-├── templates/
-│   ├── base.html            # Base layout template
-│   ├── index.html           # Home page
-│   ├── page.html            # Default page template
-│   ├── error.html           # Default error template
-│   ├── error-404.html       # 404 error template
-│   ├── error-500.html       # 500 error template
-│   └── auth/
-│       └── login.html       # Login page
-├── .env                     # Environment variables (not in git)
-├── .env.example             # Environment template
-├── app.yaml                 # Controller configuration
-├── main.py                  # Development server entry point
-└── pyproject.toml           # Project dependencies
+│       └── style.css              # Application styles
+├── .env                           # Environment variables (not in git)
+├── .env.example                   # Environment template
+├── app.yaml                       # Application configuration (generated by setup)
+├── main.py                        # Development server entry point
+├── alembic.ini                    # Alembic configuration
+└── pyproject.toml                 # Project dependencies
 ```
 
 ## Quick Start
@@ -65,107 +106,276 @@ skrift/
 ### Prerequisites
 
 - Python 3.13+
-- [uv](https://github.com/astral-sh/uv) package manager
 
-### Setup
+### Installation
 
-1. Clone the repository and navigate to the project directory.
+Install Skrift using pip:
 
-2. Copy the environment template:
+```bash
+pip install skrift
+```
+
+Or install from the git repository:
+
+```bash
+pip install git+https://github.com/ZechCodes/skrift.git
+```
+
+### Creating a New Site
+
+1. Create a project directory:
    ```bash
-   cp .env.example .env
+   mkdir mysite && cd mysite
    ```
 
-3. Edit `.env` with your configuration (see [Configuration](#configuration)).
-
-4. Install dependencies and set up the database:
+2. Create a minimal `.env` file:
    ```bash
-   uv sync
-   skrift-db upgrade head
+   echo "SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" > .env
    ```
 
-5. Run the application:
+3. Start Skrift:
    ```bash
-   uv run python main.py
+   skrift
    ```
 
-6. Open http://localhost:8080 in your browser.
+4. Open http://localhost:8080 in your browser to start the setup wizard.
+
+The setup wizard will guide you through configuring the database, authentication providers, site settings, and creating your admin account. Upon completion, it generates an `app.yaml` configuration file in your project directory.
+
+### Manual Configuration
+
+If you prefer to skip the wizard, create `app.yaml` manually in your project directory:
+
+```yaml
+controllers:
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+  - skrift.controllers.web:WebController
+
+db:
+  url: sqlite+aiosqlite:///./app.db
+
+auth:
+  redirect_base_url: http://localhost:8080
+  providers:
+    google:
+      client_id: $GOOGLE_CLIENT_ID
+      client_secret: $GOOGLE_CLIENT_SECRET
+      scopes: [openid, email, profile]
+```
+
+Then run migrations and start the server:
+
+```bash
+skrift-db upgrade head
+skrift
+```
+
+## Setup Wizard
+
+Skrift includes a first-time setup wizard that guides you through initial configuration. The wizard runs automatically when the application starts without a completed configuration.
+
+### How It Works
+
+The application uses an **AppDispatcher** pattern that routes requests to either:
+- **Setup App**: When configuration is incomplete, handles `/setup/*`, `/auth/*`, and `/static/*` routes
+- **Main App**: After setup is complete, handles all normal application routes
+
+This allows the setup wizard to run without requiring a restart after configuration.
+
+### Setup Steps
+
+#### Step 1: Database Configuration
+
+Configure your database connection:
+
+**SQLite (Development)**:
+```
+sqlite+aiosqlite:///./app.db
+```
+
+**PostgreSQL (Production)**:
+```
+postgresql+asyncpg://user:password@host:5432/dbname
+```
+
+The wizard automatically runs Alembic migrations to create the database schema.
+
+#### Step 2: Authentication Providers
+
+Configure one or more OAuth providers. Supported providers:
+
+| Provider | Required Scopes | Notes |
+|----------|-----------------|-------|
+| Google | openid, email, profile | Standard OAuth 2.0 |
+| GitHub | read:user, user:email | Special email fetching for private emails |
+| Microsoft | openid, email, profile | Supports Azure AD tenant IDs |
+| Discord | identify, email | Standard OAuth 2.0 |
+| Facebook | email, public_profile | Standard OAuth 2.0 |
+| Twitter/X | users.read, tweet.read | OAuth 2.0 with PKCE |
+
+Each provider requires:
+- **Client ID**: From the provider's developer console
+- **Client Secret**: From the provider's developer console
+
+You can use environment variable references (e.g., `$GOOGLE_CLIENT_ID`) for secrets management.
+
+#### Step 3: Site Settings
+
+Configure basic site information:
+- **Site Name**: Displayed in the header and browser title
+- **Tagline**: Site description/subtitle
+- **Copyright Holder**: For footer copyright notices
+- **Copyright Start Year**: Beginning year for copyright range
+
+These settings are stored in the database and can be changed later in the admin panel.
+
+#### Step 4: Admin Account
+
+Create the first administrator account by logging in with one of the configured OAuth providers. The first user created during setup automatically receives the Admin role.
+
+### Configuration File
+
+After setup, configuration is saved to `app.yaml`:
+
+```yaml
+controllers:
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+  - skrift.controllers.web:WebController
+
+db:
+  url: $DATABASE_URL
+  pool_size: 5
+  pool_overflow: 10
+  pool_timeout: 30
+  echo: false
+
+auth:
+  redirect_base_url: $OAUTH_REDIRECT_BASE_URL
+  providers:
+    google:
+      client_id: $GOOGLE_CLIENT_ID
+      client_secret: $GOOGLE_CLIENT_SECRET
+      scopes:
+        - openid
+        - email
+        - profile
+    github:
+      client_id: $GITHUB_CLIENT_ID
+      client_secret: $GITHUB_CLIENT_SECRET
+      scopes:
+        - read:user
+        - user:email
+```
+
+**Environment Variable Interpolation**: Values starting with `$` are replaced with the corresponding environment variable at runtime. This allows you to keep secrets out of the configuration file.
 
 ## Configuration
 
-Configuration is managed via environment variables, loaded from `.env` using Pydantic Settings.
-
-### Settings Class
-
-The `Settings` class in `skrift/config.py` defines all configuration options:
-
-```python
-class Settings(BaseSettings):
-    # Application
-    debug: bool = False
-    secret_key: str
-
-    # Database
-    database_url: str = "sqlite+aiosqlite:///./app.db"
-
-    # Google OAuth
-    google_client_id: str
-    google_client_secret: str
-    oauth_redirect_base_url: str = "http://localhost:8000"
-```
-
 ### Environment Variables
+
+Configuration is managed via environment variables, loaded from `.env`:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SECRET_KEY` | Yes | - | Secret key for session encryption |
 | `DEBUG` | No | `false` | Enable debug mode |
 | `DATABASE_URL` | No | `sqlite+aiosqlite:///./app.db` | Database connection string |
-| `GOOGLE_CLIENT_ID` | Yes | - | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | Yes | - | Google OAuth client secret |
-| `OAUTH_REDIRECT_BASE_URL` | No | `http://localhost:8000` | Base URL for OAuth callbacks |
+| `OAUTH_REDIRECT_BASE_URL` | No | `http://localhost:8080` | Base URL for OAuth callbacks |
 
-### Google OAuth Setup
+**OAuth Provider Variables** (configure as needed):
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-2. Create a new project or select an existing one
-3. Enable the Google+ API
-4. Create OAuth 2.0 credentials:
-   - Application type: Web application
-   - Authorized redirect URIs: `http://localhost:8080/auth/google/callback`
-5. Copy the Client ID and Client Secret to your `.env` file
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `GITHUB_CLIENT_ID` | GitHub OAuth client ID |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth client secret |
+| `MICROSOFT_CLIENT_ID` | Microsoft OAuth client ID |
+| `MICROSOFT_CLIENT_SECRET` | Microsoft OAuth client secret |
+| `MICROSOFT_TENANT_ID` | Azure AD tenant ID (optional) |
+| `DISCORD_CLIENT_ID` | Discord OAuth client ID |
+| `DISCORD_CLIENT_SECRET` | Discord OAuth client secret |
+| `FACEBOOK_CLIENT_ID` | Facebook OAuth client ID |
+| `FACEBOOK_CLIENT_SECRET` | Facebook OAuth client secret |
+| `TWITTER_CLIENT_ID` | Twitter/X OAuth client ID |
+| `TWITTER_CLIENT_SECRET` | Twitter/X OAuth client secret |
+
+### app.yaml Configuration
+
+The `app.yaml` file controls application configuration:
+
+```yaml
+# Controllers to load (module.path:ClassName format)
+controllers:
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+  - skrift.controllers.web:WebController
+
+# Database configuration
+db:
+  url: $DATABASE_URL           # Connection string (supports env vars)
+  pool_size: 5                 # Connection pool size
+  pool_overflow: 10            # Extra connections when pool is full
+  pool_timeout: 30             # Seconds to wait for connection
+  echo: false                  # Log SQL queries
+
+# Authentication configuration
+auth:
+  redirect_base_url: http://localhost:8080
+  providers:
+    google:
+      client_id: $GOOGLE_CLIENT_ID
+      client_secret: $GOOGLE_CLIENT_SECRET
+      scopes: [openid, email, profile]
+```
 
 ## Authentication
 
-### Google OAuth Flow
+### Multi-Provider OAuth
 
-1. User clicks "Login" and is redirected to `/auth/google/login`
-2. A CSRF state token is generated and stored in the session
-3. User is redirected to Google's consent screen
-4. After consent, Google redirects to `/auth/google/callback` with an authorization code
-5. The callback handler:
-   - Verifies the CSRF state token
-   - Exchanges the code for access tokens
-   - Fetches user info from Google
-   - Creates or updates the user record
-   - Sets the user ID in the session
-6. User is redirected to the home page
+Skrift supports authentication via multiple OAuth 2.0 providers. Users can log in with any configured provider.
+
+### OAuth Flow
+
+1. User visits `/auth/login` and selects a provider
+2. User clicks provider button, redirected to `/auth/{provider}/login`
+3. CSRF state token generated and stored in session
+4. User redirected to provider's consent screen
+5. After consent, provider redirects to `/auth/{provider}/callback`
+6. Callback handler:
+   - Verifies CSRF state token
+   - Exchanges authorization code for access tokens
+   - Fetches user info from provider
+   - Creates or updates user record
+   - Sets session cookies
+7. User redirected to home page
+
+### Provider-Specific Details
+
+**GitHub**: Requires additional API call to fetch email if user's email is private.
+
+**Microsoft**: Supports optional `tenant_id` for Azure AD organization-specific authentication.
+
+**Twitter/X**: Uses OAuth 2.0 with PKCE (Proof Key for Code Exchange) for enhanced security.
 
 ### Session Management
 
 Sessions use encrypted client-side cookies:
 - **Max age**: 7 days
 - **Security**: HttpOnly, SameSite=Lax, Secure (in production)
-- **Storage**: User ID stored as `user_id` in session
+- **Encryption**: AES-GCM with SHA256-hashed secret key
+- **Storage**: User ID, name, email, and picture URL
 
-### User Model Fields
+### User Model
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | UUID | Primary key (auto-generated) |
-| `oauth_provider` | String | OAuth provider name ("google") |
+| `oauth_provider` | String | OAuth provider name |
 | `oauth_id` | String | Unique ID from OAuth provider |
-| `email` | String | User's email address |
+| `email` | String | User's email address (unique) |
 | `name` | String | User's display name |
 | `picture_url` | String | Profile picture URL |
 | `is_active` | Boolean | Account active status |
@@ -173,82 +383,230 @@ Sessions use encrypted client-side cookies:
 | `created_at` | DateTime | Record creation timestamp |
 | `updated_at` | DateTime | Last update timestamp |
 
+### Authentication Routes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/auth/login` | Login page with provider buttons |
+| GET | `/auth/logout` | Clear session and redirect to home |
+| GET | `/auth/{provider}/login` | Initiate OAuth flow |
+| GET | `/auth/{provider}/callback` | Handle OAuth callback |
+
+## Role-Based Access Control
+
+Skrift includes a flexible RBAC system for managing user permissions.
+
+### Predefined Roles
+
+| Role | Permissions | Description |
+|------|-------------|-------------|
+| Admin | `administrator` | Full system access |
+| Editor | `manage-pages`, `view-drafts` | Content management |
+| Author | `view-drafts` | Can view unpublished content |
+| Moderator | `moderate-content` | Content moderation |
+
+### How RBAC Works
+
+1. **Roles** are defined in code (`skrift/auth/roles.py`) and synced to database on startup
+2. **Permissions** are strings associated with roles (many-to-many)
+3. **Users** can have multiple roles (many-to-many)
+4. **Guards** check permissions/roles on route handlers
+
+### Using Guards
+
+Protect routes with permission or role requirements:
+
+```python
+from litestar import Controller, get
+from skrift.auth.guards import Permission, Role, auth_guard
+
+class ProtectedController(Controller):
+    path = "/protected"
+    guards = [auth_guard]  # Require authentication
+
+    @get("/admin-only")
+    @Permission("administrator")  # Require specific permission
+    async def admin_only(self) -> dict:
+        return {"message": "Admin access granted"}
+
+    @get("/editor-only")
+    @Role("editor")  # Require specific role
+    async def editor_only(self) -> dict:
+        return {"message": "Editor access granted"}
+```
+
+### Combining Requirements
+
+Use `AndRequirement` or `OrRequirement` for complex checks:
+
+```python
+from skrift.auth.guards import Permission, OrRequirement
+
+# User needs EITHER permission
+@OrRequirement(Permission("manage-pages"), Permission("administrator"))
+async def manage_content(self) -> dict:
+    return {"message": "Access granted"}
+```
+
+### Permission Caching
+
+Permissions are cached for 5 minutes to reduce database queries. The cache is invalidated when:
+- User roles are modified
+- Role permissions are modified
+- Application restarts
+
+## Admin Interface
+
+The admin panel provides a web interface for managing users, pages, and site settings.
+
+### Accessing Admin
+
+Navigate to `/admin` after logging in with an account that has appropriate permissions.
+
+### Admin Routes
+
+| Path | Permission | Description |
+|------|------------|-------------|
+| `/admin` | Any authenticated | Admin dashboard |
+| `/admin/users` | `administrator` | User management |
+| `/admin/users/{id}/roles` | `administrator` | Edit user roles |
+| `/admin/pages` | `manage-pages` | Page management |
+| `/admin/pages/new` | `manage-pages` | Create new page |
+| `/admin/pages/{id}/edit` | `manage-pages` | Edit existing page |
+| `/admin/pages/{id}/publish` | `manage-pages` | Publish page |
+| `/admin/pages/{id}/unpublish` | `manage-pages` | Unpublish page |
+| `/admin/pages/{id}/delete` | `manage-pages` | Delete page |
+| `/admin/settings` | `administrator` | Site settings |
+
+### Dynamic Navigation
+
+The admin navigation is built dynamically based on:
+1. Available admin routes
+2. User's permissions
+3. Route metadata (display names, icons)
+
+Users only see navigation items for sections they can access.
+
+### Page Management
+
+Create and edit pages with:
+- **Slug**: URL path (e.g., `about` or `services/web`)
+- **Title**: Page title
+- **Content**: HTML content
+- **Publication Status**: Draft or published
+
+### User Management
+
+Administrators can:
+- View all registered users
+- Assign/remove roles
+- See user login history
+
+## Settings System
+
+Skrift includes a key-value settings system for site configuration.
+
+### How Settings Work
+
+Settings are stored in the `settings` database table:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | String | Setting name (unique) |
+| `value` | Text | Setting value |
+
+### Default Settings
+
+| Key | Description | Default |
+|-----|-------------|---------|
+| `site_name` | Site name in header/title | "Skrift" |
+| `site_tagline` | Site tagline/description | "" |
+| `site_copyright_holder` | Copyright holder name | "" |
+| `site_copyright_start_year` | Copyright start year | Current year |
+
+### Settings Cache
+
+Settings are cached in memory at application startup and refreshed when:
+- Settings are saved in admin panel
+- Application restarts
+
+All templates automatically receive cached settings as context variables.
+
+### Using Settings in Templates
+
+```html
+<title>{{ site_name }}</title>
+<p class="tagline">{{ site_tagline }}</p>
+<footer>
+    &copy; {{ site_copyright_start_year }}-{{ now().year }} {{ site_copyright_holder }}
+</footer>
+```
+
 ## Template System
 
-The application uses a WordPress-like template resolution system that selects templates based on specificity.
+The application uses a WordPress-like template resolution system.
 
 ### How Template Resolution Works
 
-The `Template` class in `skrift/lib/template.py` resolves templates from most specific to least specific:
+The `Template` class resolves templates from most specific to least specific:
 
 ```python
 Template("page", "services", "web")
-# Tries: page-services-web.html → page-services.html → page.html
+# Tries: page-services-web.html -> page-services.html -> page.html
 ```
 
-### Using Template with Context
+### Template Search Locations
 
-The `Template` class accepts a `context` parameter and provides a `render()` method for convenient usage:
-
-```python
-# Create template with initial context
-template = Template("page", *slugs, context={"path": path, "slugs": slugs})
-
-# Render with additional context (merged with initial context)
-return template.render(TEMPLATE_DIR, flash=flash, user=user)
-```
-
-**Context merging**: When `render()` is called, the initial context from the constructor is merged with any additional keyword arguments. Extra context takes precedence for duplicate keys.
-
-You can also use `resolve()` directly if you need more control:
-
-```python
-template = Template("page", *slugs)
-template_name = template.resolve(TEMPLATE_DIR)  # Returns "page-services-web.html" or "page.html"
-return TemplateResponse(template_name, context={...})
-```
+Templates are searched in order:
+1. `./templates/` (working directory - allows overrides)
+2. `skrift/templates/` (package defaults)
 
 ### Template Hierarchy Examples
 
-**Pages** (`/{path}`):
-- `/services` → `page-services.html` → `page.html`
-- `/services/web` → `page-services-web.html` → `page-services.html` → `page.html`
-- `/about/team/leadership` → `page-about-team-leadership.html` → `page-about-team.html` → `page-about.html` → `page.html`
+| URL Path | Templates Tried |
+|----------|-----------------|
+| `/about` | `page-about.html` -> `page.html` |
+| `/services/web` | `page-services-web.html` -> `page-services.html` -> `page.html` |
+| `/about/team/leadership` | `page-about-team-leadership.html` -> `page-about-team.html` -> `page-about.html` -> `page.html` |
 
 ### Template Context Variables
 
-All templates receive these context variables:
+All templates receive:
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `user` | User \| None | Current logged-in user or None |
+| `user` | User \| None | Current logged-in user |
 | `flash` | str \| None | Flash message from session |
 | `now` | callable | Function returning current datetime |
-
-Route-specific variables:
-- **Pages**: `path` (full path), `slugs` (list of path segments), `page` (Page object from database)
+| `site_name` | str | Site name from settings |
+| `site_tagline` | str | Site tagline from settings |
+| `site_copyright_holder` | str | Copyright holder from settings |
+| `site_copyright_start_year` | str | Copyright start year from settings |
 
 ### Base Template Blocks
 
-The `base.html` template defines these blocks for child templates:
+The `base.html` template defines these blocks:
 
-| Block | Purpose |
-|-------|---------|
-| `title` | Page title (default: "Skrift") |
-| `head` | Additional `<head>` content |
-| `main_class` | Additional classes for `<main>` |
-| `content` | Main page content |
-| `scripts` | JavaScript before `</body>` |
+| Block | Purpose | Default |
+|-------|---------|---------|
+| `title` | Page title | Site name |
+| `head` | Additional `<head>` content | Empty |
+| `main_class` | Classes for `<main>` element | Empty |
+| `content` | Main page content | Empty |
+| `scripts` | JavaScript before `</body>` | Empty |
 
-Example usage:
+### Example Template
+
 ```html
 {% extends "base.html" %}
 
-{% block title %}My Page{% endblock %}
+{% block title %}{{ page.title }} - {{ site_name }}{% endblock %}
 
 {% block content %}
-<h1>Welcome</h1>
-<p>Page content here.</p>
+<article>
+    <h1>{{ page.title }}</h1>
+    {{ page.content | safe }}
+</article>
 {% endblock %}
 ```
 
@@ -256,285 +614,143 @@ Example usage:
 
 ### Route Table
 
-| Method | Path | Controller | Handler | Description |
-|--------|------|------------|---------|-------------|
-| GET | `/` | WebController | `index` | Home page |
-| GET | `/{path:path}` | WebController | `view_page` | Page from database with nested path support (catch-all) |
-| GET | `/auth/login` | AuthController | `login_page` | Login page |
-| GET | `/auth/logout` | AuthController | `logout` | Clear session and redirect |
-| GET | `/auth/google/login` | AuthController | `google_login` | Initiate Google OAuth |
-| GET | `/auth/google/callback` | AuthController | `google_callback` | Handle OAuth callback |
-| GET | `/static/*` | Static Files Router | - | Serve static assets |
+| Method | Path | Controller | Description |
+|--------|------|------------|-------------|
+| GET | `/` | WebController | Home page |
+| GET | `/{path:path}` | WebController | Page from database (catch-all) |
+| GET | `/auth/login` | AuthController | Login page |
+| GET | `/auth/logout` | AuthController | Clear session |
+| GET | `/auth/{provider}/login` | AuthController | Initiate OAuth |
+| GET | `/auth/{provider}/callback` | AuthController | OAuth callback |
+| GET | `/admin` | AdminController | Admin dashboard |
+| GET | `/admin/users` | AdminController | User list |
+| GET/POST | `/admin/users/{id}/roles` | AdminController | Edit user roles |
+| GET | `/admin/pages` | AdminController | Page list |
+| GET/POST | `/admin/pages/new` | AdminController | Create page |
+| GET/POST | `/admin/pages/{id}/edit` | AdminController | Edit page |
+| POST | `/admin/pages/{id}/publish` | AdminController | Publish page |
+| POST | `/admin/pages/{id}/unpublish` | AdminController | Unpublish page |
+| POST | `/admin/pages/{id}/delete` | AdminController | Delete page |
+| GET/POST | `/admin/settings` | AdminController | Site settings |
+| GET | `/static/*` | StaticFilesRouter | Static assets |
 
 ### Controller Configuration
 
-Controllers are loaded dynamically from `app.yaml` at startup. This allows you to add or remove controllers without modifying the application code.
+Controllers are loaded dynamically from `app.yaml`:
 
-**app.yaml format:**
 ```yaml
 controllers:
   - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
   - skrift.controllers.web:WebController
 ```
 
-Each controller entry uses the format `module.path:ControllerClass`, where the module path is relative to the current working directory.
+Format: `module.path:ControllerClass`
 
-### Adding New Routes
+### Adding Custom Controllers
 
-1. **Create a controller** in `skrift/controllers/` (or any location within your project):
+1. Create a controller:
 
 ```python
-# skrift/controllers/my_controller.py
+# myapp/controllers/api.py
 from litestar import Controller, get
-from litestar.response import Template as TemplateResponse
-from litestar import Request
-from sqlalchemy.ext.asyncio import AsyncSession
 
-class MyController(Controller):
-    path = "/my-path"
+class ApiController(Controller):
+    path = "/api"
 
-    @get("/")
-    async def my_handler(
-        self, request: Request, db_session: AsyncSession
-    ) -> TemplateResponse:
-        return TemplateResponse("my-template.html", context={})
+    @get("/status")
+    async def status(self) -> dict:
+        return {"status": "ok"}
 ```
 
-2. **Register the controller** in `app.yaml`:
+2. Register in `app.yaml`:
 
 ```yaml
 controllers:
   - skrift.controllers.auth:AuthController
-  - skrift.controllers.web:WebController
-  - skrift.controllers.my_controller:MyController  # Add your controller
+  - skrift.admin.controller:AdminController
+  - myapp.controllers.api:ApiController  # Custom controller
+  - skrift.controllers.web:WebController  # Keep catch-all last
 ```
 
-3. **Restart the application** for the changes to take effect.
-
-The application will automatically import and register all controllers listed in `app.yaml`.
+3. Restart the application.
 
 ## Database
 
-### Models
+### Supported Databases
 
-The application uses two primary models:
+**SQLite (Development)**:
+```
+DATABASE_URL=sqlite+aiosqlite:///./app.db
+```
 
-#### User Model
+**PostgreSQL (Production)**:
+```
+DATABASE_URL=postgresql+asyncpg://user:password@host:5432/dbname
+```
 
-Stores OAuth authentication data. See [Authentication](#authentication) section for details.
+### Database Schema
 
-#### Page Model
+#### Users Table
+Stores user authentication data. See [User Model](#user-model).
 
-The `Page` model (`skrift/db/models/page.py`) manages page content.
+#### Pages Table
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | UUID | Primary key (auto-generated) |
+| `id` | UUID | Primary key |
 | `slug` | String | Unique URL slug (indexed) |
 | `title` | String | Page title |
-| `content` | Text | Page content (HTML) |
+| `content` | Text | HTML content |
 | `is_published` | Boolean | Publication status |
-| `published_at` | DateTime | Publication timestamp (nullable) |
-| `created_at` | DateTime | Creation timestamp (auto) |
-| `updated_at` | DateTime | Last update timestamp (auto) |
+| `published_at` | DateTime | Publication timestamp |
+| `user_id` | UUID | Author (foreign key) |
+| `created_at` | DateTime | Creation timestamp |
+| `updated_at` | DateTime | Last update timestamp |
 
-**Indexes:**
-- `slug` - Unique index for fast lookups
+#### Roles Table
 
-## Content Management
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Primary key |
+| `name` | String | Role identifier |
+| `display_name` | String | Human-readable name |
+| `description` | String | Role description |
 
-### Page Service
+#### Role Permissions Table
 
-The `page_service` module (`skrift/db/services/page_service.py`) provides CRUD operations for managing pages.
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Primary key |
+| `role_id` | UUID | Foreign key to roles |
+| `permission` | String | Permission string |
 
-#### List Pages
+#### User Roles Table (Junction)
 
-```python
-from skrift.db.services import page_service
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_id` | UUID | Foreign key to users |
+| `role_id` | UUID | Foreign key to roles |
 
-# List all published pages
-pages = await page_service.list_pages(
-    db_session,
-    published_only=True,
-    limit=10
-)
+#### Settings Table
 
-# List all pages (including drafts)
-pages = await page_service.list_pages(db_session)
-```
-
-**Parameters:**
-- `db_session` (required): Database session
-- `published_only`: Only return published content
-- `limit`: Maximum number of results
-- `offset`: Number of results to skip (for pagination)
-
-#### Get Page by Slug
-
-```python
-# Get published page
-page = await page_service.get_page_by_slug(
-    db_session,
-    "about",
-    published_only=True
-)
-
-# Get any page (including drafts)
-page = await page_service.get_page_by_slug(
-    db_session,
-    "services/web"
-)
-```
-
-**Parameters:**
-- `db_session` (required): Database session
-- `slug` (required): Page slug (can include slashes for nested pages)
-- `published_only`: Only return if published
-
-#### Create Page
-
-```python
-from datetime import datetime, timezone
-
-page = await page_service.create_page(
-    db_session,
-    slug="about",
-    title="About Us",
-    content="<p>Learn more about our company.</p>",
-    is_published=True,
-    published_at=datetime.now(timezone.utc)
-)
-```
-
-**Parameters:**
-- `db_session` (required): Database session
-- `slug` (required): Unique URL slug
-- `title` (required): Page title
-- `content`: HTML content (default: "")
-- `is_published`: Publication status (default: False)
-- `published_at`: Publication timestamp (optional)
-
-#### Update Page
-
-```python
-from uuid import UUID
-
-updated_page = await page_service.update_page(
-    db_session,
-    page_id=UUID("..."),
-    title="Updated Title",
-    content="<p>New content</p>",
-    is_published=True
-)
-```
-
-**Parameters:**
-- `db_session` (required): Database session
-- `page_id` (required): UUID of page to update
-- `slug`: New slug (optional)
-- `title`: New title (optional)
-- `content`: New content (optional)
-- `is_published`: New publication status (optional)
-- `published_at`: New publication timestamp (optional)
-
-Returns the updated Page object or None if not found.
-
-#### Delete Page
-
-```python
-success = await page_service.delete_page(
-    db_session,
-    page_id=UUID("...")
-)
-```
-
-**Parameters:**
-- `db_session` (required): Database session
-- `page_id` (required): UUID of page to delete
-
-Returns True if deleted, False if not found.
-
-### Route Integration
-
-The web controller automatically fetches pages from the database:
-
-- **Pages** (`/{path}`): Looks up pages where `slug` matches the full path (catch-all route)
-
-**Authentication behavior:**
-- Logged-in users can view unpublished content
-- Anonymous users only see published content (`is_published=True`)
-
-### Creating Sample Content
-
-To add sample content, use the Python REPL or create a migration script:
-
-```python
-# Example: Create sample pages via Python REPL
-import asyncio
-from datetime import datetime, timezone
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from skrift.config import get_settings
-from skrift.db.services import page_service
-
-async def create_samples():
-    settings = get_settings()
-    engine = create_async_engine(settings.database_url)
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    async with async_session() as session:
-        # Create a published page
-        await page_service.create_page(
-            session,
-            slug="about",
-            title="About Us",
-            content="<p>Learn more about our company.</p>",
-            is_published=True,
-            published_at=datetime.now(timezone.utc)
-        )
-
-        # Create a nested page
-        await page_service.create_page(
-            session,
-            slug="services/web",
-            title="Web Services",
-            content="<p>Our web development services.</p>",
-            is_published=True
-        )
-
-asyncio.run(create_samples())
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Primary key |
+| `key` | String | Setting name (unique) |
+| `value` | Text | Setting value |
 
 ### Database Migrations
 
-Skrift uses [Alembic](https://alembic.sqlalchemy.org/) for database migrations. Migrations are required to set up and update the database schema.
+Skrift uses Alembic for database migrations.
 
-#### Quick Start
-
-**New installation (fresh database):**
-```bash
-# Apply all migrations to create the database schema
-skrift-db upgrade head
-```
-
-**Existing database (upgrading from create_all):**
-
-If you have an existing database that was created using the old `create_all=True` method, stamp it to mark existing migrations as applied:
-```bash
-# Mark the initial migration as already applied (don't run it)
-skrift-db stamp head
-
-# Now you can apply future migrations normally
-skrift-db upgrade head
-```
-
-#### Common Migration Commands
+#### Common Commands
 
 ```bash
-# Apply all pending migrations
+# Apply all migrations
 skrift-db upgrade head
 
-# Show current migration version
+# Show current version
 skrift-db current
 
 # Show migration history
@@ -543,167 +759,170 @@ skrift-db history
 # Rollback one migration
 skrift-db downgrade -1
 
-# Rollback to a specific revision
-skrift-db downgrade <revision_id>
+# Generate migration from model changes
+skrift-db revision --autogenerate -m "description"
 
-# Generate SQL without executing (for review)
+# Generate SQL without executing
 skrift-db upgrade head --sql
 ```
 
-#### Creating New Migrations
+#### Migration Workflow
 
-When you modify database models, create a new migration:
-
+**New installation:**
 ```bash
-# Auto-generate migration from model changes
-skrift-db revision --autogenerate -m "add new field to pages"
-
-# Create an empty migration (for manual SQL)
-skrift-db revision -m "custom migration"
+skrift-db upgrade head
 ```
 
-**Important:** Always review auto-generated migrations before applying them. Alembic may not detect all changes correctly (especially for column type changes or index modifications).
-
-#### Migration Files
-
-Migrations are stored in `alembic/versions/`. Each migration file contains:
-- `upgrade()`: Apply the migration
-- `downgrade()`: Reverse the migration
-
-Example migration structure:
-```
-alembic/
-├── env.py              # Alembic environment configuration
-├── script.py.mako      # Template for new migrations
-└── versions/           # Migration files
-    └── 20260120_..._initial_schema.py
-```
-
-#### Environment Configuration
-
-Migrations read the database URL from your `.env` file or `DATABASE_URL` environment variable. The same configuration used by the application is used for migrations.
-
+**After model changes:**
 ```bash
-# SQLite (development)
-DATABASE_URL=sqlite+aiosqlite:///./app.db
-
-# PostgreSQL (production)
-DATABASE_URL=postgresql+asyncpg://user:password@host:5432/dbname
+skrift-db revision --autogenerate -m "add new field"
+skrift-db upgrade head
 ```
 
-## Database (Technical Details)
-
-### SQLAlchemy Async Setup
-
-The application uses SQLAlchemy with async support via Advanced Alchemy:
-
-- **Session injection**: `AsyncSession` is automatically injected into route handlers
-- **Migrations**: Schema is managed via Alembic migrations (`skrift-db upgrade head`)
-- **Session config**: `expire_on_commit=False` for better async compatibility
-
-### Base Model
-
-All models inherit from `Base` (`skrift/db/base.py`), which provides:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | UUID | Primary key (auto-generated) |
-| `created_at` | DateTime | Automatic creation timestamp |
-| `updated_at` | DateTime | Automatic update timestamp |
-
-### Supported Databases
-
-**SQLite** (default, development):
-```
-DATABASE_URL=sqlite+aiosqlite:///./app.db
+**Deployment:**
+```bash
+git pull
+uv sync
+skrift-db upgrade head
+systemctl restart skrift
 ```
 
-**PostgreSQL** (production):
+## Content Management
+
+### Page Service API
+
+The `page_service` module provides CRUD operations:
+
+```python
+from skrift.db.services import page_service
+
+# List pages
+pages = await page_service.list_pages(
+    db_session,
+    published_only=True,
+    limit=10,
+    offset=0
+)
+
+# Get page by slug
+page = await page_service.get_page_by_slug(
+    db_session,
+    "services/web",
+    published_only=True
+)
+
+# Get page by ID
+page = await page_service.get_page_by_id(db_session, page_id)
+
+# Create page
+page = await page_service.create_page(
+    db_session,
+    slug="about",
+    title="About Us",
+    content="<p>Content here</p>",
+    is_published=True,
+    user_id=author_id
+)
+
+# Update page
+page = await page_service.update_page(
+    db_session,
+    page_id=page_id,
+    title="New Title",
+    content="<p>Updated content</p>"
+)
+
+# Delete page
+success = await page_service.delete_page(db_session, page_id)
+
+# Check ownership
+is_owner = await page_service.check_page_ownership(
+    db_session,
+    page_id,
+    user_id
+)
 ```
-DATABASE_URL=postgresql+asyncpg://user:password@host:5432/dbname
-```
+
+### Access Control
+
+- **Anonymous users**: See only published pages
+- **Authenticated users**: See all pages including drafts
+- **Editors/Admins**: Can create, edit, publish, and delete pages
 
 ## Error Handling
 
 ### Content Negotiation
 
-Error handlers automatically detect the client type:
-- **Browsers** (Accept: text/html): Receive HTML error pages
-- **API clients**: Receive JSON responses
+Error handlers detect client type and respond appropriately:
+- **Browsers** (Accept: text/html): HTML error pages
+- **API clients**: JSON responses
 
-### Custom Error Templates
+### Error Templates
 
-Create templates following the naming pattern `error-{status_code}.html`:
-
+Create custom error templates:
 - `error-404.html` - Not Found
 - `error-500.html` - Internal Server Error
-- `error.html` - Default fallback for all errors
+- `error.html` - Default fallback
 
-### Template Fallback Hierarchy
+Template fallback: `error-{code}.html` -> `error.html`
 
-1. `error-{status_code}.html` (e.g., `error-404.html`)
-2. `error.html` (generic fallback)
+### Error Context
 
-Error templates receive these context variables:
+Error templates receive:
 
 | Variable | Type | Description |
 |----------|------|-------------|
 | `status_code` | int | HTTP status code |
-| `message` | str | Error message/detail |
-| `user` | None | Always None in error context |
+| `message` | str | Error message |
+| `user` | User \| None | Current user if authenticated |
 
-## Production Deployment
+## Architecture
 
-### Environment Changes
+### AppDispatcher Pattern
 
-Update your `.env` for production:
+The application uses a dispatcher pattern for seamless setup/runtime switching:
 
-```bash
-DEBUG=false
-SECRET_KEY=<strong-random-key>
-DATABASE_URL=postgresql+asyncpg://user:password@host:5432/dbname
-OAUTH_REDIRECT_BASE_URL=https://yourdomain.com
+```
+Request
+   │
+   ▼
+AppDispatcher
+   │
+   ├── Setup incomplete? ──► Setup App ──► /setup/*, /auth/*, /static/*
+   │
+   └── Setup complete? ────► Main App ──► All routes
 ```
 
-Generate a secure secret key:
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-```
+Benefits:
+- No restart required after setup
+- Clean separation of setup and runtime
+- Graceful transition between modes
 
-### Running with Gunicorn
+### Request Flow
 
-Install gunicorn with uvicorn workers:
-```bash
-uv add gunicorn
-```
+1. Request arrives at AppDispatcher
+2. Dispatcher checks setup state
+3. Routes to appropriate app (Setup or Main)
+4. App processes request through middleware
+5. Route handler executes
+6. Response returned to client
 
-Run the application:
-```bash
-gunicorn skrift.asgi:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
-```
+### Startup Sequence
 
-### Database Considerations
+1. `create_dispatcher()` called at import
+2. Check for `app.yaml` and database configuration
+3. If incomplete: Create Setup App
+4. If complete: Create Main App with:
+   - Load controllers from `app.yaml`
+   - Configure database connection
+   - Set up OAuth providers
+   - Initialize session management
+   - Register error handlers
+   - Run startup handlers (sync roles, cache settings)
 
-For production with PostgreSQL:
+### Session Architecture
 
-1. Set up your PostgreSQL database
-2. Update `DATABASE_URL` in your environment
-3. Run migrations to create the schema:
-   ```bash
-   skrift-db upgrade head
-   ```
-
-**Deployment workflow:**
-```bash
-# 1. Pull latest code
-git pull
-
-# 2. Install dependencies
-uv sync
-
-# 3. Apply any new migrations
-skrift-db upgrade head
-
-# 4. Restart the application
-systemctl restart skrift  # or your process manager
-```
+- **Type**: Client-side encrypted cookies
+- **Encryption**: AES-GCM with SHA256-hashed secret
+- **Benefits**: Stateless, horizontally scalable
+- **Stored Data**: User ID, name, email, picture URL
