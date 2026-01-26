@@ -1,7 +1,10 @@
+"""Entry point for the skrift package."""
+
 import uvicorn
 
 
 def main():
+    """Run the Skrift development server."""
     uvicorn.run(
         "skrift.asgi:app",
         host="0.0.0.0",

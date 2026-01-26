@@ -305,7 +305,7 @@ def create_app() -> Litestar:
     )
 
     # Template configuration
-    template_dir = Path(__file__).parent.parent / "templates"
+    template_dir = Path(__file__).parent / "templates"
     template_config = TemplateConfig(
         directory=template_dir,
         engine=JinjaTemplateEngine,
@@ -321,7 +321,7 @@ def create_app() -> Litestar:
     # Static files
     static_files_router = create_static_files_router(
         path="/static",
-        directories=[Path(__file__).parent.parent / "static"],
+        directories=[Path(__file__).parent / "static"],
     )
 
     from skrift.auth import sync_roles_to_database
@@ -377,7 +377,7 @@ def create_setup_app() -> Litestar:
     )
 
     # Template configuration
-    template_dir = Path(__file__).parent.parent / "templates"
+    template_dir = Path(__file__).parent / "templates"
     template_config = TemplateConfig(
         directory=template_dir,
         engine=JinjaTemplateEngine,
@@ -393,7 +393,7 @@ def create_setup_app() -> Litestar:
     # Static files
     static_files_router = create_static_files_router(
         path="/static",
-        directories=[Path(__file__).parent.parent / "static"],
+        directories=[Path(__file__).parent / "static"],
     )
 
     # Import controllers
