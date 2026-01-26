@@ -1,7 +1,7 @@
 [project]
 name = "skrift"
-version = "0.1.0"
-description = "Litestar website with Google OAuth and WP-like templates"
+version = "0.1.0a1"
+description = "A lightweight async Python CMS for crafting modern websites"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-skrift = "main:main"
+skrift = "skrift.__main__:main"
 skrift-db = "skrift.cli:db"
 
 [tool.uv]
@@ -29,6 +29,21 @@ package = true
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "skrift/**/*.py",
+    "skrift/templates/**/*.html",
+    "skrift/static/**/*",
+    "skrift/alembic/**/*",
+    "skrift/alembic.ini",
+]
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "app.yaml",
+    "*.db",
+]
 
 [tool.ruff]
 line-length = 100

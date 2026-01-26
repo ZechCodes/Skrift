@@ -2,16 +2,14 @@ controllers:
   - skrift.controllers.auth:AuthController
   - skrift.admin.controller:AdminController
   - skrift.controllers.web:WebController
-
 db:
   url: $DATABASE_URL
   pool_size: 5
   pool_overflow: 10
   pool_timeout: 30
   echo: false
-
 auth:
-  redirect_base_url: $OAUTH_REDIRECT_BASE_URL
+  redirect_base_url: http://localhost:8080
   providers:
     google:
       client_id: $GOOGLE_CLIENT_ID
