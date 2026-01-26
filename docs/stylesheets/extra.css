@@ -1,0 +1,140 @@
+/* Hero Section */
+.hero {
+    text-align: center;
+    padding: 2rem 1rem 3rem;
+    margin: -1rem -1rem 2rem;
+    background: linear-gradient(135deg, var(--md-primary-fg-color) 0%, #9c27b0 100%);
+    border-radius: 0 0 1rem 1rem;
+}
+
+.hero-content {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.hero h2 {
+    color: white !important;
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    font-weight: 400;
+}
+
+.hero p {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 1.1rem;
+    margin-bottom: 1.5rem;
+}
+
+.hero .md-button {
+    margin: 0.25rem;
+}
+
+.hero .md-button--primary {
+    background-color: white;
+    color: var(--md-primary-fg-color);
+    border-color: white;
+}
+
+.hero .md-button--primary:hover {
+    background-color: rgba(255, 255, 255, 0.9);
+}
+
+/* Skill Badges */
+.skill-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 1rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 1rem;
+}
+
+.skill-badge.beginner {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+}
+
+.skill-badge.intermediate {
+    background-color: #fff3e0;
+    color: #ef6c00;
+}
+
+.skill-badge.advanced {
+    background-color: #fce4ec;
+    color: #c2185b;
+}
+
+[data-md-color-scheme="slate"] .skill-badge.beginner {
+    background-color: rgba(46, 125, 50, 0.2);
+    color: #81c784;
+}
+
+[data-md-color-scheme="slate"] .skill-badge.intermediate {
+    background-color: rgba(239, 108, 0, 0.2);
+    color: #ffb74d;
+}
+
+[data-md-color-scheme="slate"] .skill-badge.advanced {
+    background-color: rgba(194, 24, 91, 0.2);
+    color: #f48fb1;
+}
+
+/* Grid Cards Enhancement */
+.grid.cards > ul > li {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.grid.cards > ul > li:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Code Block Enhancements */
+.md-typeset pre > code {
+    font-size: 0.85rem;
+}
+
+/* Table Improvements */
+.md-typeset table:not([class]) th {
+    background-color: var(--md-primary-fg-color);
+    color: white;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+    background-color: var(--md-primary-fg-color--dark);
+}
+
+/* Admonition Tweaks */
+.md-typeset .admonition {
+    font-size: 0.9rem;
+}
+
+/* Navigation Tabs */
+.md-tabs__link {
+    font-weight: 500;
+}
+
+/* Improve readability */
+.md-typeset {
+    line-height: 1.7;
+}
+
+.md-typeset h1 {
+    font-weight: 600;
+}
+
+.md-typeset h2 {
+    font-weight: 500;
+    margin-top: 2rem;
+}
+
+/* Feature icon sizing in cards */
+.grid.cards .lg {
+    font-size: 2rem;
+}
+
+.grid.cards .middle {
+    vertical-align: middle;
+}
