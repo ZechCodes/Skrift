@@ -30,6 +30,11 @@ package = true
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+docs = [
+    "zensical>=0.0.19",
+]
+
 [tool.hatch.build]
 include = [
     "skrift/**/*.py",
@@ -44,6 +49,9 @@ exclude = [
     "app.yaml",
     "*.db",
 ]
+
+[project.optional-dependencies]
+docs = ["zensical>=0.0.19"]
 
 [tool.ruff]
 line-length = 100

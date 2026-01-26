@@ -1,4 +1,4 @@
-# CSS Framework Documentation
+# CSS Framework
 
 A custom, minimalist CSS framework with neutral grey theming, pill-style buttons, and automatic light/dark mode support.
 
