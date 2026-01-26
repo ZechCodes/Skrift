@@ -1,0 +1,75 @@
+site_name: Skrift Documentation
+site_url: https://zechcodes.github.io/Skrift/
+repo_url: https://github.com/ZechCodes/Skrift
+repo_name: ZechCodes/Skrift
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - getting-started/index.md
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+  - Configuration:
+    - configuration/index.md
+    - Environment Variables: configuration/environment.md
+    - OAuth Providers: configuration/auth-providers.md
+  - Guides:
+    - guides/index.md
+    - Creating Pages: guides/creating-pages.md
+    - Custom Templates: guides/custom-templates.md
+    - Custom Controllers: guides/custom-controllers.md
+  - Admin:
+    - admin/index.md
+    - User Management: admin/user-management.md
+  - Reference:
+    - reference/index.md
+    - CSS Framework: reference/css-framework.md
+  - Deployment:
+    - deployment/index.md
+    - Production: deployment/production.md
