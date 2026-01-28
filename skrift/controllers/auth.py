@@ -1,6 +1,7 @@
 """Authentication controller for OAuth login flows.
 
 Supports multiple OAuth providers: Google, GitHub, Microsoft, Discord, Facebook, X (Twitter).
+Also supports a development-only "dummy" provider for testing.
 """
 
 import base64
@@ -11,7 +12,7 @@ from typing import Annotated
 from urllib.parse import urlencode
 
 import httpx
-from litestar import Controller, Request, get
+from litestar import Controller, Request, get, post
 from litestar.exceptions import HTTPException, NotFoundException
 from litestar.params import Parameter
 from litestar.response import Redirect, Template as TemplateResponse
@@ -20,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.config import get_settings
 from skrift.db.models.user import User
-from skrift.setup.providers import OAUTH_PROVIDERS, get_provider_info
+from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
 
 
 def get_auth_url(provider: str, settings, state: str, code_challenge: str | None = None) -> str:
@@ -227,8 +228,8 @@ class AuthController(Controller):
         self,
         request: Request,
         provider: str,
-    ) -> Redirect:
-        """Redirect to OAuth provider consent screen."""
+    ) -> Redirect | TemplateResponse:
+        """Redirect to OAuth provider consent screen, or show dummy login form."""
         settings = get_settings()
         provider_info = get_provider_info(provider)
 
@@ -237,6 +238,14 @@ class AuthController(Controller):
 
         if provider not in settings.auth.providers:
             raise NotFoundException(f"Provider {provider} not configured")
+
+        # Dummy provider shows local login form instead of redirecting to OAuth
+        if provider == DUMMY_PROVIDER_KEY:
+            flash = request.session.pop("flash", None)
+            return TemplateResponse(
+                "auth/dummy_login.html",
+                context={"flash": flash},
+            )
 
         # Generate CSRF state token
         state = secrets.token_urlsafe(32)
@@ -348,21 +357,90 @@ class AuthController(Controller):
         flash = request.session.pop("flash", None)
         settings = get_settings()
 
-        # Get configured providers
+        # Get configured providers (excluding dummy from main list)
         configured_providers = list(settings.auth.providers.keys())
         providers = {
             key: OAUTH_PROVIDERS[key]
             for key in configured_providers
-            if key in OAUTH_PROVIDERS
+            if key in OAUTH_PROVIDERS and key != DUMMY_PROVIDER_KEY
         }
+
+        # Check if dummy provider is configured
+        has_dummy = DUMMY_PROVIDER_KEY in settings.auth.providers
 
         return TemplateResponse(
             "auth/login.html",
             context={
                 "flash": flash,
                 "providers": providers,
+                "has_dummy": has_dummy,
             },
         )
+
+    @post("/dummy-login")
+    async def dummy_login_submit(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+    ) -> Redirect:
+        """Process dummy login form submission."""
+        settings = get_settings()
+
+        if DUMMY_PROVIDER_KEY not in settings.auth.providers:
+            raise NotFoundException("Dummy provider not configured")
+
+        # Parse form data from request
+        form_data = await request.form()
+        email = form_data.get("email", "").strip()
+        name = form_data.get("name", "").strip()
+
+        if not email:
+            request.session["flash"] = "Email is required"
+            return Redirect(path="/auth/dummy/login")
+
+        # Default name to email username if not provided
+        if not name:
+            name = email.split("@")[0]
+
+        # Generate deterministic oauth_id from email
+        oauth_id = f"dummy_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
+
+        # Find or create user
+        result = await db_session.execute(
+            select(User).where(
+                User.oauth_id == oauth_id,
+                User.oauth_provider == DUMMY_PROVIDER_KEY,
+            )
+        )
+        user = result.scalar_one_or_none()
+
+        if user:
+            # Update existing user
+            user.name = name
+            user.email = email
+            user.last_login_at = datetime.now(UTC)
+        else:
+            # Create new user
+            user = User(
+                oauth_provider=DUMMY_PROVIDER_KEY,
+                oauth_id=oauth_id,
+                email=email,
+                name=name,
+                last_login_at=datetime.now(UTC),
+            )
+            db_session.add(user)
+            await db_session.flush()
+
+        await db_session.commit()
+
+        # Set session with user info
+        request.session["user_id"] = str(user.id)
+        request.session["user_name"] = user.name
+        request.session["user_email"] = user.email
+        request.session["user_picture_url"] = user.picture_url
+        request.session["flash"] = "Successfully logged in!"
+
+        return Redirect(path="/")
 
     @get("/logout")
     async def logout(self, request: Request) -> Redirect:
