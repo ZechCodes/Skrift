@@ -12,6 +12,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from skrift.config import get_config_path
 from skrift.db.services.setting_service import SETUP_COMPLETED_AT_KEY, get_setting
 
 
@@ -27,7 +28,7 @@ class SetupStep(Enum):
 
 def app_yaml_exists() -> bool:
     """Check if app.yaml exists in the current working directory."""
-    return (Path.cwd() / "app.yaml").exists()
+    return get_config_path().exists()
 
 
 def get_database_url_from_yaml() -> str | None:
@@ -38,7 +39,7 @@ def get_database_url_from_yaml() -> str | None:
     """
     import yaml
 
-    config_path = Path.cwd() / "app.yaml"
+    config_path = get_config_path()
     if not config_path.exists():
         return None
 

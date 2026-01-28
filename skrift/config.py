@@ -16,6 +16,31 @@ load_dotenv(_env_file)
 # Pattern to match $VAR_NAME environment variable references
 ENV_VAR_PATTERN = re.compile(r"\$([A-Z_][A-Z0-9_]*)")
 
+# Environment configuration
+SKRIFT_ENV = "SKRIFT_ENV"
+DEFAULT_ENVIRONMENT = "production"
+
+
+def get_environment() -> str:
+    """Get the current environment name, normalized to lowercase.
+
+    Reads from SKRIFT_ENV environment variable. Defaults to "production".
+    """
+    env = os.environ.get(SKRIFT_ENV, DEFAULT_ENVIRONMENT)
+    return env.lower().strip()
+
+
+def get_config_path() -> Path:
+    """Get the path to the environment-specific config file.
+
+    Production -> app.yaml
+    Other envs -> app.{env}.yaml (e.g., app.dev.yaml)
+    """
+    env = get_environment()
+    if env == "production":
+        return Path.cwd() / "app.yaml"
+    return Path.cwd() / f"app.{env}.yaml"
+
 
 def interpolate_env_vars(value, strict: bool = True):
     """Recursively replace $VAR_NAME with os.environ values.
@@ -54,10 +79,10 @@ def load_app_config(interpolate: bool = True, strict: bool = True) -> dict:
     Returns:
         Parsed configuration dictionary
     """
-    config_path = Path.cwd() / "app.yaml"
+    config_path = get_config_path()
 
     if not config_path.exists():
-        raise FileNotFoundError(f"app.yaml not found at {config_path}")
+        raise FileNotFoundError(f"{config_path.name} not found at {config_path}")
 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -69,7 +94,7 @@ def load_app_config(interpolate: bool = True, strict: bool = True) -> dict:
 
 def load_raw_app_config() -> dict | None:
     """Load app.yaml without any processing. Returns None if file doesn't exist."""
-    config_path = Path.cwd() / "app.yaml"
+    config_path = get_config_path()
 
     if not config_path.exists():
         return None
@@ -98,11 +123,40 @@ class OAuthProviderConfig(BaseModel):
     tenant_id: str | None = None
 
 
+class DummyProviderConfig(BaseModel):
+    """Dummy provider configuration (no credentials required)."""
+
+    pass
+
+
+# Union type for provider configs - dummy has no required fields
+ProviderConfig = OAuthProviderConfig | DummyProviderConfig
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration."""
 
     redirect_base_url: str = "http://localhost:8000"
-    providers: dict[str, OAuthProviderConfig] = {}
+    providers: dict[str, ProviderConfig] = {}
+
+    @classmethod
+    def _parse_provider(cls, name: str, config: dict) -> ProviderConfig:
+        """Parse a provider config, using the appropriate model based on provider name."""
+        if name == "dummy":
+            return DummyProviderConfig(**config)
+        return OAuthProviderConfig(**config)
+
+    def __init__(self, **data):
+        # Convert raw provider dicts to appropriate config objects
+        if "providers" in data and isinstance(data["providers"], dict):
+            parsed_providers = {}
+            for name, config in data["providers"].items():
+                if isinstance(config, dict):
+                    parsed_providers[name] = self._parse_provider(name, config)
+                else:
+                    parsed_providers[name] = config
+            data["providers"] = parsed_providers
+        super().__init__(**data)
 
     def get_redirect_uri(self, provider: str) -> str:
         """Get the OAuth callback URL for a provider."""
@@ -137,7 +191,7 @@ def is_config_valid() -> tuple[bool, str | None]:
     try:
         config = load_raw_app_config()
         if config is None:
-            return False, "app.yaml not found"
+            return False, f"{get_config_path().name} not found"
 
         # Check database URL
         db_config = config.get("db", {})

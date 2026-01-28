@@ -64,11 +64,24 @@ These are commonly referenced from `app.yaml`:
 
 | Variable | Used In | Description |
 |----------|---------|-------------|
+| `SKRIFT_ENV` | Config loading | Selects environment-specific config file |
 | `DATABASE_URL` | `db.url` | Database connection string |
 | `GOOGLE_CLIENT_ID` | `auth.providers.google.client_id` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | `auth.providers.google.client_secret` | Google OAuth secret |
 | `GITHUB_CLIENT_ID` | `auth.providers.github.client_id` | GitHub OAuth client ID |
 | `GITHUB_CLIENT_SECRET` | `auth.providers.github.client_secret` | GitHub OAuth secret |
+
+## SKRIFT_ENV
+
+Controls which configuration file Skrift loads.
+
+| SKRIFT_ENV Value | Config File |
+|------------------|-------------|
+| (unset or "production") | `app.yaml` |
+| `dev` | `app.dev.yaml` |
+| `staging` | `app.staging.yaml` |
+
+See [Environment-Specific Configuration](environments.md) for details.
 
 ## Database URL Format
 

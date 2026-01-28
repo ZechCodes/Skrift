@@ -29,7 +29,7 @@ from litestar.static_files import create_static_files_router
 from litestar.template import TemplateConfig
 from litestar.types import ASGIApp, Receive, Scope, Send
 
-from skrift.config import get_settings, is_config_valid
+from skrift.config import get_config_path, get_settings, is_config_valid
 from skrift.db.base import Base
 from skrift.db.services.setting_service import (
     load_site_settings_cache,
@@ -45,7 +45,7 @@ from skrift.lib.exceptions import http_exception_handler, internal_server_error_
 
 def load_controllers() -> list:
     """Load controllers from app.yaml configuration."""
-    config_path = Path.cwd() / "app.yaml"
+    config_path = get_config_path()
 
     if not config_path.exists():
         return []
@@ -196,12 +196,7 @@ class AppDispatcher:
             await self.setup_app(scope, receive, send)
             return
 
-        # For /auth/* during setup, route to setup app (OAuth callbacks)
-        if path.startswith("/auth"):
-            await self.setup_app(scope, receive, send)
-            return
-
-        # Non-setup path: check if setup is complete in DB
+        # Check if setup is complete in DB
         if await self._is_setup_complete_in_db():
             # Setup complete - try to get/create main app
             main_app = await self._get_or_create_main_app()
@@ -215,8 +210,13 @@ class AppDispatcher:
                     f"Setup complete but cannot start application: {self._main_app_error}"
                 )
         else:
-            # Setup not complete - redirect to /setup
-            await self._redirect(send, "/setup")
+            # Setup not complete
+            # Route /auth/* to setup app for OAuth callbacks during setup
+            if path.startswith("/auth"):
+                await self.setup_app(scope, receive, send)
+            else:
+                # Redirect other paths to /setup
+                await self._redirect(send, "/setup")
 
     async def _is_setup_complete_in_db(self) -> bool:
         """Check if setup is complete in the database."""
@@ -270,6 +270,10 @@ def create_app() -> Litestar:
     This app has all routes for normal operation. It is used by the dispatcher
     after setup is complete.
     """
+    # CRITICAL: Check for dummy auth in production BEFORE anything else
+    from skrift.setup.providers import validate_no_dummy_auth_in_production
+    validate_no_dummy_auth_in_production()
+
     settings = get_settings()
 
     # Load controllers from app.yaml
@@ -404,7 +408,7 @@ def create_setup_app() -> Litestar:
 
     # Also try to get the raw db URL from config (before env var resolution)
     if not db_url:
-        config_path = Path.cwd() / "app.yaml"
+        config_path = get_config_path()
         if config_path.exists():
             try:
                 with open(config_path, "r") as f:
@@ -493,6 +497,10 @@ def create_dispatcher() -> ASGIApp:
     This is the main entry point. The dispatcher handles routing between
     setup and main apps, with lazy creation of the main app after setup completes.
     """
+    # CRITICAL: Check for dummy auth in production BEFORE anything else
+    from skrift.setup.providers import validate_no_dummy_auth_in_production
+    validate_no_dummy_auth_in_production()
+
     global _dispatcher
     from skrift.setup.state import get_database_url_from_yaml
 

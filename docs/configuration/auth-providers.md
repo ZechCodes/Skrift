@@ -10,6 +10,7 @@ Skrift supports multiple OAuth providers for authentication. The setup wizard co
 - Discord
 - Facebook
 - Twitter/X
+- **Dummy** (development/testing only)
 
 ## Configuration
 
@@ -108,6 +109,45 @@ providers:
     client_id: your-client-id
     client_secret: your-client-secret
 ```
+
+### Dummy Provider (Development Only)
+
+The dummy provider allows you to bypass OAuth flows during development and testing. Instead of redirecting to an external provider, it shows a simple form where you can enter any email and name to log in.
+
+!!! warning "Not for Production"
+    The dummy provider will **refuse to start** if enabled in production. This is a critical security measure to prevent accidental deployment with insecure authentication.
+
+**Configuration:**
+
+```yaml
+# In app.dev.yaml (NOT app.yaml for production)
+auth:
+  redirect_base_url: http://localhost:8080
+  providers:
+    dummy: {}  # No credentials needed
+```
+
+**Features:**
+
+- No OAuth credentials required
+- Enter any email/name to create or log in as a user
+- Same email always logs in as the same user (deterministic)
+- Useful for testing user flows, roles, and permissions
+- Cannot be enabled in production (server refuses to start)
+
+**Usage:**
+
+1. Add `dummy: {}` to your `app.dev.yaml` providers
+2. Run with `SKRIFT_ENV=dev`
+3. Click "Dummy Login (Dev)" on the login page
+4. Enter an email and optional name
+5. You're logged in!
+
+**Security:**
+
+- The server will immediately exit with an error if dummy auth is detected in production (`SKRIFT_ENV=production` or unset)
+- The dummy provider does not appear in the setup wizard
+- Users created via dummy login have `oauth_provider: dummy` for easy identification
 
 ## Authentication Flow
 

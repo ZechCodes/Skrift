@@ -175,7 +175,7 @@ a {
     position: relative;
 }
 
-a:not([role="button"])::after {
+a:not([role="button"]):not(.oauth-btn)::after {
     content: '';
     position: absolute;
     left: 0;
@@ -188,11 +188,11 @@ a:not([role="button"])::after {
     transition: transform 500ms ease-out;
 }
 
-a:hover {
+a:not([role="button"]):not(.oauth-btn):hover {
     color: var(--color-primary-hover);
 }
 
-a:not([role="button"]):hover::after {
+a:not([role="button"]):not(.oauth-btn):hover::after {
     transform: scaleX(1);
     transform-origin: left;
 }
