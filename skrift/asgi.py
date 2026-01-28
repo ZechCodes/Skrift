@@ -196,12 +196,7 @@ class AppDispatcher:
             await self.setup_app(scope, receive, send)
             return
 
-        # For /auth/* during setup, route to setup app (OAuth callbacks)
-        if path.startswith("/auth"):
-            await self.setup_app(scope, receive, send)
-            return
-
-        # Non-setup path: check if setup is complete in DB
+        # Check if setup is complete in DB
         if await self._is_setup_complete_in_db():
             # Setup complete - try to get/create main app
             main_app = await self._get_or_create_main_app()
@@ -215,8 +210,13 @@ class AppDispatcher:
                     f"Setup complete but cannot start application: {self._main_app_error}"
                 )
         else:
-            # Setup not complete - redirect to /setup
-            await self._redirect(send, "/setup")
+            # Setup not complete
+            # Route /auth/* to setup app for OAuth callbacks during setup
+            if path.startswith("/auth"):
+                await self.setup_app(scope, receive, send)
+            else:
+                # Redirect other paths to /setup
+                await self._redirect(send, "/setup")
 
     async def _is_setup_complete_in_db(self) -> bool:
         """Check if setup is complete in the database."""
@@ -270,6 +270,10 @@ def create_app() -> Litestar:
     This app has all routes for normal operation. It is used by the dispatcher
     after setup is complete.
     """
+    # CRITICAL: Check for dummy auth in production BEFORE anything else
+    from skrift.setup.providers import validate_no_dummy_auth_in_production
+    validate_no_dummy_auth_in_production()
+
     settings = get_settings()
 
     # Load controllers from app.yaml
@@ -493,6 +497,10 @@ def create_dispatcher() -> ASGIApp:
     This is the main entry point. The dispatcher handles routing between
     setup and main apps, with lazy creation of the main app after setup completes.
     """
+    # CRITICAL: Check for dummy auth in production BEFORE anything else
+    from skrift.setup.providers import validate_no_dummy_auth_in_production
+    validate_no_dummy_auth_in_production()
+
     global _dispatcher
     from skrift.setup.state import get_database_url_from_yaml
 
