@@ -16,6 +16,31 @@ load_dotenv(_env_file)
 # Pattern to match $VAR_NAME environment variable references
 ENV_VAR_PATTERN = re.compile(r"\$([A-Z_][A-Z0-9_]*)")
 
+# Environment configuration
+SKRIFT_ENV = "SKRIFT_ENV"
+DEFAULT_ENVIRONMENT = "production"
+
+
+def get_environment() -> str:
+    """Get the current environment name, normalized to lowercase.
+
+    Reads from SKRIFT_ENV environment variable. Defaults to "production".
+    """
+    env = os.environ.get(SKRIFT_ENV, DEFAULT_ENVIRONMENT)
+    return env.lower().strip()
+
+
+def get_config_path() -> Path:
+    """Get the path to the environment-specific config file.
+
+    Production -> app.yaml
+    Other envs -> app.{env}.yaml (e.g., app.dev.yaml)
+    """
+    env = get_environment()
+    if env == "production":
+        return Path.cwd() / "app.yaml"
+    return Path.cwd() / f"app.{env}.yaml"
+
 
 def interpolate_env_vars(value, strict: bool = True):
     """Recursively replace $VAR_NAME with os.environ values.
@@ -54,10 +79,10 @@ def load_app_config(interpolate: bool = True, strict: bool = True) -> dict:
     Returns:
         Parsed configuration dictionary
     """
-    config_path = Path.cwd() / "app.yaml"
+    config_path = get_config_path()
 
     if not config_path.exists():
-        raise FileNotFoundError(f"app.yaml not found at {config_path}")
+        raise FileNotFoundError(f"{config_path.name} not found at {config_path}")
 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -69,7 +94,7 @@ def load_app_config(interpolate: bool = True, strict: bool = True) -> dict:
 
 def load_raw_app_config() -> dict | None:
     """Load app.yaml without any processing. Returns None if file doesn't exist."""
-    config_path = Path.cwd() / "app.yaml"
+    config_path = get_config_path()
 
     if not config_path.exists():
         return None
@@ -137,7 +162,7 @@ def is_config_valid() -> tuple[bool, str | None]:
     try:
         config = load_raw_app_config()
         if config is None:
-            return False, "app.yaml not found"
+            return False, f"{get_config_path().name} not found"
 
         # Check database URL
         db_config = config.get("db", {})

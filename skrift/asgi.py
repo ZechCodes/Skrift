@@ -29,7 +29,7 @@ from litestar.static_files import create_static_files_router
 from litestar.template import TemplateConfig
 from litestar.types import ASGIApp, Receive, Scope, Send
 
-from skrift.config import get_settings, is_config_valid
+from skrift.config import get_config_path, get_settings, is_config_valid
 from skrift.db.base import Base
 from skrift.db.services.setting_service import (
     load_site_settings_cache,
@@ -45,7 +45,7 @@ from skrift.lib.exceptions import http_exception_handler, internal_server_error_
 
 def load_controllers() -> list:
     """Load controllers from app.yaml configuration."""
-    config_path = Path.cwd() / "app.yaml"
+    config_path = get_config_path()
 
     if not config_path.exists():
         return []
@@ -404,7 +404,7 @@ def create_setup_app() -> Litestar:
 
     # Also try to get the raw db URL from config (before env var resolution)
     if not db_url:
-        config_path = Path.cwd() / "app.yaml"
+        config_path = get_config_path()
         if config_path.exists():
             try:
                 with open(config_path, "r") as f:

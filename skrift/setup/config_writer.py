@@ -7,6 +7,8 @@ from typing import Any
 
 from ruamel.yaml import YAML
 
+from skrift.config import get_config_path as _get_config_path
+
 # Default app.yaml structure
 DEFAULT_CONFIG = {
     "controllers": [
@@ -29,8 +31,8 @@ DEFAULT_CONFIG = {
 
 
 def get_config_path() -> Path:
-    """Get the path to app.yaml."""
-    return Path.cwd() / "app.yaml"
+    """Get the path to the current environment's config file."""
+    return _get_config_path()
 
 
 def backup_config() -> Path | None:

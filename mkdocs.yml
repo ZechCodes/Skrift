@@ -57,6 +57,7 @@ nav:
     - Quick Start: getting-started/quickstart.md
   - Configuration:
     - configuration/index.md
+    - Environments: configuration/environments.md
     - Environment Variables: configuration/environment.md
     - OAuth Providers: configuration/auth-providers.md
   - Guides:
