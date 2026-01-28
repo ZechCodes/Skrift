@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+DUMMY_PROVIDER_KEY = "dummy"
+
 
 @dataclass
 class OAuthProviderInfo:
@@ -150,6 +152,17 @@ OAUTH_PROVIDERS = {
         """.strip(),
         icon="twitter",
     ),
+    DUMMY_PROVIDER_KEY: OAuthProviderInfo(
+        name="Dummy (Development Only)",
+        auth_url="",
+        token_url="",
+        userinfo_url="",
+        scopes=[],
+        console_url="",
+        fields=[],
+        instructions="Development-only provider. DO NOT use in production.",
+        icon="dummy",
+    ),
 }
 
 
@@ -159,5 +172,43 @@ def get_provider_info(provider: str) -> OAuthProviderInfo | None:
 
 
 def get_all_providers() -> dict[str, OAuthProviderInfo]:
-    """Get all available OAuth providers."""
-    return OAUTH_PROVIDERS.copy()
+    """Get all available OAuth providers (excluding dev-only providers)."""
+    return {k: v for k, v in OAUTH_PROVIDERS.items() if k != DUMMY_PROVIDER_KEY}
+
+
+def validate_no_dummy_auth_in_production() -> None:
+    """Exit process if dummy auth is configured in production."""
+    import os
+    import signal
+    import sys
+
+    from skrift.config import get_environment, load_raw_app_config
+
+    if get_environment() != "production":
+        return
+
+    config = load_raw_app_config()
+    if config is None:
+        return
+
+    providers = config.get("auth", {}).get("providers", {})
+    if DUMMY_PROVIDER_KEY in providers:
+        # Only print if we haven't already (use env var as cross-process flag)
+        if not os.environ.get("_SKRIFT_DUMMY_ERROR_PRINTED"):
+            os.environ["_SKRIFT_DUMMY_ERROR_PRINTED"] = "1"
+            sys.stderr.write(
+                "\n"
+                "======================================================================\n"
+                "SECURITY ERROR: Dummy auth provider is configured in production.\n"
+                "Remove 'dummy' from auth.providers in app.yaml.\n"
+                "Server will NOT start.\n"
+                "======================================================================\n\n"
+            )
+            sys.stderr.flush()
+
+        # Kill parent process (uvicorn reloader) to stop respawning
+        try:
+            os.kill(os.getppid(), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+        os._exit(1)
