@@ -123,11 +123,40 @@ class OAuthProviderConfig(BaseModel):
     tenant_id: str | None = None
 
 
+class DummyProviderConfig(BaseModel):
+    """Dummy provider configuration (no credentials required)."""
+
+    pass
+
+
+# Union type for provider configs - dummy has no required fields
+ProviderConfig = OAuthProviderConfig | DummyProviderConfig
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration."""
 
     redirect_base_url: str = "http://localhost:8000"
-    providers: dict[str, OAuthProviderConfig] = {}
+    providers: dict[str, ProviderConfig] = {}
+
+    @classmethod
+    def _parse_provider(cls, name: str, config: dict) -> ProviderConfig:
+        """Parse a provider config, using the appropriate model based on provider name."""
+        if name == "dummy":
+            return DummyProviderConfig(**config)
+        return OAuthProviderConfig(**config)
+
+    def __init__(self, **data):
+        # Convert raw provider dicts to appropriate config objects
+        if "providers" in data and isinstance(data["providers"], dict):
+            parsed_providers = {}
+            for name, config in data["providers"].items():
+                if isinstance(config, dict):
+                    parsed_providers[name] = self._parse_provider(name, config)
+                else:
+                    parsed_providers[name] = config
+            data["providers"] = parsed_providers
+        super().__init__(**data)
 
     def get_redirect_uri(self, provider: str) -> str:
         """Get the OAuth callback URL for a provider."""
