@@ -1,59 +1,72 @@
 # Guides
 
-Learn how to build and customize your Skrift site with these step-by-step guides.
+Step-by-step guides for building and customizing your Skrift site.
 
-## By Skill Level
+## Building Your Site
 
 <div class="grid cards" markdown>
 
--   :material-school:{ .lg .middle } **Beginner**
+-   :material-file-document:{ .lg .middle } **Creating Pages**
 
     ---
 
-    New to Skrift? Start here.
+    Add content through the admin interface. Create pages, set slugs, and publish.
 
-    - [Creating Pages](creating-pages.md) - Add content to your site
+    [:octicons-arrow-right-24: Creating Pages](creating-pages.md)
 
--   :material-account-hard-hat:{ .lg .middle } **Intermediate**
-
-    ---
-
-    Customize your site's appearance.
-
-    - [Custom Templates](custom-templates.md) - Create page-specific designs
-
--   :material-code-braces:{ .lg .middle } **Advanced**
+-   :material-palette:{ .lg .middle } **Custom Templates**
 
     ---
 
-    Extend Skrift with code.
+    Customize how pages look with WordPress-style template hierarchy.
 
-    - [Custom Controllers](custom-controllers.md) - Add new routes and functionality
+    [:octicons-arrow-right-24: Custom Templates](custom-templates.md)
+
+</div>
+
+## Extending Functionality
+
+<div class="grid cards" markdown>
+
+-   :material-code-braces:{ .lg .middle } **Custom Controllers**
+
+    ---
+
+    Add new routes, APIs, and functionality with Litestar controllers.
+
+    [:octicons-arrow-right-24: Custom Controllers](custom-controllers.md)
+
+-   :material-shield-lock:{ .lg .middle } **Protecting Routes**
+
+    ---
+
+    Secure your routes with authentication and authorization guards.
+
+    [:octicons-arrow-right-24: Protecting Routes](protecting-routes.md)
 
 </div>
 
 ## Guide Overview
 
-| Guide | Level | What You'll Learn |
-|-------|-------|-------------------|
-| [Creating Pages](creating-pages.md) | :material-star: Beginner | Add and manage content |
-| [Custom Templates](custom-templates.md) | :material-star::material-star: Intermediate | Template hierarchy and customization |
-| [Custom Controllers](custom-controllers.md) | :material-star::material-star::material-star: Advanced | Build custom routes and APIs |
+| Guide | Focus | Prerequisites |
+|-------|-------|---------------|
+| [Creating Pages](creating-pages.md) | Content management | None |
+| [Custom Templates](custom-templates.md) | Appearance | HTML basics |
+| [Custom Controllers](custom-controllers.md) | New routes | Python, async |
+| [Protecting Routes](protecting-routes.md) | Security | Python basics |
 
-## Prerequisites by Level
+## What You Can Build
 
-### Beginner
+After completing these guides, you'll be able to:
 
-- Skrift installed and running
-- Basic understanding of web browsers
+- Create and manage content pages
+- Customize the look of specific pages with templates
+- Add API endpoints and custom routes
+- Protect routes with role-based access control
+- Build features that integrate with Skrift's database and auth
 
-### Intermediate
+## Related Sections
 
-- Familiarity with HTML
-- Basic Jinja2 template knowledge
-
-### Advanced
-
-- Python programming experience
-- Understanding of async/await
-- Familiarity with web frameworks
+- [Core Concepts](../core-concepts/index.md) - How Skrift works
+- [Admin](../admin/index.md) - Managing users and site settings
+- [Reference](../reference/index.md) - Technical details

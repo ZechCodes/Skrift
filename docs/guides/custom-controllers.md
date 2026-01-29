@@ -118,18 +118,66 @@ class ContactController(Controller):
         return {"success": True}
 ```
 
-### Authentication Check
+### Protecting Routes with Guards
 
-Access the current user from the session:
+Use Skrift's auth guards to protect routes declaratively:
 
 ```python
-from skrift.db.models import User
+from skrift.auth.guards import auth_guard, Permission, Role
 
 class DashboardController(Controller):
     path = "/dashboard"
 
-    @get("/")
+    @get("/", guards=[auth_guard])
     async def index(
+        self,
+        request: Request,
+        db_session: AsyncSession
+    ) -> TemplateResponse:
+        # auth_guard ensures user_id exists
+        user_id = request.session.get("user_id")
+        user = await get_user(db_session, user_id)
+        return TemplateResponse(
+            "dashboard/index.html",
+            context={"user": user}
+        )
+
+    @get("/admin", guards=[auth_guard, Permission("administrator")])
+    async def admin_panel(self, request: Request) -> TemplateResponse:
+        # Only users with administrator permission can access
+        return TemplateResponse("dashboard/admin.html")
+
+    @get("/edit", guards=[auth_guard, Role("editor") | Role("admin")])
+    async def edit_content(self, request: Request) -> TemplateResponse:
+        # Editors or admins can access
+        return TemplateResponse("dashboard/edit.html")
+```
+
+Apply guards to all routes in a controller:
+
+```python
+class AdminController(Controller):
+    path = "/admin"
+    guards = [auth_guard, Permission("administrator")]
+
+    @get("/")
+    async def index(self) -> dict:
+        # All routes require administrator permission
+        return {"message": "Admin dashboard"}
+```
+
+See [Protecting Routes](protecting-routes.md) for the complete guide.
+
+### Manual Authentication Check
+
+For more control, check authentication manually:
+
+```python
+class PublicController(Controller):
+    path = "/public"
+
+    @get("/profile")
+    async def profile(
         self,
         request: Request,
         db_session: AsyncSession
@@ -142,7 +190,7 @@ class DashboardController(Controller):
 
         user = await get_user(db_session, user_id)
         return TemplateResponse(
-            "dashboard/index.html",
+            "profile.html",
             context={"user": user}
         )
 ```
@@ -378,6 +426,7 @@ async def list_pages(self) -> list[dict]:
 
 ## Next Steps
 
+- [Protecting Routes](protecting-routes.md) - Complete auth guard guide
 - [Litestar Documentation](https://litestar.dev/) - Full framework reference
-- [Configuration](../configuration/index.md) - Controller registration
+- [Configuration](../core-concepts/configuration.md) - Controller registration
 - [Deployment](../deployment/production.md) - Production setup
