@@ -35,7 +35,6 @@ from skrift.db.services.setting_service import (
 )
 
 
-
 class SetupStep(Enum):
     """Wizard steps."""
 
