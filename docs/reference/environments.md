@@ -124,5 +124,5 @@ config_path = get_config_path()  # e.g., Path("app.dev.yaml")
 
 ## See Also
 
-- [Environment Variables](environment.md) - Reference for environment variables
+- [Environment Variables](environment-variables.md) - Reference for environment variables
 - [OAuth Providers](auth-providers.md) - OAuth configuration details

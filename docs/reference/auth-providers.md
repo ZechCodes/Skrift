@@ -157,6 +157,38 @@ auth:
 4. Skrift exchanges the code for tokens and fetches user info
 5. User record is created/updated and session is established
 
+## Account Linking
+
+Skrift automatically links OAuth accounts that share the same email address. This means a user can log in with multiple providers (e.g., GitHub and Discord) and access the same account, as long as both providers return the same email.
+
+### How It Works
+
+When a user authenticates, Skrift follows this logic:
+
+1. **Existing OAuth account?** If the user has logged in with this exact provider before (matched by provider + provider account ID), log them in.
+
+2. **Email matches existing user?** If no OAuth account exists for this provider but a user with the same email already exists, link the new OAuth account to that existing user.
+
+3. **New user?** If neither condition is met, create a new user and OAuth account.
+
+### Example
+
+1. Alice signs up using GitHub with `alice@example.com`
+2. Later, Alice clicks "Login with Discord" using the same email
+3. Skrift sees no Discord OAuth account exists, but finds a user with `alice@example.com`
+4. The Discord OAuth account is linked to Alice's existing user record
+5. Alice can now log in with either GitHub or Discord
+
+### Requirements
+
+- The email address must be **verified** by the OAuth provider (Skrift requests the `email` scope)
+- The email must match **exactly** (case-insensitive comparison)
+- Each OAuth provider account can only be linked to one user
+
+### Viewing Linked Accounts
+
+Users can see which providers are linked to their account in their profile settings. Each linked provider shows the email address associated with that OAuth account.
+
 ## Routes
 
 Each provider gets these routes automatically:

@@ -81,7 +81,7 @@ Controls which configuration file Skrift loads.
 | `dev` | `app.dev.yaml` |
 | `staging` | `app.staging.yaml` |
 
-See [Environment-Specific Configuration](environments.md) for details.
+See [Configuration](../core-concepts/configuration.md) for details.
 
 ## Database URL Format
 

@@ -1,12 +1,13 @@
 """Setup wizard controller for first-time Skrift configuration."""
 
+import asyncio
 import base64
 import hashlib
+import json
 import secrets
-import subprocess
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from urllib.parse import urlencode
 
 import httpx
@@ -16,9 +17,12 @@ from litestar import Controller, Request, get, post
 from litestar.exceptions import HTTPException
 from litestar.params import Parameter
 from litestar.response import Redirect, Template as TemplateResponse
-from sqlalchemy import func, select
+from litestar.response.sse import ServerSentEvent
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.orm import selectinload
 
+from skrift.db.models.oauth_account import OAuthAccount
 from skrift.db.models.role import Role, user_roles
 from skrift.db.models.user import User
 from skrift.db.services import setting_service
@@ -32,7 +36,15 @@ from skrift.setup.config_writer import (
     update_database_config,
 )
 from skrift.setup.providers import get_all_providers, get_provider_info
-from skrift.setup.state import can_connect_to_database, app_yaml_exists, get_database_url_from_yaml
+from skrift.setup.state import (
+    can_connect_to_database,
+    get_database_url_from_yaml,
+    get_first_incomplete_step,
+    is_auth_configured,
+    is_site_configured,
+    run_migrations_if_needed,
+    reset_migrations_flag,
+)
 
 
 @asynccontextmanager
@@ -75,26 +87,31 @@ class SetupController(Controller):
 
     @get("/")
     async def index(self, request: Request) -> Redirect:
-        """Redirect to appropriate setup step."""
-        # Check wizard progress from session
-        wizard_step = request.session.get("setup_wizard_step", "database")
+        """Redirect to the first incomplete setup step.
 
-        # If we don't have app.yaml or db isn't configured, start at database
-        if not app_yaml_exists():
-            return Redirect(path="/setup/database")
-
+        Uses smart detection to skip already-configured steps, allowing users
+        to resume setup without re-entering existing configuration.
+        """
+        # Check if database is configured and connectable
         can_connect, _ = await can_connect_to_database()
-        if not can_connect:
-            return Redirect(path="/setup/database")
+        if can_connect:
+            # Database is configured - go through configuring page to run migrations
+            return Redirect(path="/setup/configuring")
 
-        # Otherwise go to the saved step
-        return Redirect(path=f"/setup/{wizard_step}")
+        # Database not configured - go to database step
+        request.session["setup_wizard_step"] = "database"
+        return Redirect(path="/setup/database")
 
     @get("/database")
-    async def database_step(self, request: Request) -> TemplateResponse:
+    async def database_step(self, request: Request) -> TemplateResponse | Redirect:
         """Step 1: Database configuration."""
         flash = request.session.pop("flash", None)
         error = request.session.pop("setup_error", None)
+
+        # If database is already configured and no errors, go to configuring page
+        can_connect, _ = await can_connect_to_database()
+        if can_connect and not error:
+            return Redirect(path="/setup/configuring")
 
         # Load current config if exists
         config = load_config()
@@ -167,41 +184,9 @@ class SetupController(Controller):
                 request.session["setup_error"] = f"Connection failed: {error}"
                 return Redirect(path="/setup/database")
 
-            # Run migrations
-            try:
-                result = subprocess.run(
-                    ["skrift-db", "upgrade", "head"],
-                    capture_output=True,
-                    text=True,
-                    cwd=Path.cwd(),
-                    timeout=60,
-                )
-                if result.returncode != 0:
-                    request.session["setup_error"] = f"Migration failed: {result.stderr}"
-                    return Redirect(path="/setup/database")
-            except subprocess.TimeoutExpired:
-                request.session["setup_error"] = "Migration timed out"
-                return Redirect(path="/setup/database")
-            except FileNotFoundError:
-                # skrift-db might not be installed yet, try alembic directly
-                try:
-                    result = subprocess.run(
-                        ["alembic", "upgrade", "head"],
-                        capture_output=True,
-                        text=True,
-                        cwd=Path.cwd(),
-                        timeout=60,
-                    )
-                    if result.returncode != 0:
-                        request.session["setup_error"] = f"Migration failed: {result.stderr}"
-                        return Redirect(path="/setup/database")
-                except Exception as e:
-                    request.session["setup_error"] = f"Could not run migrations: {e}"
-                    return Redirect(path="/setup/database")
-
-            request.session["setup_wizard_step"] = "auth"
-            request.session["flash"] = "Database configured successfully!"
-            return Redirect(path="/setup/auth")
+            # Connection successful - redirect to configuring page to run migrations
+            request.session["setup_wizard_step"] = "configuring"
+            return Redirect(path="/setup/configuring")
 
         except Exception as e:
             request.session["setup_error"] = str(e)
@@ -213,11 +198,115 @@ class SetupController(Controller):
         request.session["setup_wizard_step"] = "auth"
         return Redirect(path="/setup/auth")
 
+    @get("/configuring")
+    async def configuring_step(self, request: Request) -> TemplateResponse | Redirect:
+        """Database configuration in progress page.
+
+        Shows a loading spinner while migrations run via SSE.
+        """
+        flash = request.session.pop("flash", None)
+        error = request.session.pop("setup_error", None)
+
+        # Verify we can connect to the database first
+        can_connect, connection_error = await can_connect_to_database()
+        if not can_connect:
+            request.session["setup_error"] = f"Cannot connect to database: {connection_error}"
+            return Redirect(path="/setup/database")
+
+        # Reset migrations flag so they run fresh via SSE
+        reset_migrations_flag()
+
+        return TemplateResponse(
+            "setup/configuring.html",
+            context={
+                "flash": flash,
+                "error": error,
+                "step": 1,
+                "total_steps": 4,
+            },
+        )
+
+    @get("/configuring/status")
+    async def configuring_status(self, request: Request) -> ServerSentEvent:
+        """SSE endpoint for database configuration status.
+
+        Streams migration progress and completion status.
+        """
+        async def generate_status() -> AsyncGenerator[str, None]:
+            # Send initial status
+            yield json.dumps({
+                "status": "running",
+                "message": "Testing database connection...",
+                "detail": "",
+            })
+
+            await asyncio.sleep(0.5)
+
+            # Test connection
+            can_connect, connection_error = await can_connect_to_database()
+            if not can_connect:
+                yield json.dumps({
+                    "status": "error",
+                    "message": f"Database connection failed: {connection_error}",
+                })
+                return
+
+            yield json.dumps({
+                "status": "running",
+                "message": "Running database migrations...",
+                "detail": "This may take a moment",
+            })
+
+            await asyncio.sleep(0.3)
+
+            # Run migrations
+            success, error = run_migrations_if_needed()
+
+            if not success:
+                yield json.dumps({
+                    "status": "error",
+                    "message": f"Migration failed: {error}",
+                })
+                return
+
+            yield json.dumps({
+                "status": "running",
+                "message": "Verifying database schema...",
+                "detail": "",
+            })
+
+            await asyncio.sleep(0.3)
+
+            # Determine next step
+            if is_auth_configured():
+                if await is_site_configured():
+                    next_step = "admin"
+                else:
+                    next_step = "site"
+            else:
+                next_step = "auth"
+
+            # All done - include next step
+            yield json.dumps({
+                "status": "complete",
+                "message": "Database configured successfully!",
+                "next_step": next_step,
+            })
+
+        return ServerSentEvent(generate_status())
+
     @get("/auth")
-    async def auth_step(self, request: Request) -> TemplateResponse:
+    async def auth_step(self, request: Request) -> TemplateResponse | Redirect:
         """Step 2: Authentication providers."""
         flash = request.session.pop("flash", None)
         error = request.session.pop("setup_error", None)
+
+        # If auth is already configured and no errors, skip to next step
+        if is_auth_configured() and not error:
+            next_step = await get_first_incomplete_step()
+            if next_step.value != "auth":
+                request.session["setup_wizard_step"] = next_step.value
+                return Redirect(path=f"/setup/{next_step.value}")
 
         # Get current redirect URL from request
         scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
@@ -291,19 +380,28 @@ class SetupController(Controller):
                 use_env_vars=use_env_vars,
             )
 
-            request.session["setup_wizard_step"] = "site"
+            # Determine next step using smart detection
+            next_step = await get_first_incomplete_step()
+            request.session["setup_wizard_step"] = next_step.value
             request.session["flash"] = "Authentication configured successfully!"
-            return Redirect(path="/setup/site")
+            return Redirect(path=f"/setup/{next_step.value}")
 
         except Exception as e:
             request.session["setup_error"] = str(e)
             return Redirect(path="/setup/auth")
 
     @get("/site")
-    async def site_step(self, request: Request) -> TemplateResponse:
+    async def site_step(self, request: Request) -> TemplateResponse | Redirect:
         """Step 3: Site settings."""
         flash = request.session.pop("flash", None)
         error = request.session.pop("setup_error", None)
+
+        # If site is already configured and no errors, skip to next step
+        if await is_site_configured() and not error:
+            next_step = await get_first_incomplete_step()
+            if next_step.value != "site":
+                request.session["setup_wizard_step"] = next_step.value
+                return Redirect(path=f"/setup/{next_step.value}")
 
         return TemplateResponse(
             "setup/site.html",
@@ -356,9 +454,11 @@ class SetupController(Controller):
                 # Reload cache
                 await setting_service.load_site_settings_cache(db_session)
 
-            request.session["setup_wizard_step"] = "admin"
+            # Determine next step using smart detection - should be admin at this point
+            next_step = await get_first_incomplete_step()
+            request.session["setup_wizard_step"] = next_step.value
             request.session["flash"] = "Site settings saved!"
-            return Redirect(path="/setup/admin")
+            return Redirect(path=f"/setup/{next_step.value}")
 
         except Exception as e:
             request.session["setup_error"] = str(e)
@@ -621,31 +721,68 @@ class SetupAuthController(Controller):
         if not oauth_id:
             raise HTTPException(status_code=400, detail="Could not determine user ID")
 
+        email = user_data["email"]
+
         # Create user and mark setup complete
         async with get_setup_db_session() as db_session:
-            # Check if user exists
+            # Step 1: Check if OAuth account already exists
             result = await db_session.execute(
-                select(User).where(User.oauth_id == oauth_id, User.oauth_provider == provider)
+                select(OAuthAccount)
+                .options(selectinload(OAuthAccount.user))
+                .where(OAuthAccount.provider == provider, OAuthAccount.provider_account_id == oauth_id)
             )
-            user = result.scalar_one_or_none()
+            oauth_account = result.scalar_one_or_none()
 
-            if user:
+            if oauth_account:
+                # Existing OAuth account - update user profile
+                user = oauth_account.user
                 user.name = user_data["name"]
                 if user_data["picture_url"]:
                     user.picture_url = user_data["picture_url"]
                 user.last_login_at = datetime.now(UTC)
+                if email:
+                    oauth_account.provider_email = email
             else:
-                # Create new user
-                user = User(
-                    oauth_provider=provider,
-                    oauth_id=oauth_id,
-                    email=user_data["email"],
-                    name=user_data["name"],
-                    picture_url=user_data["picture_url"],
-                    last_login_at=datetime.now(UTC),
-                )
-                db_session.add(user)
-                await db_session.flush()
+                # Step 2: Check if a user with this email already exists
+                user = None
+                if email:
+                    result = await db_session.execute(
+                        select(User).where(User.email == email)
+                    )
+                    user = result.scalar_one_or_none()
+
+                if user:
+                    # Link new OAuth account to existing user
+                    oauth_account = OAuthAccount(
+                        provider=provider,
+                        provider_account_id=oauth_id,
+                        provider_email=email,
+                        user_id=user.id,
+                    )
+                    db_session.add(oauth_account)
+                    # Update user profile
+                    user.name = user_data["name"]
+                    if user_data["picture_url"]:
+                        user.picture_url = user_data["picture_url"]
+                    user.last_login_at = datetime.now(UTC)
+                else:
+                    # Step 3: Create new user + OAuth account
+                    user = User(
+                        email=email,
+                        name=user_data["name"],
+                        picture_url=user_data["picture_url"],
+                        last_login_at=datetime.now(UTC),
+                    )
+                    db_session.add(user)
+                    await db_session.flush()
+
+                    oauth_account = OAuthAccount(
+                        provider=provider,
+                        provider_account_id=oauth_id,
+                        provider_email=email,
+                        user_id=user.id,
+                    )
+                    db_session.add(oauth_account)
 
             # Ensure roles are synced (they may not exist if DB was created after server start)
             from skrift.auth import sync_roles_to_database

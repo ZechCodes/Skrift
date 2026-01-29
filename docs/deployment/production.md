@@ -2,6 +2,9 @@
 
 Complete guide for deploying Skrift to a production environment.
 
+!!! warning "Before You Deploy"
+    Review the [Security Checklist](security-checklist.md) before going live. It covers critical items like secret keys, OAuth configuration, and HTTPS setup.
+
 ## Prerequisites
 
 - Linux server (Ubuntu 22.04+ recommended)
@@ -343,5 +346,6 @@ sudo systemctl status postgresql
 
 ## See Also
 
-- [Environment Variables](../configuration/environment.md) - Configuration reference
-- [OAuth Providers](../configuration/auth-providers.md) - OAuth setup
+- [Security Checklist](security-checklist.md) - Pre-deployment verification
+- [Environment Variables](../reference/environment-variables.md) - Configuration reference
+- [OAuth Providers](../reference/auth-providers.md) - OAuth setup

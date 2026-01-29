@@ -12,6 +12,7 @@ from skrift.config import get_settings
 from skrift.db.base import Base
 
 # Import all models to ensure they're registered with Base.metadata
+from skrift.db.models.oauth_account import OAuthAccount  # noqa: F401
 from skrift.db.models.user import User  # noqa: F401
 from skrift.db.models.page import Page  # noqa: F401
 from skrift.db.models.role import Role, RolePermission  # noqa: F401
@@ -31,7 +32,7 @@ def get_url() -> str:
     """Get database URL from settings or alembic.ini."""
     try:
         settings = get_settings()
-        return settings.database_url
+        return settings.db.url
     except Exception:
         # Fall back to alembic.ini config if settings can't be loaded
         return config.get_main_option("sqlalchemy.url", "")
