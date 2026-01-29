@@ -8,11 +8,11 @@ Get your Skrift site running in minutes with secure defaults.
 # Install Skrift
 uv add skrift
 
-# Set a secret key (required)
-export SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+# Generate a secret key and save to .env
+skrift secret --write .env
 
-# Start the server
-python -m skrift
+# Start the development server
+skrift serve --reload
 ```
 
 Open [http://localhost:8080](http://localhost:8080) to begin the setup wizard.
@@ -86,7 +86,7 @@ For local development, you can enable additional features:
 ```bash
 export SKRIFT_ENV=dev
 export DEBUG=true
-python -m skrift
+skrift serve --reload
 ```
 
 This loads `app.dev.yaml` (if it exists) and enables:

@@ -2,6 +2,20 @@
 
 Technical reference documentation for Skrift.
 
+## CLI
+
+<div class="grid cards" markdown>
+
+-   :material-console:{ .lg .middle } **CLI Reference**
+
+    ---
+
+    Command-line interface for running the server, managing secrets, and database migrations.
+
+    [:octicons-arrow-right-24: CLI Reference](cli.md)
+
+</div>
+
 ## Configuration
 
 <div class="grid cards" markdown>
@@ -56,6 +70,7 @@ Technical reference documentation for Skrift.
 
 | Topic | Description |
 |-------|-------------|
+| [CLI Reference](cli.md) | Command-line interface |
 | [Environment Variables](environment-variables.md) | Configuration and secrets |
 | [OAuth Providers](auth-providers.md) | Authentication setup |
 | [Security Features](security-features.md) | Security implementation details |

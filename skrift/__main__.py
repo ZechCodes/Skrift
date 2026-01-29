@@ -1,16 +1,11 @@
 """Entry point for the skrift package."""
 
-import uvicorn
+from skrift.cli import cli
 
 
 def main():
-    """Run the Skrift development server."""
-    uvicorn.run(
-        "skrift.asgi:app",
-        host="0.0.0.0",
-        port=8080,
-        reload=True,
-    )
+    """Run the Skrift CLI."""
+    cli()
 
 
 if __name__ == "__main__":
