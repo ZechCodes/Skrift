@@ -10,6 +10,7 @@ The application uses a dispatcher architecture:
 import asyncio
 import hashlib
 import importlib
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -309,9 +310,11 @@ def create_app() -> Litestar:
     )
 
     # Template configuration
+    # Search working directory first for user overrides, then package directory
+    working_dir_templates = Path(os.getcwd()) / "templates"
     template_dir = Path(__file__).parent / "templates"
     template_config = TemplateConfig(
-        directory=template_dir,
+        directory=[working_dir_templates, template_dir],
         engine=JinjaTemplateEngine,
         engine_callback=lambda engine: engine.engine.globals.update({
             "now": datetime.now,
@@ -322,10 +325,11 @@ def create_app() -> Litestar:
         }),
     )
 
-    # Static files
+    # Static files - working directory first for user overrides, then package directory
+    working_dir_static = Path(os.getcwd()) / "static"
     static_files_router = create_static_files_router(
         path="/static",
-        directories=[Path(__file__).parent / "static"],
+        directories=[working_dir_static, Path(__file__).parent / "static"],
     )
 
     from skrift.auth import sync_roles_to_database
@@ -381,9 +385,11 @@ def create_setup_app() -> Litestar:
     )
 
     # Template configuration
+    # Search working directory first for user overrides, then package directory
+    working_dir_templates = Path(os.getcwd()) / "templates"
     template_dir = Path(__file__).parent / "templates"
     template_config = TemplateConfig(
-        directory=template_dir,
+        directory=[working_dir_templates, template_dir],
         engine=JinjaTemplateEngine,
         engine_callback=lambda engine: engine.engine.globals.update({
             "now": datetime.now,
@@ -394,10 +400,11 @@ def create_setup_app() -> Litestar:
         }),
     )
 
-    # Static files
+    # Static files - working directory first for user overrides, then package directory
+    working_dir_static = Path(os.getcwd()) / "static"
     static_files_router = create_static_files_router(
         path="/static",
-        directories=[Path(__file__).parent / "static"],
+        directories=[working_dir_static, Path(__file__).parent / "static"],
     )
 
     # Import controllers
