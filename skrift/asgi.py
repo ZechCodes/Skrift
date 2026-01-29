@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import importlib
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -57,16 +58,17 @@ def load_controllers() -> list:
     if not config:
         return []
 
+    # Add working directory to sys.path for local controller imports
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+
     controllers = []
     for controller_spec in config.get("controllers", []):
-        try:
-            module_path, class_name = controller_spec.split(":")
-            module = importlib.import_module(module_path)
-            controller_class = getattr(module, class_name)
-            controllers.append(controller_class)
-        except Exception:
-            # Skip controllers that can't be loaded during setup
-            pass
+        module_path, class_name = controller_spec.split(":")
+        module = importlib.import_module(module_path)
+        controller_class = getattr(module, class_name)
+        controllers.append(controller_class)
 
     return controllers
 
