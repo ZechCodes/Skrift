@@ -1,0 +1,158 @@
+{% extends "setup/base.html" %}
+
+{% block title %}Configuring Database - Skrift{% endblock %}
+
+{% block head %}
+<style>
+    .configuring-content {
+        text-align: center;
+        padding: 2rem 0;
+    }
+
+    .spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid var(--color-border);
+        border-top-color: var(--color-primary);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 1.5rem;
+    }
+
+    .spinner.complete {
+        border-color: var(--color-success);
+        border-top-color: var(--color-success);
+        animation: none;
+    }
+
+    .spinner.error {
+        border-color: var(--color-error);
+        border-top-color: var(--color-error);
+        animation: none;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    .status-icon {
+        width: 48px;
+        height: 48px;
+        margin: 0 auto 1.5rem;
+        font-size: 48px;
+        line-height: 1;
+        display: none;
+    }
+
+    .status-icon.complete {
+        display: block;
+        color: var(--color-success);
+    }
+
+    .status-icon.error {
+        display: block;
+        color: var(--color-error);
+    }
+
+    .status-message {
+        font-size: 1.125rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .status-detail {
+        color: var(--color-text-muted);
+        font-size: 0.875rem;
+        min-height: 1.25rem;
+    }
+
+    .form-actions button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h2>Configuring Database</h2>
+<p class="description">Setting up your database and running migrations.</p>
+
+<div class="configuring-content">
+    <div class="spinner" id="spinner"></div>
+    <div class="status-icon" id="status-icon"></div>
+    <div class="status-message" id="status-message">Initializing...</div>
+    <div class="status-detail" id="status-detail"></div>
+</div>
+
+<div class="form-actions">
+    <a href="/setup/database" role="button" class="btn-secondary">Back</a>
+    <button type="button" id="next-button" disabled>Continue</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const spinner = document.getElementById('spinner');
+        const statusIcon = document.getElementById('status-icon');
+        const statusMessage = document.getElementById('status-message');
+        const statusDetail = document.getElementById('status-detail');
+        const nextButton = document.getElementById('next-button');
+
+        let nextStep = 'auth'; // Default fallback
+
+        function setComplete(step) {
+            spinner.style.display = 'none';
+            statusIcon.textContent = '\u2713';
+            statusIcon.classList.add('complete');
+            statusMessage.textContent = 'Database configured successfully!';
+            statusDetail.textContent = '';
+            nextButton.disabled = false;
+            if (step) {
+                nextStep = step;
+            }
+            nextButton.onclick = function() {
+                window.location.href = '/setup/' + nextStep;
+            };
+        }
+
+        function setError(message) {
+            spinner.style.display = 'none';
+            statusIcon.textContent = '\u2717';
+            statusIcon.classList.add('error');
+            statusMessage.textContent = 'Configuration failed';
+            statusDetail.textContent = message || 'An error occurred during setup.';
+        }
+
+        function setStatus(message, detail) {
+            statusMessage.textContent = message;
+            statusDetail.textContent = detail || '';
+        }
+
+        // Connect to SSE endpoint
+        const eventSource = new EventSource('/setup/configuring/status');
+
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+
+            if (data.status === 'running') {
+                setStatus(data.message, data.detail);
+            } else if (data.status === 'complete') {
+                setComplete(data.next_step);
+                eventSource.close();
+            } else if (data.status === 'error') {
+                setError(data.message);
+                eventSource.close();
+            }
+        };
+
+        eventSource.onerror = function() {
+            // Check if we were successful before the connection closed
+            if (!nextButton.disabled) {
+                return; // Already complete, ignore the error
+            }
+            setError('Connection lost. Please refresh the page.');
+            eventSource.close();
+        };
+    });
+</script>
+{% endblock %}
