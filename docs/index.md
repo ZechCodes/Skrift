@@ -8,9 +8,9 @@ hide:
 <div class="hero" markdown>
 <div class="hero-content" markdown>
 
-## A lightweight async Python CMS for crafting modern websites
+## From zero to secure, running site in 5 minutes
 
-Built on Litestar with Google OAuth, WordPress-like templates, and SQLAlchemy async support.
+No boilerplate. No security gotchas. Just run `python -m skrift` and start building.
 
 [Get Started](getting-started/quickstart.md){ .md-button .md-button--primary }
 [View on GitHub](https://github.com/ZechCodes/Skrift){ .md-button }
@@ -20,41 +20,41 @@ Built on Litestar with Google OAuth, WordPress-like templates, and SQLAlchemy as
 
 <div class="grid cards" markdown>
 
--   :material-lightning-bolt:{ .lg .middle } **Fast & Async**
+-   :material-lightning-bolt:{ .lg .middle } **5-Minute Setup**
 
     ---
 
-    Built on Litestar and SQLAlchemy async for high-performance, non-blocking I/O.
+    Run `python -m skrift` and a setup wizard walks you through OAuth, database, and first admin user. No manual configuration required.
+
+-   :material-cog-refresh:{ .lg .middle } **No-Restart Configuration**
+
+    ---
+
+    Edit `app.yaml` to add controllers, change routes, or update settings. Changes apply on next request—no server restart needed.
 
 -   :material-palette:{ .lg .middle } **WordPress-like Templates**
 
     ---
 
-    Hierarchical template resolution makes creating page-specific designs intuitive.
+    Hierarchical template resolution makes page-specific designs intuitive. Create `page-about.html` to override just the about page.
 
--   :material-shield-account:{ .lg .middle } **Secure Authentication**
-
-    ---
-
-    Google OAuth integration with encrypted session cookies out of the box.
-
--   :material-database:{ .lg .middle } **Flexible Database**
+-   :material-shield-lock:{ .lg .middle } **OAuth with Automatic CSRF**
 
     ---
 
-    SQLite for development, PostgreSQL for production. Alembic migrations included.
+    OAuth state tokens are generated and verified automatically. No manual CSRF token handling required in your code.
 
--   :material-cog:{ .lg .middle } **Dynamic Controllers**
-
-    ---
-
-    Load controllers from YAML configuration. Extend without modifying core code.
-
--   :material-theme-light-dark:{ .lg .middle } **Dark Mode Ready**
+-   :material-lock:{ .lg .middle } **Encrypted Sessions**
 
     ---
 
-    Built-in CSS framework with automatic light/dark mode via system preference.
+    Sessions use httponly, secure, and samesite cookies out of the box. Session data is encrypted, not just signed.
+
+-   :material-shield-alert:{ .lg .middle } **Dev/Prod Isolation**
+
+    ---
+
+    Development-only features like dummy auth are blocked from production with a hard process kill—not a warning, an actual prevention.
 
 </div>
 
@@ -65,7 +65,11 @@ uv add skrift
 python -m skrift
 ```
 
-Open [http://localhost:8080](http://localhost:8080) and the setup wizard will guide you through configuration.
+Open [http://localhost:8080](http://localhost:8080) and the setup wizard will guide you through:
+
+1. **OAuth provider** - Connect Google, GitHub, or another provider
+2. **Database** - SQLite for dev, PostgreSQL for production
+3. **Admin user** - First login becomes the administrator
 
 ## Requirements
 
@@ -76,20 +80,20 @@ Open [http://localhost:8080](http://localhost:8080) and the setup wizard will gu
 
 <div class="grid cards" markdown>
 
--   [**Installation**](getting-started/installation.md)
+-   [**Quick Start Guide**](getting-started/quickstart.md)
 
-    Multiple ways to install Skrift for your use case.
+    Walk through the setup wizard and create your first page.
 
--   [**Quick Start**](getting-started/quickstart.md)
+-   [**How Skrift Works**](core-concepts/index.md)
 
-    Get your first site running.
+    Understand the no-restart architecture and customization points.
 
--   [**Configuration**](configuration/index.md)
+-   [**Security Model**](core-concepts/security-model.md)
 
-    Configure authentication, database, and more.
+    Learn about the security features protecting your site.
 
 -   [**Guides**](guides/index.md)
 
-    Learn to create pages, templates, and controllers.
+    Create pages, custom templates, and controllers.
 
 </div>
