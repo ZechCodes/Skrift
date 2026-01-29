@@ -9,8 +9,8 @@ from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load .env file early so env vars are available for YAML interpolation
-# Use explicit path to handle subprocess spawning (uvicorn workers)
-_env_file = Path(__file__).parent.parent / ".env"
+# Load from current working directory (where app.yaml lives)
+_env_file = Path.cwd() / ".env"
 load_dotenv(_env_file)
 
 # Pattern to match $VAR_NAME environment variable references
