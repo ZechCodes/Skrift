@@ -55,22 +55,31 @@ nav:
     - getting-started/index.md
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
-  - Configuration:
-    - configuration/index.md
-    - Environments: configuration/environments.md
-    - Environment Variables: configuration/environment.md
-    - OAuth Providers: configuration/auth-providers.md
+  - Core Concepts:
+    - core-concepts/index.md
+    - Security Model: core-concepts/security-model.md
+    - Configuration: core-concepts/configuration.md
   - Guides:
     - guides/index.md
     - Creating Pages: guides/creating-pages.md
     - Custom Templates: guides/custom-templates.md
     - Custom Controllers: guides/custom-controllers.md
+    - Protecting Routes: guides/protecting-routes.md
   - Admin:
     - admin/index.md
+    - Managing Pages: admin/managing-pages.md
     - User Management: admin/user-management.md
+    - Custom Admin Pages: admin/custom-admin-pages.md
   - Reference:
     - reference/index.md
+    - Environment Variables: reference/environment-variables.md
+    - OAuth Providers: reference/auth-providers.md
+    - Security Features: reference/security-features.md
     - CSS Framework: reference/css-framework.md
   - Deployment:
     - deployment/index.md
     - Production: deployment/production.md
+    - Security Checklist: deployment/security-checklist.md
+  - Development:
+    - development/index.md
+    - Dummy Authentication: development/dummy-auth.md
