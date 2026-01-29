@@ -72,6 +72,7 @@ nav:
     - Custom Admin Pages: admin/custom-admin-pages.md
   - Reference:
     - reference/index.md
+    - CLI Reference: reference/cli.md
     - Environment Variables: reference/environment-variables.md
     - Environment-Specific Config: reference/environments.md
     - OAuth Providers: reference/auth-providers.md

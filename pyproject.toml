@@ -1,6 +1,6 @@
 [project]
 name = "skrift"
-version = "0.1.0a4"
+version = "0.1.0a5"
 description = "A lightweight async Python CMS for crafting modern websites"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -20,8 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-skrift = "skrift.__main__:main"
-skrift-db = "skrift.cli:db"
+skrift = "skrift.cli:cli"
 
 [tool.uv]
 package = true
