@@ -18,7 +18,9 @@ from litestar.params import Parameter
 from litestar.response import Redirect, Template as TemplateResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.orm import selectinload
 
+from skrift.db.models.oauth_account import OAuthAccount
 from skrift.db.models.role import Role, user_roles
 from skrift.db.models.user import User
 from skrift.db.services import setting_service
@@ -621,31 +623,68 @@ class SetupAuthController(Controller):
         if not oauth_id:
             raise HTTPException(status_code=400, detail="Could not determine user ID")
 
+        email = user_data["email"]
+
         # Create user and mark setup complete
         async with get_setup_db_session() as db_session:
-            # Check if user exists
+            # Step 1: Check if OAuth account already exists
             result = await db_session.execute(
-                select(User).where(User.oauth_id == oauth_id, User.oauth_provider == provider)
+                select(OAuthAccount)
+                .options(selectinload(OAuthAccount.user))
+                .where(OAuthAccount.provider == provider, OAuthAccount.provider_account_id == oauth_id)
             )
-            user = result.scalar_one_or_none()
+            oauth_account = result.scalar_one_or_none()
 
-            if user:
+            if oauth_account:
+                # Existing OAuth account - update user profile
+                user = oauth_account.user
                 user.name = user_data["name"]
                 if user_data["picture_url"]:
                     user.picture_url = user_data["picture_url"]
                 user.last_login_at = datetime.now(UTC)
+                if email:
+                    oauth_account.provider_email = email
             else:
-                # Create new user
-                user = User(
-                    oauth_provider=provider,
-                    oauth_id=oauth_id,
-                    email=user_data["email"],
-                    name=user_data["name"],
-                    picture_url=user_data["picture_url"],
-                    last_login_at=datetime.now(UTC),
-                )
-                db_session.add(user)
-                await db_session.flush()
+                # Step 2: Check if a user with this email already exists
+                user = None
+                if email:
+                    result = await db_session.execute(
+                        select(User).where(User.email == email)
+                    )
+                    user = result.scalar_one_or_none()
+
+                if user:
+                    # Link new OAuth account to existing user
+                    oauth_account = OAuthAccount(
+                        provider=provider,
+                        provider_account_id=oauth_id,
+                        provider_email=email,
+                        user_id=user.id,
+                    )
+                    db_session.add(oauth_account)
+                    # Update user profile
+                    user.name = user_data["name"]
+                    if user_data["picture_url"]:
+                        user.picture_url = user_data["picture_url"]
+                    user.last_login_at = datetime.now(UTC)
+                else:
+                    # Step 3: Create new user + OAuth account
+                    user = User(
+                        email=email,
+                        name=user_data["name"],
+                        picture_url=user_data["picture_url"],
+                        last_login_at=datetime.now(UTC),
+                    )
+                    db_session.add(user)
+                    await db_session.flush()
+
+                    oauth_account = OAuthAccount(
+                        provider=provider,
+                        provider_account_id=oauth_id,
+                        provider_email=email,
+                        user_id=user.id,
+                    )
+                    db_session.add(oauth_account)
 
             # Ensure roles are synced (they may not exist if DB was created after server start)
             from skrift.auth import sync_roles_to_database
