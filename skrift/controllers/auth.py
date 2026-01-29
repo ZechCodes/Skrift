@@ -337,6 +337,8 @@ class AuthController(Controller):
             # Update provider email if changed
             if email:
                 oauth_account.provider_email = email
+            # Update provider metadata
+            oauth_account.provider_metadata = user_info
         else:
             # Step 2: Check if a user with this email already exists
             user = None
@@ -352,6 +354,7 @@ class AuthController(Controller):
                     provider=provider,
                     provider_account_id=oauth_id,
                     provider_email=email,
+                    provider_metadata=user_info,
                     user_id=user.id,
                 )
                 db_session.add(oauth_account)
@@ -375,6 +378,7 @@ class AuthController(Controller):
                     provider=provider,
                     provider_account_id=oauth_id,
                     provider_email=email,
+                    provider_metadata=user_info,
                     user_id=user.id,
                 )
                 db_session.add(oauth_account)
@@ -444,6 +448,13 @@ class AuthController(Controller):
         # Generate deterministic oauth_id from email
         oauth_id = f"dummy_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
 
+        # Create synthetic metadata for dummy provider
+        dummy_metadata = {
+            "id": oauth_id,
+            "email": email,
+            "name": name,
+        }
+
         # Step 1: Check if OAuth account already exists
         result = await db_session.execute(
             select(OAuthAccount)
@@ -462,6 +473,7 @@ class AuthController(Controller):
             user.email = email
             user.last_login_at = datetime.now(UTC)
             oauth_account.provider_email = email
+            oauth_account.provider_metadata = dummy_metadata
         else:
             # Step 2: Check if a user with this email already exists
             result = await db_session.execute(
@@ -475,6 +487,7 @@ class AuthController(Controller):
                     provider=DUMMY_PROVIDER_KEY,
                     provider_account_id=oauth_id,
                     provider_email=email,
+                    provider_metadata=dummy_metadata,
                     user_id=user.id,
                 )
                 db_session.add(oauth_account)
@@ -495,6 +508,7 @@ class AuthController(Controller):
                     provider=DUMMY_PROVIDER_KEY,
                     provider_account_id=oauth_id,
                     provider_email=email,
+                    provider_metadata=dummy_metadata,
                     user_id=user.id,
                 )
                 db_session.add(oauth_account)

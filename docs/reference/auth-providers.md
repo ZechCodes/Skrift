@@ -189,6 +189,60 @@ When a user authenticates, Skrift follows this logic:
 
 Users can see which providers are linked to their account in their profile settings. Each linked provider shows the email address associated with that OAuth account.
 
+## Provider Metadata
+
+Skrift stores the full raw response from each OAuth provider in the `provider_metadata` field. This allows you to access provider-specific data like usernames, avatars, and other profile information.
+
+### Available Fields by Provider
+
+| Provider | Key Fields |
+|----------|-----------|
+| Discord | `id`, `username`, `global_name`, `discriminator`, `avatar`, `email`, `verified`, `locale` |
+| GitHub | `id`, `login`, `name`, `email`, `avatar_url`, `bio`, `company`, `location`, `public_repos` |
+| Google | `id`, `email`, `name`, `picture`, `verified_email`, `locale`, `hd` |
+| Twitter | `id`, `username`, `name` |
+| Microsoft | `id`, `displayName`, `mail`, `userPrincipalName` |
+| Facebook | `id`, `name`, `email`, `picture.data.url` |
+
+### Accessing Metadata
+
+Use the service functions in `skrift.db.services.oauth_service`:
+
+```python
+from skrift.db.services.oauth_service import (
+    get_provider_metadata,
+    get_provider_username,
+    get_provider_avatar_url,
+)
+
+# Get raw metadata dict
+metadata = await get_provider_metadata(db_session, user_id, "discord")
+# Returns: {"id": "123", "username": "alice", "avatar": "abc123", ...}
+
+# Get provider-specific username
+username = await get_provider_username(db_session, user_id, "github")
+# Returns: "alice" (from the 'login' field for GitHub)
+
+# Get avatar URL (handles provider-specific construction)
+avatar = await get_provider_avatar_url(db_session, user_id, "discord")
+# Returns: "https://cdn.discordapp.com/avatars/123/abc123.png"
+```
+
+### Helper Functions
+
+```python
+from skrift.db.services.oauth_service import extract_metadata_field
+
+# Safely extract nested fields
+metadata = {"picture": {"data": {"url": "https://..."}}}
+url = extract_metadata_field(metadata, "picture", "data", "url")
+# Returns: "https://..."
+
+# With default value
+value = extract_metadata_field(metadata, "missing", "field", default="N/A")
+# Returns: "N/A"
+```
+
 ## Routes
 
 Each provider gets these routes automatically:
