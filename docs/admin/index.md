@@ -25,6 +25,14 @@ The admin interface is available to authenticated users with the admin role.
 
 <div class="grid cards" markdown>
 
+-   :material-file-document-edit:{ .lg .middle } **Managing Pages**
+
+    ---
+
+    Create, edit, publish, and delete site pages.
+
+    [:octicons-arrow-right-24: Managing Pages](managing-pages.md)
+
 -   :material-account-group:{ .lg .middle } **User Management**
 
     ---
@@ -38,6 +46,14 @@ The admin interface is available to authenticated users with the admin role.
     ---
 
     Configure site name, tagline, and other settings.
+
+-   :material-puzzle:{ .lg .middle } **Custom Admin Pages**
+
+    ---
+
+    Extend the admin interface with your own controllers.
+
+    [:octicons-arrow-right-24: Custom Admin Pages](custom-admin-pages.md)
 
 </div>
 

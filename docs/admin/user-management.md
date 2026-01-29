@@ -1,6 +1,6 @@
 # User Management
 
-Manage user accounts and roles in your Skrift site.
+Manage user accounts and roles in your Skrift site. Roles and permissions are a key part of Skrift's security model, controlling who can access what.
 
 ## User Model
 
@@ -169,5 +169,7 @@ async def deactivate_inactive_users(db_session, days=180):
 
 ## See Also
 
-- [OAuth Providers](../configuration/auth-providers.md) - Authentication setup
+- [Security Model](../core-concepts/security-model.md) - How roles fit into security
+- [Protecting Routes](../guides/protecting-routes.md) - Use roles in your controllers
+- [OAuth Providers](../reference/auth-providers.md) - Authentication setup
 - [Custom Controllers](../guides/custom-controllers.md) - Build admin features
