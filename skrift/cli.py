@@ -19,23 +19,32 @@ def db() -> None:
     """
     from alembic.config import main as alembic_main
 
-    # Ensure we're running from the project root where alembic.ini is located
-    # If alembic.ini is not in cwd, check common locations
-    alembic_ini = Path.cwd() / "alembic.ini"
+    import os
 
+    # Always run from the project root (where app.yaml and .env are)
+    # This ensures database paths like ./app.db resolve correctly
+    project_root = Path.cwd()
+    if not (project_root / "app.yaml").exists():
+        # If not in project root, try parent directory
+        project_root = Path(__file__).parent.parent
+    os.chdir(project_root)
+
+    # Find alembic.ini - check project root first, then skrift package directory
+    alembic_ini = project_root / "alembic.ini"
     if not alembic_ini.exists():
-        # Try to find alembic.ini relative to this module
-        module_dir = Path(__file__).parent.parent
-        alembic_ini = module_dir / "alembic.ini"
+        skrift_dir = Path(__file__).parent
+        alembic_ini = skrift_dir / "alembic.ini"
 
-        if alembic_ini.exists():
-            # Change to the directory containing alembic.ini
-            import os
-            os.chdir(module_dir)
-        else:
+        if not alembic_ini.exists():
             print("Error: Could not find alembic.ini", file=sys.stderr)
             print("Make sure you're running from the project root directory.", file=sys.stderr)
             sys.exit(1)
+
+    # Build argv with config path at the beginning (before any subcommand)
+    # Original argv: ['skrift-db', 'upgrade', 'head']
+    # New argv: ['skrift-db', '-c', '/path/to/alembic.ini', 'upgrade', 'head']
+    new_argv = [sys.argv[0], "-c", str(alembic_ini)] + sys.argv[1:]
+    sys.argv = new_argv
 
     # Pass through all CLI arguments to Alembic
     sys.exit(alembic_main(sys.argv[1:]))
