@@ -66,4 +66,4 @@ python -m skrift
 ## Next Steps
 
 - [Quick Start](quickstart.md) - Get your first site running
-- [Environment Variables](../configuration/environment.md) - Configuration reference
+- [Configuration](../core-concepts/configuration.md) - App settings and environment variables
