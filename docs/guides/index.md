@@ -36,6 +36,14 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Custom Controllers](custom-controllers.md)
 
+-   :material-layers-triple:{ .lg .middle } **Custom Middleware**
+
+    ---
+
+    Add request/response processing with ASGI middleware.
+
+    [:octicons-arrow-right-24: Custom Middleware](custom-middleware.md)
+
 -   :material-shield-lock:{ .lg .middle } **Protecting Routes**
 
     ---
@@ -53,6 +61,7 @@ Step-by-step guides for building and customizing your Skrift site.
 | [Creating Pages](creating-pages.md) | Content management | None |
 | [Custom Templates](custom-templates.md) | Appearance | HTML basics |
 | [Custom Controllers](custom-controllers.md) | New routes | Python, async |
+| [Custom Middleware](custom-middleware.md) | Request processing | Python, ASGI |
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |
 
 ## What You Can Build
@@ -62,6 +71,7 @@ After completing these guides, you'll be able to:
 - Create and manage content pages
 - Customize the look of specific pages with templates
 - Add API endpoints and custom routes
+- Add middleware for logging, rate limiting, CORS, and more
 - Protect routes with role-based access control
 - Build features that integrate with Skrift's database and auth
 

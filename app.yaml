@@ -2,6 +2,12 @@ controllers:
   - skrift.controllers.auth:AuthController
   - skrift.admin.controller:AdminController
   - skrift.controllers.web:WebController
+middleware:
+  # Example: Custom middleware (uncomment to use)
+  # - myapp.middleware:create_logging_middleware
+  # - factory: myapp.middleware:create_rate_limit_middleware
+  #   kwargs:
+  #     requests_per_minute: 100
 db:
   url: $DATABASE_URL
   pool_size: 5

@@ -26,6 +26,7 @@ from litestar import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.contrib.jinja import JinjaTemplateEngine
 from litestar.exceptions import HTTPException
+from litestar.middleware import DefineMiddleware
 from litestar.middleware.session.client_side import CookieBackendConfig
 from litestar.static_files import create_static_files_router
 from litestar.template import TemplateConfig
@@ -71,6 +72,109 @@ def load_controllers() -> list:
         controllers.append(controller_class)
 
     return controllers
+
+
+def _load_middleware_factory(spec: str):
+    """Import a single middleware factory from a module:name spec.
+
+    Args:
+        spec: String in format "module.path:factory_name"
+
+    Returns:
+        The callable middleware factory
+
+    Raises:
+        ValueError: If spec doesn't contain exactly one colon
+        ImportError: If the module cannot be imported
+        AttributeError: If the factory doesn't exist in the module
+        TypeError: If the factory is not callable
+    """
+    if ":" not in spec:
+        raise ValueError(
+            f"Invalid middleware spec '{spec}': must be in format 'module:factory'"
+        )
+
+    parts = spec.split(":")
+    if len(parts) != 2:
+        raise ValueError(
+            f"Invalid middleware spec '{spec}': must contain exactly one colon"
+        )
+
+    module_path, factory_name = parts
+    module = importlib.import_module(module_path)
+    factory = getattr(module, factory_name)
+
+    if not callable(factory):
+        raise TypeError(
+            f"Middleware factory '{spec}' is not callable"
+        )
+
+    return factory
+
+
+def load_middleware() -> list:
+    """Load middleware from app.yaml configuration.
+
+    Supports two formats in app.yaml:
+
+    Simple (no args):
+        middleware:
+          - myapp.middleware:create_logging_middleware
+
+    With kwargs:
+        middleware:
+          - factory: myapp.middleware:create_rate_limit_middleware
+            kwargs:
+              requests_per_minute: 100
+
+    Returns:
+        List of middleware factories or DefineMiddleware instances
+    """
+    config_path = get_config_path()
+
+    if not config_path.exists():
+        return []
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    if not config:
+        return []
+
+    middleware_specs = config.get("middleware", [])
+    if not middleware_specs:
+        return []
+
+    # Add working directory to sys.path for local middleware imports
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+
+    middleware = []
+    for spec in middleware_specs:
+        if isinstance(spec, str):
+            # Simple format: "module:factory"
+            factory = _load_middleware_factory(spec)
+            middleware.append(factory)
+        elif isinstance(spec, dict):
+            # Dict format with optional kwargs
+            if "factory" not in spec:
+                raise ValueError(
+                    f"Middleware dict spec must have 'factory' key: {spec}"
+                )
+            factory = _load_middleware_factory(spec["factory"])
+            kwargs = spec.get("kwargs", {})
+            if kwargs:
+                middleware.append(DefineMiddleware(factory, **kwargs))
+            else:
+                middleware.append(factory)
+        else:
+            raise ValueError(
+                f"Invalid middleware spec type: {type(spec).__name__}. "
+                "Must be string or dict."
+            )
+
+    return middleware
 
 
 async def check_setup_complete(db_config: SQLAlchemyAsyncConfig) -> bool:
@@ -282,6 +386,9 @@ def create_app() -> Litestar:
     # Load controllers from app.yaml
     controllers = load_controllers()
 
+    # Load middleware from app.yaml
+    user_middleware = load_middleware()
+
     # Database configuration
     if "sqlite" in settings.db.url:
         engine_config = EngineConfig(echo=settings.db.echo)
@@ -350,7 +457,7 @@ def create_app() -> Litestar:
         on_startup=[on_startup],
         route_handlers=[*controllers, static_files_router],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[session_config.middleware],
+        middleware=[session_config.middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip"),
         exception_handlers={
