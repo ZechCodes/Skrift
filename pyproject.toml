@@ -1,6 +1,6 @@
 [project]
 name = "skrift"
-version = "0.1.0a9"
+version = "0.1.0a10"
 description = "A lightweight async Python CMS for crafting modern websites"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -30,6 +30,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
 docs = [
     "zensical>=0.0.19",
 ]

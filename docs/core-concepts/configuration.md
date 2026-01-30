@@ -67,6 +67,25 @@ controllers:
 
 Format: `module.path:ClassName`. Controllers are imported and mounted automatically.
 
+### Middleware
+
+Register custom middleware to process requests:
+
+```yaml
+middleware:
+  # Simple format - factory function with no arguments
+  - myapp.middleware:logging_middleware
+
+  # With configuration - factory with kwargs
+  - factory: myapp.middleware:rate_limit_middleware
+    kwargs:
+      requests_per_minute: 100
+```
+
+Format: `module.path:factory_name`. Middleware factories are imported and applied after the built-in session middleware.
+
+See [Custom Middleware](../guides/custom-middleware.md) for a complete guide on writing middleware.
+
 ### Database
 
 Configure your database connection:
