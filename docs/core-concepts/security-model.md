@@ -155,6 +155,34 @@ guards=[auth_guard, Role("admin") | Role("editor")]
 !!! info "Implementation"
     Auth guards are defined in `skrift/auth/guards.py`. Role definitions are in `skrift/auth/roles.py`.
 
+### Registering Custom Roles
+
+Add custom roles using `register_role()`. Call this at module level in your controller so it runs before the database sync:
+
+```python
+# my_controllers.py
+from litestar import Controller, get
+from skrift.auth import register_role, auth_guard, Permission
+
+# Register custom role at module level
+register_role(
+    "support",
+    "view-tickets",
+    "respond-tickets",
+    display_name="Support Agent",
+    description="Can view and respond to support tickets",
+)
+
+class SupportController(Controller):
+    path = "/support"
+
+    @get("/tickets", guards=[auth_guard, Permission("view-tickets")])
+    async def list_tickets(self):
+        ...
+```
+
+The role is automatically synced to the database when the application starts.
+
 See [Protecting Routes](../guides/protecting-routes.md) for a complete guide.
 
 ## Security Checklist

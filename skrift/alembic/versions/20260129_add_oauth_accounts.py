@@ -63,10 +63,17 @@ def upgrade() -> None:
     # Step 2: Migrate existing data from users to oauth_accounts
     # Generate binary UUIDs (16 bytes) for new records and copy oauth data
     conn = op.get_bind()
-    conn.execute(sa.text("""
+    dialect = conn.dialect.name
+
+    if dialect == 'sqlite':
+        uuid_func = 'randomblob(16)'
+    else:  # PostgreSQL and others
+        uuid_func = 'gen_random_uuid()'
+
+    conn.execute(sa.text(f"""
         INSERT INTO oauth_accounts (id, created_at, updated_at, provider, provider_account_id, provider_email, user_id)
         SELECT
-            randomblob(16),
+            {uuid_func},
             created_at,
             updated_at,
             oauth_provider,

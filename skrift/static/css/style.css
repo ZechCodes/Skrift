@@ -791,6 +791,11 @@ main.container.admin-layout {
     color: var(--color-primary-text);
 }
 
+.admin-nav a.active:hover {
+    background-color: var(--color-primary-hover);
+    color: var(--color-primary-text);
+}
+
 .admin-nav a::after {
     display: none;
 }
