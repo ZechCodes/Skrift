@@ -86,9 +86,44 @@ def get_role_definition(name: str) -> RoleDefinition | None:
     return ROLE_DEFINITIONS.get(name)
 
 
-def register_role(role: RoleDefinition) -> None:
+def register_role(
+    name: str,
+    *permissions: str,
+    display_name: str | None = None,
+    description: str | None = None,
+) -> RoleDefinition:
     """Register a custom role definition.
 
     This allows applications to add custom roles beyond the defaults.
+    Call this during application startup (e.g., in a custom controller module
+    or app initialization) before the database sync occurs.
+
+    Args:
+        name: The unique identifier for the role
+        *permissions: Permission strings granted by this role
+        display_name: Human-readable name for the role
+        description: Description of the role's purpose
+
+    Returns:
+        The registered RoleDefinition instance
+
+    Example:
+        from skrift.auth.roles import register_role
+
+        # Register a custom role with permissions
+        register_role(
+            "support",
+            "view-tickets",
+            "respond-tickets",
+            display_name="Support Agent",
+            description="Can view and respond to support tickets",
+        )
     """
+    role = create_role(
+        name,
+        *permissions,
+        display_name=display_name,
+        description=description,
+    )
     ROLE_DEFINITIONS[role.name] = role
+    return role
