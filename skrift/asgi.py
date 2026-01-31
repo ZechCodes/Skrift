@@ -416,6 +416,7 @@ def create_app() -> Litestar:
         httponly=True,
         secure=not settings.debug,
         samesite="lax",
+        domain=settings.session.cookie_domain,
     )
 
     # Template configuration
