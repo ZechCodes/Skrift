@@ -5,11 +5,12 @@ Also supports a development-only "dummy" provider for testing.
 """
 
 import base64
+import fnmatch
 import hashlib
 import secrets
 from datetime import UTC, datetime
 from typing import Annotated
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from litestar import Controller, Request, get, post
@@ -24,6 +25,56 @@ from skrift.config import get_settings
 from skrift.db.models.oauth_account import OAuthAccount
 from skrift.db.models.user import User
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
+
+
+def _is_safe_redirect_url(url: str, allowed_domains: list[str]) -> bool:
+    """Check if URL is safe to redirect to.
+
+    Supports wildcard patterns using fnmatch-style matching:
+    - "*.example.com" matches any subdomain of example.com
+    - "app-*.example.com" matches app-foo.example.com, app-bar.example.com, etc.
+    - "example.com" (no wildcards) matches example.com and all subdomains
+    """
+    # Relative paths are always safe (but not protocol-relative //domain.com)
+    if url.startswith("/") and not url.startswith("//"):
+        return True
+
+    # Parse absolute URL
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    # Must have scheme and netloc
+    if not parsed.scheme or not parsed.netloc:
+        return False
+
+    # Only allow http/https
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    # Check if domain matches allowed list
+    host = parsed.netloc.lower().split(":")[0]  # Remove port
+    for pattern in allowed_domains:
+        pattern = pattern.lower()
+        # If pattern contains wildcards, use fnmatch
+        if "*" in pattern or "?" in pattern:
+            if fnmatch.fnmatch(host, pattern):
+                return True
+        else:
+            # No wildcards: exact match or subdomain match
+            if host == pattern or host.endswith(f".{pattern}"):
+                return True
+
+    return False
+
+
+def _get_safe_redirect_url(request: Request, allowed_domains: list[str], default: str = "/") -> str:
+    """Get the next redirect URL from session, validating it's safe."""
+    next_url = request.session.pop("auth_next", None)
+    if next_url and _is_safe_redirect_url(next_url, allowed_domains):
+        return next_url
+    return default
 
 
 def get_auth_url(provider: str, settings, state: str, code_challenge: str | None = None) -> str:
@@ -230,10 +281,15 @@ class AuthController(Controller):
         self,
         request: Request,
         provider: str,
+        next_url: Annotated[str | None, Parameter(query="next")] = None,
     ) -> Redirect | TemplateResponse:
         """Redirect to OAuth provider consent screen, or show dummy login form."""
         settings = get_settings()
         provider_info = get_provider_info(provider)
+
+        # Store next URL in session if provided and valid
+        if next_url and _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
+            request.session["auth_next"] = next_url
 
         if not provider_info:
             raise NotFoundException(f"Unknown provider: {provider}")
@@ -392,13 +448,21 @@ class AuthController(Controller):
         request.session["user_picture_url"] = user.picture_url
         request.session["flash"] = "Successfully logged in!"
 
-        return Redirect(path="/")
+        return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
 
     @get("/login")
-    async def login_page(self, request: Request) -> TemplateResponse:
+    async def login_page(
+        self,
+        request: Request,
+        next_url: Annotated[str | None, Parameter(query="next")] = None,
+    ) -> TemplateResponse:
         """Show login page with available providers."""
         flash = request.session.pop("flash", None)
         settings = get_settings()
+
+        # Store next URL in session if provided and valid
+        if next_url and _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
+            request.session["auth_next"] = next_url
 
         # Get configured providers (excluding dummy from main list)
         configured_providers = list(settings.auth.providers.keys())
@@ -522,7 +586,7 @@ class AuthController(Controller):
         request.session["user_picture_url"] = user.picture_url
         request.session["flash"] = "Successfully logged in!"
 
-        return Redirect(path="/")
+        return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
 
     @get("/logout")
     async def logout(self, request: Request) -> Redirect:

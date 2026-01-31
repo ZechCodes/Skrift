@@ -137,6 +137,7 @@ class AuthConfig(BaseModel):
     """Authentication configuration."""
 
     redirect_base_url: str = "http://localhost:8000"
+    allowed_redirect_domains: list[str] = []
     providers: dict[str, ProviderConfig] = {}
 
     @classmethod
