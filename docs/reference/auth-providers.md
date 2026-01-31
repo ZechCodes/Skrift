@@ -157,6 +157,74 @@ auth:
 4. Skrift exchanges the code for tokens and fetches user info
 5. User record is created/updated and session is established
 
+## Post-Login Redirects
+
+By default, users are redirected to `/` (home page) after successful login. You can customize this behavior using the `next` query parameter to redirect users back to their intended destination.
+
+### Using the `next` Parameter
+
+Add a `next` query parameter to the login URL:
+
+```
+/auth/login?next=/dashboard
+/auth/google/login?next=/settings/profile
+```
+
+After successful authentication, the user will be redirected to the specified URL instead of the home page.
+
+### Security
+
+Redirect URLs are validated to prevent open redirect vulnerabilities:
+
+- **Relative paths** starting with `/` are always allowed (e.g., `/dashboard`, `/settings`)
+- **Protocol-relative URLs** like `//evil.com` are blocked
+- **Absolute URLs** require the domain to be in `allowed_redirect_domains`
+
+### Cross-Domain Redirects
+
+To allow redirects to external domains (e.g., subdomains or related applications), configure `allowed_redirect_domains`:
+
+```yaml
+auth:
+  redirect_base_url: https://auth.example.com
+  allowed_redirect_domains:
+    - example.com           # Matches example.com and *.example.com
+    - "*.myapp.io"          # Wildcard: any subdomain of myapp.io
+    - "app-*.example.com"   # Wildcard: app-dev, app-staging, etc.
+  providers:
+    google:
+      client_id: $GOOGLE_CLIENT_ID
+      client_secret: $GOOGLE_CLIENT_SECRET
+```
+
+**Pattern matching:**
+
+| Pattern | Matches |
+|---------|---------|
+| `example.com` | `example.com`, `app.example.com`, `api.example.com` |
+| `*.example.com` | `app.example.com`, `api.example.com` (not `example.com` itself) |
+| `app-*.example.com` | `app-dev.example.com`, `app-staging.example.com` |
+| `*-staging.example.com` | `api-staging.example.com`, `web-staging.example.com` |
+
+**Examples:**
+
+```
+# Relative path - always works
+/auth/login?next=/dashboard
+
+# Same domain - always works
+/auth/login?next=https://auth.example.com/profile
+
+# Subdomain - works if example.com is in allowed_redirect_domains
+/auth/login?next=https://app.example.com/dashboard
+
+# External domain - blocked unless explicitly allowed
+/auth/login?next=https://evil.com  → redirects to / instead
+```
+
+!!! warning "Security Note"
+    Only add domains you trust to `allowed_redirect_domains`. Allowing external redirects can enable phishing attacks if misconfigured.
+
 ## Account Linking
 
 Skrift automatically links OAuth accounts that share the same email address. This means a user can log in with multiple providers (e.g., GitHub and Discord) and access the same account, as long as both providers return the same email.
@@ -249,9 +317,12 @@ Each provider gets these routes automatically:
 
 | Route | Description |
 |-------|-------------|
-| `/auth/{provider}/login` | Initiate OAuth flow |
+| `/auth/login` | Login page with all providers |
+| `/auth/{provider}/login` | Initiate OAuth flow for specific provider |
 | `/auth/{provider}/callback` | Handle OAuth callback |
 | `/auth/logout` | Clear session |
+
+The login routes accept an optional `?next=` query parameter to redirect users after successful authentication. See [Post-Login Redirects](#post-login-redirects) for details.
 
 ## Troubleshooting
 

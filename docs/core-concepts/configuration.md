@@ -106,6 +106,7 @@ Configure OAuth providers and redirect URLs:
 ```yaml
 auth:
   redirect_base_url: http://localhost:8080
+  allowed_redirect_domains: []  # Domains allowed for post-login redirects
   providers:
     google:
       client_id: $GOOGLE_CLIENT_ID
@@ -115,7 +116,15 @@ auth:
       client_secret: $GITHUB_CLIENT_SECRET
 ```
 
-See [OAuth Providers](../reference/auth-providers.md) for provider-specific setup.
+| Option | Description | Default |
+|--------|-------------|---------|
+| `redirect_base_url` | Base URL for OAuth callbacks | `http://localhost:8000` |
+| `allowed_redirect_domains` | Domains allowed for `?next=` redirects | `[]` (relative paths only) |
+| `providers` | OAuth provider configurations | `{}` |
+
+The `allowed_redirect_domains` setting controls where users can be redirected after login when using the `?next=` query parameter. Supports wildcard patterns like `*.example.com`.
+
+See [OAuth Providers](../reference/auth-providers.md) for provider-specific setup and redirect configuration.
 
 ## Environment-Specific Configuration
 
@@ -149,6 +158,8 @@ This separation prevents common security mistakes:
 
     auth:
       redirect_base_url: https://yourdomain.com
+      allowed_redirect_domains:
+        - yourdomain.com  # Allow redirects to subdomains
       providers:
         google:
           client_id: $GOOGLE_CLIENT_ID
