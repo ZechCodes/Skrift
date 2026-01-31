@@ -229,31 +229,28 @@ def is_config_valid() -> tuple[bool, str | None]:
 @lru_cache
 def get_settings() -> Settings:
     """Load settings from .env and app.yaml."""
-    # First create base settings from .env
-    base_settings = Settings()
-
     # Load app.yaml config
     try:
         app_config = load_app_config()
     except FileNotFoundError:
-        return base_settings
+        return Settings()
     except ValueError:
         # Missing environment variables - return base settings
-        return base_settings
+        return Settings()
 
-    # Merge YAML config with settings
-    updates = {}
+    # Build nested configs from YAML - pass directly to Settings to avoid
+    # model_copy issues with nested BaseModel instances in Pydantic v2
+    kwargs = {}
 
     if "db" in app_config:
-        updates["db"] = DatabaseConfig(**app_config["db"])
+        kwargs["db"] = DatabaseConfig(**app_config["db"])
 
     if "auth" in app_config:
-        updates["auth"] = AuthConfig(**app_config["auth"])
+        kwargs["auth"] = AuthConfig(**app_config["auth"])
 
     if "session" in app_config:
-        updates["session"] = SessionConfig(**app_config["session"])
+        kwargs["session"] = SessionConfig(**app_config["session"])
 
-    if updates:
-        return base_settings.model_copy(update=updates)
-
-    return base_settings
+    # Create Settings with YAML nested configs
+    # BaseSettings will still load debug/secret_key from env, but kwargs take precedence
+    return Settings(**kwargs)
