@@ -133,6 +133,12 @@ class DummyProviderConfig(BaseModel):
 ProviderConfig = OAuthProviderConfig | DummyProviderConfig
 
 
+class SessionConfig(BaseModel):
+    """Session cookie configuration."""
+
+    cookie_domain: str | None = None  # None = exact host only
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration."""
 
@@ -176,6 +182,9 @@ class Settings(BaseSettings):
 
     # Auth config (loaded from app.yaml)
     auth: AuthConfig = AuthConfig()
+
+    # Session config (loaded from app.yaml)
+    session: SessionConfig = SessionConfig()
 
 
 def clear_settings_cache() -> None:
@@ -240,6 +249,9 @@ def get_settings() -> Settings:
 
     if "auth" in app_config:
         updates["auth"] = AuthConfig(**app_config["auth"])
+
+    if "session" in app_config:
+        updates["session"] = SessionConfig(**app_config["session"])
 
     if updates:
         return base_settings.model_copy(update=updates)

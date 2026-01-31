@@ -126,6 +126,26 @@ The `allowed_redirect_domains` setting controls where users can be redirected af
 
 See [OAuth Providers](../reference/auth-providers.md) for provider-specific setup and redirect configuration.
 
+### Session
+
+Configure session cookie behavior:
+
+```yaml
+session:
+  cookie_domain: .example.com  # Share sessions across subdomains
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `cookie_domain` | Domain for session cookies | `null` (exact host only) |
+
+Setting `cookie_domain` to `.example.com` allows session cookies to work across all subdomains (e.g., `api.example.com`, `www.example.com`). Leave unset to restrict cookies to the exact host.
+
+```yaml
+session:
+  cookie_domain: $SESSION_COOKIE_DOMAIN  # From environment variable
+```
+
 ## Environment-Specific Configuration
 
 Different environments need different settings. Skrift uses the `SKRIFT_ENV` variable to select the right config file:
