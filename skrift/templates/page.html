@@ -14,7 +14,7 @@
     </header>
 
     <div class="page-content">
-        {{ page.content | safe }}
+        {{ page.content | markdown | safe }}
     </div>
 
     {% if not page.is_published %}

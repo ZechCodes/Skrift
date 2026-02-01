@@ -44,6 +44,7 @@ from skrift.db.services.setting_service import (
     SETUP_COMPLETED_AT_KEY,
 )
 from skrift.lib.exceptions import http_exception_handler, internal_server_error_handler
+from skrift.lib.markdown import render_markdown
 
 
 def load_controllers() -> list:
@@ -423,16 +424,20 @@ def create_app() -> Litestar:
     # Search working directory first for user overrides, then package directory
     working_dir_templates = Path(os.getcwd()) / "templates"
     template_dir = Path(__file__).parent / "templates"
-    template_config = TemplateConfig(
-        directory=[working_dir_templates, template_dir],
-        engine=JinjaTemplateEngine,
-        engine_callback=lambda engine: engine.engine.globals.update({
+    def configure_template_engine(engine):
+        engine.engine.globals.update({
             "now": datetime.now,
             "site_name": get_cached_site_name,
             "site_tagline": get_cached_site_tagline,
             "site_copyright_holder": get_cached_site_copyright_holder,
             "site_copyright_start_year": get_cached_site_copyright_start_year,
-        }),
+        })
+        engine.engine.filters.update({"markdown": render_markdown})
+
+    template_config = TemplateConfig(
+        directory=[working_dir_templates, template_dir],
+        engine=JinjaTemplateEngine,
+        engine_callback=configure_template_engine,
     )
 
     # Static files - working directory first for user overrides, then package directory
@@ -498,16 +503,21 @@ def create_setup_app() -> Litestar:
     # Search working directory first for user overrides, then package directory
     working_dir_templates = Path(os.getcwd()) / "templates"
     template_dir = Path(__file__).parent / "templates"
-    template_config = TemplateConfig(
-        directory=[working_dir_templates, template_dir],
-        engine=JinjaTemplateEngine,
-        engine_callback=lambda engine: engine.engine.globals.update({
+
+    def configure_setup_template_engine(engine):
+        engine.engine.globals.update({
             "now": datetime.now,
             "site_name": lambda: "Skrift",
             "site_tagline": lambda: "Setup",
             "site_copyright_holder": lambda: "",
             "site_copyright_start_year": lambda: None,
-        }),
+        })
+        engine.engine.filters.update({"markdown": render_markdown})
+
+    template_config = TemplateConfig(
+        directory=[working_dir_templates, template_dir],
+        engine=JinjaTemplateEngine,
+        engine_callback=configure_setup_template_engine,
     )
 
     # Static files - working directory first for user overrides, then package directory
