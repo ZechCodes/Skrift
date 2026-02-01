@@ -72,7 +72,22 @@ pages = await page_service.list_pages(db_session, limit=10, offset=0)
 
 ## Content Tips
 
-Page content is HTML. Use the built-in CSS framework classes for styling:
+Page content supports **Markdown** formatting, which is automatically rendered to HTML. This makes it easy to write rich content:
+
+```markdown
+# Welcome
+
+Here's a **bold** statement and a [link](/about).
+
+| Feature | Status |
+|---------|--------|
+| Tables  | Yes    |
+| Links   | Yes    |
+```
+
+See the [Markdown Content Guide](markdown-content.md) for full syntax documentation.
+
+You can also use HTML directly with the built-in CSS framework classes:
 
 ```html
 <article>
@@ -90,5 +105,6 @@ See the [CSS Framework Reference](../reference/css-framework.md) for available s
 
 ## Next Steps
 
+- [Markdown Content](markdown-content.md) - Full Markdown syntax guide
 - [Custom Templates](custom-templates.md) - Create page-specific designs
 - [CSS Framework](../reference/css-framework.md) - Style your content
