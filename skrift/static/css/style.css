@@ -630,11 +630,96 @@ article footer {
 
 /* Flash messages */
 .flash-messages {
-    margin-bottom: var(--spacing-lg);
+    position: fixed;
+    top: var(--spacing-md);
+    right: var(--spacing-md);
+    z-index: 1000;
+    max-width: 400px;
 }
 
-.flash-messages [role="alert"] {
+.flash {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
     margin-bottom: var(--spacing-sm);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    animation: flash-slide-in 0.3s ease;
+    transition: opacity 0.3s ease;
+}
+
+.flash-success {
+    background-color: #d4edda;
+    border-left: 4px solid #28a745;
+    color: #155724;
+}
+
+.flash-error {
+    background-color: #f8d7da;
+    border-left: 4px solid #dc3545;
+    color: #721c24;
+}
+
+.flash-warning {
+    background-color: #fff3cd;
+    border-left: 4px solid #ffc107;
+    color: #856404;
+}
+
+.flash-info {
+    background-color: #d1ecf1;
+    border-left: 4px solid #17a2b8;
+    color: #0c5460;
+}
+
+/* Dark mode flash colors */
+@media (prefers-color-scheme: dark) {
+    .flash-success { background-color: #1a3d24; color: #9ae6b4; }
+    .flash-error { background-color: #3d1a1a; color: #feb2b2; }
+    .flash-warning { background-color: #3d3d1a; color: #faf089; }
+    .flash-info { background-color: #1a3d3d; color: #90cdf4; }
+}
+
+[data-theme="dark"] .flash-success { background-color: #1a3d24; color: #9ae6b4; }
+[data-theme="dark"] .flash-error { background-color: #3d1a1a; color: #feb2b2; }
+[data-theme="dark"] .flash-warning { background-color: #3d3d1a; color: #faf089; }
+[data-theme="dark"] .flash-info { background-color: #1a3d3d; color: #90cdf4; }
+
+.flash-message {
+    flex: 1;
+}
+
+.flash-dismiss {
+    background: none;
+    border: none;
+    font-size: 1.25rem;
+    cursor: pointer;
+    opacity: 0.5;
+    margin-left: var(--spacing-sm);
+    padding: 0;
+    line-height: 1;
+    color: inherit;
+    box-shadow: none;
+    border-radius: 0;
+}
+
+.flash-dismiss:hover {
+    opacity: 1;
+    background: none;
+    box-shadow: none;
+    transform: none;
+}
+
+@keyframes flash-slide-in {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
 }
 
 /* ========================================
@@ -934,6 +1019,11 @@ main.container.admin-layout {
 .status-draft {
     background-color: var(--color-surface);
     color: var(--color-text-muted);
+}
+
+.status-scheduled {
+    background-color: #ffc107;
+    color: #856404;
 }
 
 .type-badge {

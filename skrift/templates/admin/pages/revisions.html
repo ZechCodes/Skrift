@@ -1,0 +1,59 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Revision History - {{ page.title }} - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>Revision History</h1>
+    <p>{{ page.title }}</p>
+</hgroup>
+
+<div class="form-actions" style="margin-bottom: 1rem;">
+    <a href="/admin/pages/{{ page.id }}/edit" role="button" class="outline">&larr; Back to Edit</a>
+</div>
+
+{% if revisions %}
+<table class="admin-table">
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Title</th>
+            <th>Changed By</th>
+            <th>Date</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for revision in revisions %}
+        <tr>
+            <td>{{ revision.revision_number }}</td>
+            <td>{{ revision.title }}</td>
+            <td>
+                {% if revision.user %}
+                    {{ revision.user.name or revision.user.email }}
+                {% else %}
+                    <span class="text-muted">System</span>
+                {% endif %}
+            </td>
+            <td>{{ revision.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td class="actions-cell">
+                <form method="post" action="/admin/pages/{{ page.id }}/revisions/{{ revision.id }}/restore" class="inline-form" onsubmit="return confirm('Restore to revision #{{ revision.revision_number }}? This will create a new revision of the current state first.');">
+                    <button type="submit" class="outline small">Restore</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="no-items">No revisions yet. Revisions are created when you save changes to a page.</p>
+{% endif %}
+
+<details style="margin-top: 2rem;">
+    <summary>Current Content Preview</summary>
+    <div class="revision-preview" style="background: var(--surface-color); padding: 1rem; border-radius: 4px; margin-top: 0.5rem;">
+        <h3>{{ page.title }}</h3>
+        <div>{{ page.content | markdown | safe }}</div>
+    </div>
+</details>
+{% endblock %}

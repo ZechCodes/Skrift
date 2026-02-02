@@ -26,8 +26,9 @@ from skrift.auth.roles import ROLE_DEFINITIONS
 from skrift.admin.navigation import build_admin_nav, ADMIN_NAV_TAG
 from skrift.db.models.user import User
 from skrift.db.models import Page
-from skrift.db.services import page_service
+from skrift.db.services import page_service, revision_service
 from skrift.db.services import setting_service
+from skrift.lib.flash import flash_success, flash_error, flash_info, get_flash_messages
 
 
 class AdminController(Controller):
@@ -74,10 +75,10 @@ class AdminController(Controller):
         if not ctx["admin_nav"]:
             raise NotAuthorizedException("No admin pages accessible")
 
-        flash = request.session.pop("flash", None)
+        flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/admin.html",
-            context={"flash": flash, **ctx},
+            context={"flash_messages": flash_messages, **ctx},
         )
 
     @get(
@@ -100,10 +101,10 @@ class AdminController(Controller):
         )
         users = list(result.scalars().all())
 
-        flash = request.session.pop("flash", None)
+        flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/users/list.html",
-            context={"flash": flash, "users": users, **ctx},
+            context={"flash_messages": flash_messages, "users": users, **ctx},
         )
 
     @get(
@@ -129,11 +130,11 @@ class AdminController(Controller):
         # Get user's current role names
         current_roles = {role.name for role in target_user.roles}
 
-        flash = request.session.pop("flash", None)
+        flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/users/roles.html",
             context={
-                "flash": flash,
+                "flash_messages": flash_messages,
                 "target_user": target_user,
                 "current_roles": current_roles,
                 "available_roles": ROLE_DEFINITIONS,
@@ -200,18 +201,18 @@ class AdminController(Controller):
         """List all pages with management actions."""
         ctx = await self._get_admin_context(request, db_session)
 
-        # Get all pages with their authors
+        # Get all pages with their authors, ordered by display order then created
         result = await db_session.execute(
             select(Page)
             .options(selectinload(Page.user))
-            .order_by(Page.created_at.desc())
+            .order_by(Page.order.asc(), Page.created_at.desc())
         )
         pages = list(result.scalars().all())
 
-        flash = request.session.pop("flash", None)
+        flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/pages/list.html",
-            context={"flash": flash, "pages": pages, **ctx},
+            context={"flash_messages": flash_messages, "pages": pages, **ctx},
         )
 
     @get(
@@ -223,10 +224,10 @@ class AdminController(Controller):
     ) -> TemplateResponse:
         """Show new page form."""
         ctx = await self._get_admin_context(request, db_session)
-        flash = request.session.pop("flash", None)
+        flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/pages/edit.html",
-            context={"flash": flash, "page": None, **ctx},
+            context={"flash_messages": flash_messages, "page": None, **ctx},
         )
 
     @post(
@@ -245,8 +246,20 @@ class AdminController(Controller):
         content = data.get("content", "").strip()
         is_published = data.get("is_published") == "on"
 
+        # New fields
+        order = int(data.get("order", 0) or 0)
+        publish_at_str = data.get("publish_at", "").strip()
+        publish_at = datetime.fromisoformat(publish_at_str) if publish_at_str else None
+
+        # SEO fields
+        meta_description = data.get("meta_description", "").strip() or None
+        og_title = data.get("og_title", "").strip() or None
+        og_description = data.get("og_description", "").strip() or None
+        og_image = data.get("og_image", "").strip() or None
+        meta_robots = data.get("meta_robots", "").strip() or None
+
         if not title or not slug:
-            request.session["flash"] = "Title and slug are required"
+            flash_error(request, "Title and slug are required")
             return Redirect(path="/admin/pages/new")
 
         published_at = datetime.now(UTC) if is_published else None
@@ -259,11 +272,18 @@ class AdminController(Controller):
                 content=content,
                 is_published=is_published,
                 published_at=published_at,
+                order=order,
+                publish_at=publish_at,
+                meta_description=meta_description,
+                og_title=og_title,
+                og_description=og_description,
+                og_image=og_image,
+                meta_robots=meta_robots,
             )
-            request.session["flash"] = f"Page '{title}' created successfully!"
+            flash_success(request, f"Page '{title}' created successfully!")
             return Redirect(path="/admin/pages")
         except Exception as e:
-            request.session["flash"] = f"Error creating page: {str(e)}"
+            flash_error(request, f"Error creating page: {str(e)}")
             return Redirect(path="/admin/pages/new")
 
     @get(
@@ -278,13 +298,13 @@ class AdminController(Controller):
 
         page = await page_service.get_page_by_id(db_session, page_id)
         if not page:
-            request.session["flash"] = "Page not found"
+            flash_error(request, "Page not found")
             return Redirect(path="/admin/pages")
 
-        flash = request.session.pop("flash", None)
+        flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/pages/edit.html",
-            context={"flash": flash, "page": page, **ctx},
+            context={"flash_messages": flash_messages, "page": page, **ctx},
         )
 
     @post(
@@ -304,13 +324,25 @@ class AdminController(Controller):
         content = data.get("content", "").strip()
         is_published = data.get("is_published") == "on"
 
+        # New fields
+        order = int(data.get("order", 0) or 0)
+        publish_at_str = data.get("publish_at", "").strip()
+        publish_at = datetime.fromisoformat(publish_at_str) if publish_at_str else None
+
+        # SEO fields
+        meta_description = data.get("meta_description", "").strip() or None
+        og_title = data.get("og_title", "").strip() or None
+        og_description = data.get("og_description", "").strip() or None
+        og_image = data.get("og_image", "").strip() or None
+        meta_robots = data.get("meta_robots", "").strip() or None
+
         if not title or not slug:
-            request.session["flash"] = "Title and slug are required"
+            flash_error(request, "Title and slug are required")
             return Redirect(path=f"/admin/pages/{page_id}/edit")
 
         page = await page_service.get_page_by_id(db_session, page_id)
         if not page:
-            request.session["flash"] = "Page not found"
+            flash_error(request, "Page not found")
             return Redirect(path="/admin/pages")
 
         published_at = page.published_at
@@ -326,11 +358,18 @@ class AdminController(Controller):
                 content=content,
                 is_published=is_published,
                 published_at=published_at,
+                order=order,
+                publish_at=publish_at,
+                meta_description=meta_description,
+                og_title=og_title,
+                og_description=og_description,
+                og_image=og_image,
+                meta_robots=meta_robots,
             )
-            request.session["flash"] = f"Page '{title}' updated successfully!"
+            flash_success(request, f"Page '{title}' updated successfully!")
             return Redirect(path="/admin/pages")
         except Exception as e:
-            request.session["flash"] = f"Error updating page: {str(e)}"
+            flash_error(request, f"Error updating page: {str(e)}")
             return Redirect(path=f"/admin/pages/{page_id}/edit")
 
     @post(
@@ -398,6 +437,55 @@ class AdminController(Controller):
         return Redirect(path="/admin/pages")
 
     @get(
+        "/pages/{page_id:uuid}/revisions",
+        guards=[auth_guard, Permission("manage-pages")],
+    )
+    async def list_revisions(
+        self, request: Request, db_session: AsyncSession, page_id: UUID
+    ) -> TemplateResponse:
+        """List revisions for a page."""
+        ctx = await self._get_admin_context(request, db_session)
+
+        page = await page_service.get_page_by_id(db_session, page_id)
+        if not page:
+            flash_error(request, "Page not found")
+            return Redirect(path="/admin/pages")
+
+        revisions = await revision_service.list_revisions(db_session, page_id)
+
+        flash_messages = get_flash_messages(request)
+        return TemplateResponse(
+            "admin/pages/revisions.html",
+            context={"flash_messages": flash_messages, "page": page, "revisions": revisions, **ctx},
+        )
+
+    @post(
+        "/pages/{page_id:uuid}/revisions/{revision_id:uuid}/restore",
+        guards=[auth_guard, Permission("manage-pages")],
+    )
+    async def restore_revision(
+        self, request: Request, db_session: AsyncSession, page_id: UUID, revision_id: UUID
+    ) -> Redirect:
+        """Restore a page to a previous revision."""
+        page = await page_service.get_page_by_id(db_session, page_id)
+        if not page:
+            flash_error(request, "Page not found")
+            return Redirect(path="/admin/pages")
+
+        revision = await revision_service.get_revision(db_session, revision_id)
+        if not revision or revision.page_id != page_id:
+            flash_error(request, "Revision not found")
+            return Redirect(path=f"/admin/pages/{page_id}/revisions")
+
+        user_id = request.session.get("user_id")
+        await revision_service.restore_revision(
+            db_session, page, revision, UUID(user_id) if user_id else None
+        )
+
+        flash_success(request, f"Page restored to revision #{revision.revision_number}")
+        return Redirect(path=f"/admin/pages/{page_id}/edit")
+
+    @get(
         "/settings",
         tags=[ADMIN_NAV_TAG],
         guards=[auth_guard, Permission("modify-site")],
@@ -410,10 +498,10 @@ class AdminController(Controller):
         ctx = await self._get_admin_context(request, db_session)
         site_settings = await setting_service.get_site_settings(db_session)
 
-        flash = request.session.pop("flash", None)
+        flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/settings/site.html",
-            context={"flash": flash, "settings": site_settings, **ctx},
+            context={"flash_messages": flash_messages, "settings": site_settings, **ctx},
         )
 
     @post(
@@ -448,5 +536,5 @@ class AdminController(Controller):
         # Refresh the site settings cache
         await setting_service.load_site_settings_cache(db_session)
 
-        request.session["flash"] = "Site settings saved successfully"
+        flash_success(request, "Site settings saved successfully")
         return Redirect(path="/admin/settings")

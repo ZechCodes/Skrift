@@ -1,10 +1,14 @@
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey
+from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from skrift.db.base import Base
+
+if TYPE_CHECKING:
+    from skrift.db.models.page_revision import PageRevision
 
 
 class Page(Base):
@@ -24,3 +28,24 @@ class Page(Base):
     # Publication fields
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Scheduling field
+    publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    # Ordering field
+    order: Mapped[int] = mapped_column(Integer, default=0, nullable=False, index=True)
+
+    # SEO fields
+    meta_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    og_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    og_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    og_image: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    meta_robots: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Revisions relationship (defined after PageRevision exists)
+    revisions: Mapped[list["PageRevision"]] = relationship(
+        "PageRevision",
+        back_populates="page",
+        cascade="all, delete-orphan",
+        order_by="desc(PageRevision.revision_number)",
+    )

@@ -66,6 +66,20 @@ Technical reference documentation for Skrift.
 
 </div>
 
+## SEO & Discovery
+
+<div class="grid cards" markdown>
+
+-   :material-sitemap:{ .lg .middle } **Sitemap & Robots.txt**
+
+    ---
+
+    Auto-generated sitemap.xml and robots.txt with filter extensibility for SEO.
+
+    [:octicons-arrow-right-24: Sitemap & Robots.txt](sitemap-robots.md)
+
+</div>
+
 ## Quick Links
 
 | Topic | Description |
@@ -75,4 +89,5 @@ Technical reference documentation for Skrift.
 | [OAuth Providers](auth-providers.md) | Authentication setup |
 | [Security Features](security-features.md) | Security implementation details |
 | [CSS Framework](css-framework.md) | Styling classes and components |
+| [Sitemap & Robots.txt](sitemap-robots.md) | SEO sitemap and crawler directives |
 | [Template System](../guides/custom-templates.md) | Template hierarchy and blocks |
