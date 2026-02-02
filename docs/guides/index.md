@@ -24,9 +24,31 @@ Step-by-step guides for building and customizing your Skrift site.
 
 </div>
 
+## SEO & Discovery
+
+<div class="grid cards" markdown>
+
+-   :material-search-web:{ .lg .middle } **SEO Metadata**
+
+    ---
+
+    Configure meta descriptions, OpenGraph tags, and canonical URLs for search engines and social sharing.
+
+    [:octicons-arrow-right-24: SEO Metadata](seo-metadata.md)
+
+</div>
+
 ## Extending Functionality
 
 <div class="grid cards" markdown>
+
+-   :material-hook:{ .lg .middle } **Hooks and Filters**
+
+    ---
+
+    Extend Skrift with WordPress-like hooks and filters for custom behavior.
+
+    [:octicons-arrow-right-24: Hooks and Filters](hooks-and-filters.md)
 
 -   :material-code-braces:{ .lg .middle } **Custom Controllers**
 
@@ -60,6 +82,8 @@ Step-by-step guides for building and customizing your Skrift site.
 |-------|-------|---------------|
 | [Creating Pages](creating-pages.md) | Content management | None |
 | [Custom Templates](custom-templates.md) | Appearance | HTML basics |
+| [SEO Metadata](seo-metadata.md) | Search & social | None |
+| [Hooks and Filters](hooks-and-filters.md) | Extensibility | Python basics |
 | [Custom Controllers](custom-controllers.md) | New routes | Python, async |
 | [Custom Middleware](custom-middleware.md) | Request processing | Python, ASGI |
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |

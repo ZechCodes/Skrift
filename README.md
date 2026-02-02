@@ -12,6 +12,11 @@ A modern Litestar-powered content management framework with multi-provider OAuth
 - **Dynamic Controllers**: Load controllers from `app.yaml` configuration
 - **SQLAlchemy Integration**: Async database support with SQLite/PostgreSQL
 - **Client-Side Sessions**: Encrypted cookie sessions for horizontal scalability
+- **Hook/Filter System**: WordPress-like extensibility with async support
+- **SEO Metadata**: Built-in meta descriptions, OpenGraph tags, and robots directives
+- **Content Scheduling**: Schedule pages to publish at a future date
+- **Page Revisions**: Automatic content history with restore capability
+- **Sitemap & Robots.txt**: Auto-generated with filter extensibility
 
 ## Quick Start
 
@@ -98,11 +103,17 @@ skrift/
 ├── skrift/              # Main Python package
 │   ├── asgi.py          # Application factory
 │   ├── config.py        # Settings management
-│   ├── controllers/     # Route handlers
+│   ├── controllers/     # Route handlers (auth, web, sitemap)
 │   ├── admin/           # Admin panel
 │   ├── auth/            # RBAC and guards
 │   ├── db/              # Models and services
-│   ├── lib/             # Template resolver
+│   │   ├── models/      # Page, User, Role, PageRevision
+│   │   └── services/    # page_service, revision_service
+│   ├── lib/             # Core utilities
+│   │   ├── hooks.py     # Hook/filter system
+│   │   ├── seo.py       # SEO metadata utilities
+│   │   ├── flash.py     # Enhanced flash messages
+│   │   └── template.py  # Template resolver
 │   └── setup/           # Setup wizard
 ├── templates/           # Jinja2 templates
 ├── static/              # Static assets

@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models.user import User
 from skrift.db.services import page_service
+from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url
+from skrift.lib.seo import get_page_seo_meta, get_page_og_meta
 from skrift.lib.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
@@ -63,5 +65,20 @@ class WebController(Controller):
         if not page:
             raise NotFoundException(f"Page '{path}' not found")
 
-        template = Template("page", *slugs, context={"path": path, "slugs": slugs, "page": page})
+        # Get SEO metadata
+        site_name = get_cached_site_name()
+        base_url = get_cached_site_base_url() or str(request.base_url).rstrip("/")
+        seo_meta = await get_page_seo_meta(page, site_name, base_url)
+        og_meta = await get_page_og_meta(page, site_name, base_url)
+
+        template = Template(
+            "page", *slugs,
+            context={
+                "path": path,
+                "slugs": slugs,
+                "page": page,
+                "seo_meta": seo_meta,
+                "og_meta": og_meta,
+            }
+        )
         return template.render(TEMPLATE_DIR, flash=flash, **user_ctx)

@@ -14,6 +14,7 @@
 <table class="admin-table">
     <thead>
         <tr>
+            <th>Order</th>
             <th>Title</th>
             <th>Slug</th>
             <th>Status</th>
@@ -24,13 +25,19 @@
     <tbody>
         {% for page in pages %}
         <tr>
+            <td class="text-muted">{{ page.order }}</td>
             <td>
                 <a href="/{{ page.slug }}">{{ page.title }}</a>
             </td>
             <td class="text-muted">/{{ page.slug }}</td>
             <td>
                 {% if page.is_published %}
-                    <span class="status-badge status-published">Published</span>
+                    {% if page.publish_at and page.publish_at > now() %}
+                        <span class="status-badge status-scheduled">Scheduled</span>
+                        <small class="text-muted">{{ page.publish_at.strftime('%b %d, %Y %H:%M') }}</small>
+                    {% else %}
+                        <span class="status-badge status-published">Published</span>
+                    {% endif %}
                 {% else %}
                     <span class="status-badge status-draft">Draft</span>
                 {% endif %}
