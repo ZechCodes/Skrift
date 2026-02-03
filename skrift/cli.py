@@ -139,5 +139,52 @@ def db(ctx):
     sys.exit(alembic_main(alembic_argv))
 
 
+@cli.command("init-claude")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Overwrite existing skill files",
+)
+def init_claude(force):
+    """Set up Claude Code skill for Skrift development.
+
+    Copies the Skrift skill files to .claude/skills/skrift/ in the current
+    directory, enabling Claude Code to understand Skrift conventions.
+
+    \b
+    Creates:
+        .claude/skills/skrift/SKILL.md      - Main skill with dynamic context
+        .claude/skills/skrift/architecture.md - System architecture docs
+        .claude/skills/skrift/patterns.md   - Code patterns and examples
+    """
+    import importlib.resources
+
+    skill_dir = Path.cwd() / ".claude" / "skills" / "skrift"
+
+    # Check if skill already exists
+    if skill_dir.exists() and not force:
+        click.echo(f"Skill directory already exists: {skill_dir}", err=True)
+        click.echo("Use --force to overwrite existing files.", err=True)
+        sys.exit(1)
+
+    # Create directory
+    skill_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy skill files from package
+    skill_files = ["SKILL.md", "architecture.md", "patterns.md"]
+    package_files = importlib.resources.files("skrift.claude_skill")
+
+    for filename in skill_files:
+        source = package_files.joinpath(filename)
+        dest = skill_dir / filename
+
+        content = source.read_text()
+        dest.write_text(content)
+        click.echo(f"Created {dest.relative_to(Path.cwd())}")
+
+    click.echo()
+    click.echo("Claude Code skill installed. Use /skrift to activate.")
+
+
 if __name__ == "__main__":
     cli()
