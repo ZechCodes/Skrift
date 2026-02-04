@@ -110,6 +110,7 @@ class DatabaseConfig(BaseModel):
     pool_size: int = 5
     pool_overflow: int = 10
     pool_timeout: int = 30
+    pool_pre_ping: bool = True  # Validate connections before use
     echo: bool = False
 
 

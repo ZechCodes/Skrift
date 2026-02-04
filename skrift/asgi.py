@@ -22,6 +22,8 @@ from advanced_alchemy.extensions.litestar import (
     SQLAlchemyAsyncConfig,
     SQLAlchemyPlugin,
 )
+
+from skrift.db.session import SafeSQLAlchemyAsyncConfig
 from litestar import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.contrib.jinja import JinjaTemplateEngine
@@ -398,10 +400,11 @@ def create_app() -> Litestar:
             pool_size=settings.db.pool_size,
             max_overflow=settings.db.pool_overflow,
             pool_timeout=settings.db.pool_timeout,
+            pool_pre_ping=settings.db.pool_pre_ping,
             echo=settings.db.echo,
         )
 
-    db_config = SQLAlchemyAsyncConfig(
+    db_config = SafeSQLAlchemyAsyncConfig(
         connection_string=settings.db.url,
         metadata=Base.metadata,
         create_all=False,
@@ -564,10 +567,11 @@ def create_setup_app() -> Litestar:
                 pool_size=5,
                 max_overflow=10,
                 pool_timeout=30,
+                pool_pre_ping=True,
                 echo=False,
             )
 
-        db_config = SQLAlchemyAsyncConfig(
+        db_config = SafeSQLAlchemyAsyncConfig(
             connection_string=db_url,
             metadata=Base.metadata,
             create_all=False,

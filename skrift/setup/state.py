@@ -172,9 +172,9 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
         return True, None
 
     try:
-        # Try skrift-db first
+        # Try skrift db first (the correct command)
         result = subprocess.run(
-            ["skrift-db", "upgrade", "head"],
+            ["skrift", "db", "upgrade", "head"],
             capture_output=True,
             text=True,
             cwd=Path.cwd(),
@@ -183,7 +183,7 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
         if result.returncode == 0:
             _migrations_run = True
             return True, None
-        # If skrift-db fails, try alembic directly
+        # If skrift db fails, try alembic directly
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
@@ -202,7 +202,7 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
     except subprocess.TimeoutExpired:
         return False, "Migration timed out"
     except FileNotFoundError:
-        return False, "Neither skrift-db nor alembic found"
+        return False, "skrift db command not found"
     except Exception as e:
         return False, str(e)
 

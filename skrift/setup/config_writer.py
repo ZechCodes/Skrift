@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
         "pool_size": 5,
         "pool_overflow": 10,
         "pool_timeout": 30,
+        "pool_pre_ping": True,
         "echo": False,
     },
     "auth": {
