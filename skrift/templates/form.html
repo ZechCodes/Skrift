@@ -1,0 +1,20 @@
+<form method="{{ form.method }}"{% if form.action %} action="{{ form.action }}"{% endif %}>
+    {{ form.csrf_field() }}
+
+    {% if form.form_error %}
+        <article role="alert">{{ form.form_error }}</article>
+    {% endif %}
+
+    {% for field in form %}
+        {{ field.label_tag() }}
+        {{ field.widget() }}
+        {% if field.error %}
+            <small class="error">{{ field.error }}</small>
+        {% endif %}
+        {% if field.help_text %}
+            <small class="text-muted">{{ field.help_text }}</small>
+        {% endif %}
+    {% endfor %}
+
+    <button type="submit">{{ submit_label }}</button>
+</form>

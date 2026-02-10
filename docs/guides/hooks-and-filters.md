@@ -139,6 +139,13 @@ result = await hooks.apply_filters("my_filter", initial_value, extra_arg)
 |------|------|-----------|-------------|
 | `template_context` | Filter | `context` | Modify template context |
 
+### Form Hooks
+
+| Hook | Type | Arguments | Description |
+|------|------|-----------|-------------|
+| `form_{name}_validated` | Filter | `data` | Modify validated data for a specific form |
+| `form_validated` | Filter | `data`, `name` | Modify validated data for any form |
+
 ## Priority
 
 Callbacks execute in priority order (lower numbers first):
@@ -257,6 +264,7 @@ from skrift.lib.hooks import (
     SITEMAP_PAGE,
     ROBOTS_TXT,
     TEMPLATE_CONTEXT,
+    FORM_VALIDATED,
 )
 ```
 

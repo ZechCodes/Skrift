@@ -58,6 +58,14 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Custom Controllers](custom-controllers.md)
 
+-   :material-form-textbox:{ .lg .middle } **Forms**
+
+    ---
+
+    Build forms with CSRF protection, Pydantic validation, and template rendering.
+
+    [:octicons-arrow-right-24: Forms](forms.md)
+
 -   :material-layers-triple:{ .lg .middle } **Custom Middleware**
 
     ---
@@ -85,6 +93,7 @@ Step-by-step guides for building and customizing your Skrift site.
 | [SEO Metadata](seo-metadata.md) | Search & social | None |
 | [Hooks and Filters](hooks-and-filters.md) | Extensibility | Python basics |
 | [Custom Controllers](custom-controllers.md) | New routes | Python, async |
+| [Forms](forms.md) | Form handling | Python basics |
 | [Custom Middleware](custom-middleware.md) | Request processing | Python, ASGI |
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |
 
@@ -97,6 +106,7 @@ After completing these guides, you'll be able to:
 - Add API endpoints and custom routes
 - Add middleware for logging, rate limiting, CORS, and more
 - Protect routes with role-based access control
+- Build validated forms with CSRF protection and error handling
 - Build features that integrate with Skrift's database and auth
 
 ## Related Sections

@@ -427,6 +427,8 @@ def create_app() -> Litestar:
     # Search working directory first for user overrides, then package directory
     working_dir_templates = Path(os.getcwd()) / "templates"
     template_dir = Path(__file__).parent / "templates"
+    from skrift.forms import Form
+
     def configure_template_engine(engine):
         engine.engine.globals.update({
             "now": datetime.now,
@@ -434,6 +436,7 @@ def create_app() -> Litestar:
             "site_tagline": get_cached_site_tagline,
             "site_copyright_holder": get_cached_site_copyright_holder,
             "site_copyright_start_year": get_cached_site_copyright_start_year,
+            "Form": Form,
         })
         engine.engine.filters.update({"markdown": render_markdown})
 

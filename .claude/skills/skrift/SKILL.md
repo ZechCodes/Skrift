@@ -44,6 +44,7 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 | `skrift/lib/hooks.py` | WordPress-like hook/filter system |
 | `skrift/lib/template.py` | Template resolution with fallbacks |
 | `skrift/db/base.py` | SQLAlchemy Base class (UUIDAuditBase) |
+| `skrift/forms/` | Form system (CSRF, validation, rendering) |
 | `skrift/auth/` | Guards, roles, permissions |
 
 ### CLI Commands
@@ -151,7 +152,77 @@ result = await hooks.apply_filters("my_filter", initial_value, arg1)
 
 Built-in hooks:
 - Actions: `before_page_save`, `after_page_save`, `before_page_delete`, `after_page_delete`
-- Filters: `page_seo_meta`, `page_og_meta`, `sitemap_urls`, `sitemap_page`, `robots_txt`, `template_context`
+- Filters: `page_seo_meta`, `page_og_meta`, `sitemap_urls`, `sitemap_page`, `robots_txt`, `template_context`, `form_{name}_validated`, `form_validated`
+
+### Using Forms
+
+Define forms with `FormModel` (auto-registers) or `@form()` decorator:
+
+```python
+from skrift.forms import FormModel, Form
+from pydantic import Field, EmailStr
+
+class ContactForm(FormModel, form_name="contact"):
+    name: str
+    email: EmailStr
+    message: str = Field(json_schema_extra={"widget": "textarea"})
+```
+
+Or with the decorator on a plain BaseModel:
+
+```python
+from pydantic import BaseModel
+from skrift.forms import form
+
+@form("contact")
+class ContactForm(BaseModel):
+    name: str
+    email: str
+```
+
+Controller GET/POST pattern:
+
+```python
+from skrift.forms import Form
+
+@get("/")
+async def show(self, request: Request) -> TemplateResponse:
+    form = Form(ContactForm, request)
+    return TemplateResponse("contact.html", context={"form": form})
+
+@post("/")
+async def submit(self, request: Request) -> TemplateResponse | Redirect:
+    form = Form(ContactForm, request)
+    if await form.validate():
+        # form.data is a validated ContactForm instance
+        return Redirect("/contact?thanks=1")
+    return TemplateResponse("contact.html", context={"form": form})
+```
+
+Template usage:
+
+```html
+{# Automatic rendering #}
+{{ form.render() }}
+{{ form.render(submit_label="Send") }}
+
+{# Manual rendering #}
+<form method="{{ form.method }}">
+    {{ form.csrf_field() }}
+    {% for field in form %}
+        {{ field.label_tag() }}
+        {{ field.widget() }}
+    {% endfor %}
+    <button type="submit">Send</button>
+</form>
+```
+
+Field customization via `json_schema_extra`:
+- `label`, `widget` ("textarea"/"select"/"checkbox"), `input_type`, `help_text`, `choices`, `attrs`
+
+Template hierarchy for rendering: `form-{name}.html` → `form.html` → programmatic fallback
+
+Hooks fired after validation: `form_{name}_validated` (form-specific filter) and `form_validated` (global filter)
 
 ### Using Guards (Authorization)
 

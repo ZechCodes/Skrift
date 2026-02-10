@@ -310,6 +310,80 @@ Lower numbers execute first. Default is 10.
 - `robots_txt(content)` - Modify robots.txt
 - `template_context(context)` - Modify template context
 
+## Form System
+
+### Architecture
+
+```
+FormModel/BaseModel → Form(model, request) → validate() → hooks → data
+      │                      │                    │           │
+      │                      │                    │           ├─ form_{name}_validated
+      │                      │                    │           └─ form_validated
+      │                      │                    │
+      │                      │                    ├─ CSRF verify (hmac.compare_digest)
+      │                      │                    ├─ Token rotation (single-use)
+      │                      │                    ├─ Checkbox injection (bool fields)
+      │                      │                    └─ Pydantic validation
+      │                      │
+      │                      ├─ render() → Template("form", name).try_render()
+      │                      ├─ csrf_field() → hidden input
+      │                      ├─ fields → dict[str, BoundField]
+      │                      └─ errors → dict[str, str]
+      │
+      └─ Registered in _form_registry (by form_name)
+```
+
+### Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `Form` | `skrift/forms/core.py` | Main form handler (CSRF, validation, rendering) |
+| `FormModel` | `skrift/forms/model.py` | Base class for form-backed Pydantic models |
+| `BoundField` | `skrift/forms/fields.py` | Field bound to form instance (value, error, rendering) |
+| `@form()` | `skrift/forms/decorators.py` | Register plain BaseModel as named form |
+| `get_form_model()` | `skrift/forms/model.py` | Look up registered form by name |
+| `form.html` | `skrift/templates/form.html` | Default form template |
+
+### Registration Mechanism
+
+Forms are registered in a global `_form_registry` dict (in `model.py`):
+- `FormModel.__init_subclass__()` auto-registers on class creation
+- `@form()` decorator registers explicitly
+- `get_form_model(name)` retrieves by name, raises `LookupError` if missing
+
+### CSRF Flow
+
+1. `Form.__init__()` — Creates `secrets.token_urlsafe(32)` in session if absent (key: `_csrf_token`)
+2. `csrf_field()` — Renders `<input type="hidden" name="_csrf" value="{token}">`
+3. `validate()` — Checks submitted `_csrf` against session token via `hmac.compare_digest()`
+4. Token rotation — New token generated after successful check (single-use)
+
+### Template Rendering Hierarchy
+
+```
+form.render(submit_label="Submit")
+  └─ Template("form", self.name).try_render(template_engine, form=self, submit_label=...)
+      ├─ Try: form-{name}.html  (form-specific)
+      ├─ Try: form.html          (generic)
+      └─ Return None → _render_default() (programmatic fallback)
+```
+
+### Hook Integration
+
+Two filter hooks fire after successful validation:
+
+```python
+# Form-specific: e.g. "form_contact_validated"
+self.data = await hooks.apply_filters(f"form_{self.name}_validated", self.data)
+
+# Global: "form_validated"
+self.data = await hooks.apply_filters("form_validated", self.data, self.name)
+```
+
+### Jinja2 Global
+
+The `Form` class is registered as a Jinja2 global, making it accessible in templates without passing it through context.
+
 ## Static Files
 
 Served from `/static/` with same priority as templates:
