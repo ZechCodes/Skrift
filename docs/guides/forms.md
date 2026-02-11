@@ -299,6 +299,36 @@ In the default template, this renders as:
 <article role="alert">Form session expired. Please try again.</article>
 ```
 
+### Standalone CSRF Protection
+
+For endpoints that need CSRF protection but don't use a `Form` instance (e.g., simple action buttons, delete confirmations), use the standalone functions:
+
+**`csrf_field(request)`** — Generates a hidden CSRF input field. Available as a template global:
+
+```html
+<form method="post" action="/delete-item">
+    {{ csrf_field(request) }}
+    <button type="submit">Delete</button>
+</form>
+```
+
+**`verify_csrf(request)`** — Validates the submitted CSRF token. Returns `True` if valid, `False` otherwise. Rotates the token on success:
+
+```python
+from skrift.forms import verify_csrf
+
+@post("/delete-item")
+async def delete_item(self, request: Request) -> Redirect:
+    if not await verify_csrf(request):
+        request.session["flash"] = "Invalid request. Please try again."
+        return Redirect(path="/items")
+
+    # Proceed with deletion...
+    return Redirect(path="/items")
+```
+
+Both functions use the same session-based token mechanism as the `Form` class.
+
 ## Validation
 
 Validation is powered by Pydantic. All standard Pydantic validation features work — type coercion, validators, constraints, etc.

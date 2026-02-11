@@ -45,7 +45,8 @@ Configuration model in `skrift/config.py`:
 ```python
 class SecurityHeadersConfig(BaseModel):
     enabled: bool = True
-    content_security_policy: str | None = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'"
+    content_security_policy: str | None = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'; form-action 'self'; base-uri 'self'"
+    csp_nonce: bool = True
     strict_transport_security: str | None = "max-age=63072000; includeSubDomains"
     x_content_type_options: str | None = "nosniff"
     x_frame_options: str | None = "DENY"
@@ -58,6 +59,7 @@ class SecurityHeadersConfig(BaseModel):
 |-------|------|---------|--------------------------|
 | `enabled` | `bool` | `True` | Disables entire middleware |
 | `content_security_policy` | `str \| None` | CSP rules | Header omitted |
+| `csp_nonce` | `bool` | `True` | Disables per-request nonce generation |
 | `strict_transport_security` | `str \| None` | 2-year HSTS | Header omitted |
 | `x_content_type_options` | `str \| None` | `nosniff` | Header omitted |
 | `x_frame_options` | `str \| None` | `DENY` | Header omitted |
@@ -81,7 +83,9 @@ ASGI middleware in `skrift/middleware/security.py`:
 
 ```python
 class SecurityHeadersMiddleware:
-    def __init__(self, app, headers: list[tuple[bytes, bytes]], debug: bool = False):
+    def __init__(self, app, headers: list[tuple[bytes, bytes]],
+                 csp_value: str | None = None, csp_nonce: bool = True,
+                 debug: bool = False):
         ...
 ```
 
@@ -89,7 +93,24 @@ Key behaviors:
 - Only processes `http` scope (passes through websocket/lifespan)
 - Injects headers into `http.response.start` messages
 - Does **not** overwrite headers already present in the response (case-insensitive comparison)
-- Headers are pre-encoded at middleware creation time, not per-request
+- Non-CSP headers are pre-encoded at middleware creation time
+- CSP is handled per-request to support nonce injection
+
+### CSP Nonces
+
+When `csp_nonce=True` (the default), the middleware generates a unique nonce for each request and replaces `'unsafe-inline'` in the `style-src` directive with `'nonce-{value}'`.
+
+**Template usage:**
+
+```html
+<style nonce="{{ csp_nonce() }}">
+    .my-class { color: blue; }
+</style>
+```
+
+The `csp_nonce()` function is available as a template global. It returns the current request's nonce value (or empty string if nonce is disabled).
+
+The nonce is also stored in `scope["state"]["csp_nonce"]` for access in middleware or handlers.
 
 ### Server Header Suppression
 
@@ -102,6 +123,48 @@ security_headers:
   x_frame_options: "SAMEORIGIN"
   content_security_policy: "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.example.com"
   permissions_policy: "camera=(), microphone=(), geolocation=(), payment=()"
+```
+
+## Rate Limiting
+
+### RateLimitConfig
+
+Configuration model in `skrift/config.py`:
+
+```python
+class RateLimitConfig(BaseModel):
+    enabled: bool = True
+    requests_per_minute: int = 60
+    auth_requests_per_minute: int = 10
+    paths: dict[str, int] = {}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `True` | Enable/disable rate limiting |
+| `requests_per_minute` | `int` | `60` | Default limit for all paths |
+| `auth_requests_per_minute` | `int` | `10` | Stricter limit for `/auth/*` paths |
+| `paths` | `dict[str, int]` | `{}` | Per-path-prefix overrides (e.g., `{"/api": 120}`) |
+
+### How It Works
+
+- **Sliding window**: Uses a 60-second sliding window per IP address
+- **Per-IP isolation**: Each client IP has independent rate counters
+- **Auth auto-detection**: Paths starting with `/auth` automatically use `auth_requests_per_minute`
+- **Longest prefix match**: Custom path overrides use longest-matching prefix
+- **Proxy support**: Reads `X-Forwarded-For` header for client IP when behind a reverse proxy
+- **429 response**: Returns `429 Too Many Requests` with a `Retry-After` header when the limit is exceeded
+
+### Example app.yaml Configuration
+
+```yaml
+rate_limit:
+  enabled: true
+  requests_per_minute: 120
+  auth_requests_per_minute: 5
+  paths:
+    /api: 200
+    /webhooks: 30
 ```
 
 ## CSRF Protection
