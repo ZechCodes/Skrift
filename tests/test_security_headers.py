@@ -3,24 +3,36 @@
 import pytest
 
 from skrift.config import SecurityHeadersConfig
-from skrift.middleware.security import SecurityHeadersMiddleware
+from skrift.middleware.security import SecurityHeadersMiddleware, csp_nonce_var
 
 
 class TestSecurityHeadersConfig:
     """Tests for SecurityHeadersConfig model."""
 
-    def test_default_build_headers_returns_all_headers(self):
-        """Default config builds all expected headers (non-debug)."""
+    def test_default_build_headers_returns_non_csp_headers(self):
+        """Default config builds all expected headers except CSP (non-debug)."""
         config = SecurityHeadersConfig()
         headers = config.build_headers(debug=False)
         names = {name for name, _ in headers}
-        assert b"content-security-policy" in names
+        # CSP is now handled separately by middleware
+        assert b"content-security-policy" not in names
         assert b"strict-transport-security" in names
         assert b"x-content-type-options" in names
         assert b"x-frame-options" in names
         assert b"referrer-policy" in names
         assert b"permissions-policy" in names
         assert b"cross-origin-opener-policy" in names
+
+    def test_default_csp_includes_form_action_and_base_uri(self):
+        """Default CSP string includes form-action 'self' and base-uri 'self'."""
+        config = SecurityHeadersConfig()
+        assert "form-action 'self'" in config.content_security_policy
+        assert "base-uri 'self'" in config.content_security_policy
+
+    def test_default_csp_nonce_enabled(self):
+        """csp_nonce defaults to True."""
+        config = SecurityHeadersConfig()
+        assert config.csp_nonce is True
 
     def test_hsts_excluded_in_debug_mode(self):
         """HSTS header is not included when debug=True."""
@@ -70,7 +82,7 @@ class TestSecurityHeadersConfig:
             assert isinstance(value, bytes)
 
     def test_all_headers_disabled_returns_empty(self):
-        """Setting all headers to None returns empty list."""
+        """Setting all non-CSP headers to None returns empty list."""
         config = SecurityHeadersConfig(
             content_security_policy=None,
             strict_transport_security=None,
@@ -89,7 +101,7 @@ class TestSecurityHeadersMiddleware:
 
     @pytest.fixture
     def headers(self):
-        """Standard test headers."""
+        """Standard test headers (non-CSP)."""
         return [
             (b"x-content-type-options", b"nosniff"),
             (b"x-frame-options", b"DENY"),
@@ -234,6 +246,210 @@ class TestSecurityHeadersMiddleware:
 
         response_start = captured_messages[0]
         assert len(response_start["headers"]) == 1
+
+
+class TestCSPNonce:
+    """Tests for CSP nonce functionality."""
+
+    @pytest.fixture
+    def captured_messages(self):
+        return []
+
+    def _make_send(self, captured):
+        async def send(message):
+            captured.append(message)
+        return send
+
+    @pytest.mark.asyncio
+    async def test_csp_nonce_replaces_unsafe_inline(self, captured_messages):
+        """When csp_nonce=True, 'unsafe-inline' in style-src is replaced with nonce."""
+        csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+
+        async def app(scope, receive, send):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], csp_value=csp, csp_nonce=True
+        )
+        scope = {"type": "http", "method": "GET", "path": "/"}
+
+        await middleware(scope, None, self._make_send(captured_messages))
+
+        response_start = captured_messages[0]
+        header_dict = dict(response_start["headers"])
+        csp_header = header_dict[b"content-security-policy"].decode()
+        assert "'unsafe-inline'" not in csp_header
+        assert "'nonce-" in csp_header
+        # style-src should have the nonce
+        assert "style-src 'self' 'nonce-" in csp_header
+
+    @pytest.mark.asyncio
+    async def test_csp_nonce_false_keeps_unsafe_inline(self, captured_messages):
+        """When csp_nonce=False, 'unsafe-inline' is preserved."""
+        csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+
+        async def app(scope, receive, send):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], csp_value=csp, csp_nonce=False
+        )
+        scope = {"type": "http", "method": "GET", "path": "/"}
+
+        await middleware(scope, None, self._make_send(captured_messages))
+
+        response_start = captured_messages[0]
+        header_dict = dict(response_start["headers"])
+        csp_header = header_dict[b"content-security-policy"].decode()
+        assert "'unsafe-inline'" in csp_header
+        assert "'nonce-" not in csp_header
+
+    @pytest.mark.asyncio
+    async def test_csp_nonce_var_set_during_request(self):
+        """csp_nonce_var ContextVar is set during request processing."""
+        captured_nonce = None
+
+        async def app(scope, receive, send):
+            nonlocal captured_nonce
+            captured_nonce = csp_nonce_var.get(None)
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        csp = "style-src 'self' 'unsafe-inline'"
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], csp_value=csp, csp_nonce=True
+        )
+        scope = {"type": "http", "method": "GET", "path": "/"}
+
+        captured = []
+        async def send(message):
+            captured.append(message)
+
+        await middleware(scope, None, send)
+
+        assert captured_nonce is not None
+        assert len(captured_nonce) > 0
+
+    @pytest.mark.asyncio
+    async def test_csp_nonce_var_reset_after_request(self):
+        """csp_nonce_var is reset after request completes."""
+        csp = "style-src 'self' 'unsafe-inline'"
+
+        async def app(scope, receive, send):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], csp_value=csp, csp_nonce=True
+        )
+        scope = {"type": "http", "method": "GET", "path": "/"}
+
+        captured = []
+        async def send(message):
+            captured.append(message)
+
+        await middleware(scope, None, send)
+
+        # After request, ContextVar should be unset
+        assert csp_nonce_var.get(None) is None
+
+    @pytest.mark.asyncio
+    async def test_nonce_unique_per_request(self):
+        """Each request gets a unique nonce value."""
+        nonces = []
+        csp = "style-src 'self' 'unsafe-inline'"
+
+        async def app(scope, receive, send):
+            nonces.append(csp_nonce_var.get(None))
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], csp_value=csp, csp_nonce=True
+        )
+
+        for _ in range(3):
+            scope = {"type": "http", "method": "GET", "path": "/"}
+            captured = []
+            async def send(message):
+                captured.append(message)
+            await middleware(scope, None, send)
+
+        assert len(nonces) == 3
+        assert len(set(nonces)) == 3  # All unique
+
+    @pytest.mark.asyncio
+    async def test_csp_injected_without_nonce_when_no_csp_value(self, captured_messages):
+        """No CSP header when csp_value is None."""
+        async def app(scope, receive, send):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], csp_value=None, csp_nonce=True
+        )
+        scope = {"type": "http", "method": "GET", "path": "/"}
+
+        await middleware(scope, None, self._make_send(captured_messages))
+
+        response_start = captured_messages[0]
+        header_dict = dict(response_start["headers"])
+        assert b"content-security-policy" not in header_dict
+
+    @pytest.mark.asyncio
+    async def test_nonce_stored_in_scope_state(self):
+        """Nonce is stored in scope['state']['csp_nonce']."""
+        captured_state = {}
+
+        async def app(scope, receive, send):
+            captured_state.update(scope.get("state", {}))
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        csp = "style-src 'self' 'unsafe-inline'"
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], csp_value=csp, csp_nonce=True
+        )
+        scope = {"type": "http", "method": "GET", "path": "/"}
+
+        captured = []
+        async def send(message):
+            captured.append(message)
+
+        await middleware(scope, None, send)
+
+        assert "csp_nonce" in captured_state
+        assert len(captured_state["csp_nonce"]) > 0
 
 
 class TestSecurityHeadersConfigFromYAML:

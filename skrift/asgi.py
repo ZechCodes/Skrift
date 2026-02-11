@@ -37,7 +37,7 @@ from litestar.types import ASGIApp, Receive, Scope, Send
 
 from skrift.config import get_config_path, get_settings, is_config_valid
 from skrift.middleware.rate_limit import RateLimitMiddleware
-from skrift.middleware.security import SecurityHeadersMiddleware
+from skrift.middleware.security import SecurityHeadersMiddleware, csp_nonce_var
 from skrift.db.base import Base
 from skrift.db.services.setting_service import (
     load_site_settings_cache,
@@ -456,9 +456,16 @@ def create_app() -> Litestar:
     security_middleware = []
     if settings.security_headers.enabled:
         headers = settings.security_headers.build_headers(debug=settings.debug)
-        if headers:
+        csp_value = settings.security_headers.content_security_policy
+        if headers or csp_value:
             security_middleware = [
-                DefineMiddleware(SecurityHeadersMiddleware, headers=headers, debug=settings.debug)
+                DefineMiddleware(
+                    SecurityHeadersMiddleware,
+                    headers=headers,
+                    csp_value=csp_value,
+                    csp_nonce=settings.security_headers.csp_nonce,
+                    debug=settings.debug,
+                )
             ]
 
     # Rate limiting middleware
@@ -499,6 +506,7 @@ def create_app() -> Litestar:
             "site_copyright_holder": get_cached_site_copyright_holder,
             "site_copyright_start_year": get_cached_site_copyright_start_year,
             "Form": Form,
+            "csp_nonce": lambda: csp_nonce_var.get(""),
         })
         engine.engine.filters.update({"markdown": render_markdown})
 

@@ -142,7 +142,8 @@ class SecurityHeadersConfig(BaseModel):
     """
 
     enabled: bool = True
-    content_security_policy: str | None = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'"
+    content_security_policy: str | None = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'; form-action 'self'; base-uri 'self'"
+    csp_nonce: bool = True
     strict_transport_security: str | None = "max-age=63072000; includeSubDomains"
     x_content_type_options: str | None = "nosniff"
     x_frame_options: str | None = "DENY"
@@ -151,13 +152,13 @@ class SecurityHeadersConfig(BaseModel):
     cross_origin_opener_policy: str | None = "same-origin"
 
     def build_headers(self, debug: bool = False) -> list[tuple[bytes, bytes]]:
-        """Build pre-encoded header pairs, excluding disabled headers.
+        """Build pre-encoded header pairs, excluding disabled headers and CSP.
 
+        CSP is handled separately by the middleware for per-request nonce support.
         HSTS is excluded when debug=True to avoid poisoning browsers during
         local HTTP development.
         """
         header_map = {
-            "content-security-policy": self.content_security_policy,
             "x-content-type-options": self.x_content_type_options,
             "x-frame-options": self.x_frame_options,
             "referrer-policy": self.referrer_policy,
