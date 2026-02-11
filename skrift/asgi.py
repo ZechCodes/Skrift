@@ -36,6 +36,7 @@ from litestar.template import TemplateConfig
 from litestar.types import ASGIApp, Receive, Scope, Send
 
 from skrift.config import get_config_path, get_settings, is_config_valid
+from skrift.middleware.rate_limit import RateLimitMiddleware
 from skrift.middleware.security import SecurityHeadersMiddleware
 from skrift.db.base import Base
 from skrift.db.services.setting_service import (
@@ -460,6 +461,18 @@ def create_app() -> Litestar:
                 DefineMiddleware(SecurityHeadersMiddleware, headers=headers, debug=settings.debug)
             ]
 
+    # Rate limiting middleware
+    rate_limit_middleware = []
+    if settings.rate_limit.enabled:
+        rate_limit_middleware = [
+            DefineMiddleware(
+                RateLimitMiddleware,
+                requests_per_minute=settings.rate_limit.requests_per_minute,
+                auth_requests_per_minute=settings.rate_limit.auth_requests_per_minute,
+                paths=settings.rate_limit.paths,
+            )
+        ]
+
     # CSRF configuration (if enabled in app.yaml)
     csrf_config = None
     if settings.csrf is not None:
@@ -518,7 +531,7 @@ def create_app() -> Litestar:
         on_startup=[on_startup],
         route_handlers=[*controllers, static_files_router],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[*security_middleware, session_config.middleware, *user_middleware],
+        middleware=[*security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip"),
         csrf_config=csrf_config,

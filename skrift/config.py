@@ -188,6 +188,15 @@ class CSRFSettings(BaseModel):
     exclude: list[str] = []
 
 
+class RateLimitConfig(BaseModel):
+    """Rate limiting configuration."""
+
+    enabled: bool = True
+    requests_per_minute: int = 60
+    auth_requests_per_minute: int = 10
+    paths: dict[str, int] = {}  # per-path-prefix overrides, e.g. {"/api": 120}
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration."""
 
@@ -240,6 +249,9 @@ class Settings(BaseSettings):
 
     # Security headers config (loaded from app.yaml)
     security_headers: SecurityHeadersConfig = SecurityHeadersConfig()
+
+    # Rate limit config (loaded from app.yaml)
+    rate_limit: RateLimitConfig = RateLimitConfig()
 
 
 def clear_settings_cache() -> None:
@@ -311,6 +323,9 @@ def get_settings() -> Settings:
 
     if "security_headers" in app_config:
         kwargs["security_headers"] = SecurityHeadersConfig(**app_config["security_headers"])
+
+    if "rate_limit" in app_config:
+        kwargs["rate_limit"] = RateLimitConfig(**app_config["rate_limit"])
 
     # Create Settings with YAML nested configs
     # BaseSettings will still load debug/secret_key from env, but kwargs take precedence
