@@ -1,0 +1,138 @@
+{% extends "twitter/base.html" %}
+
+{% block title %}{{ seo_meta.title }}{% endblock %}
+
+{% block seo_meta %}
+{% if seo_meta %}
+{% if seo_meta.description %}<meta name="description" content="{{ seo_meta.description }}">{% endif %}
+{% if seo_meta.robots %}<meta name="robots" content="{{ seo_meta.robots }}">{% endif %}
+<link rel="canonical" href="{{ seo_meta.canonical_url }}">
+{% endif %}
+{% endblock %}
+
+{% block og_meta %}
+{% if og_meta %}
+<meta property="og:title" content="{{ og_meta.title }}">
+{% if og_meta.description %}<meta property="og:description" content="{{ og_meta.description }}">{% endif %}
+{% if og_meta.image %}<meta property="og:image" content="{{ og_meta.image }}">{% endif %}
+<meta property="og:url" content="{{ og_meta.url }}">
+<meta property="og:site_name" content="{{ og_meta.site_name }}">
+<meta property="og:type" content="{{ og_meta.type }}">
+{% endif %}
+{% endblock %}
+
+{% block twitter_content %}
+<div class="twitter-page-header">
+    <a href="/" class="back-link">&larr; Back</a>
+    <h2>Tweet</h2>
+</div>
+
+{# Main tweet - full size display #}
+<article class="tweet-detail">
+    <div class="tweet-detail-header">
+        <div class="tweet-avatar tweet-avatar-lg">
+            <a href="/profile/{{ tweet.user.id }}">
+                {% if tweet.user.picture_url %}
+                <img src="{{ tweet.user.picture_url }}" alt="{{ tweet.user.name }}" referrerpolicy="no-referrer">
+                {% else %}
+                <div class="avatar-placeholder">{{ (tweet.user.name or 'U')[0] }}</div>
+                {% endif %}
+            </a>
+        </div>
+        <div>
+            <a href="/profile/{{ tweet.user.id }}" class="tweet-author">{{ tweet.user.name or 'User' }}</a>
+        </div>
+    </div>
+
+    {% if tweet.retweet_of %}
+    <div class="tweet-detail-retweet">Retweet of <a href="/tweet/{{ tweet.retweet_of_id }}">original</a></div>
+    {% endif %}
+
+    <div class="tweet-detail-content">
+        {{ rendered_content[tweet.id] }}
+    </div>
+
+    <div class="tweet-detail-time">
+        {{ tweet.created_at.strftime('%I:%M %p &middot; %b %d, %Y') }}
+    </div>
+
+    <div class="tweet-detail-stats">
+        <span><strong>{{ tweet.reply_count }}</strong> Replies</span>
+        <span><strong>{{ tweet.retweet_count }}</strong> Retweets</span>
+        <span><strong>{{ tweet.like_count }}</strong> Likes</span>
+    </div>
+
+    {% if user %}
+    <div class="tweet-actions tweet-actions-detail">
+        <form method="post" action="/tweet/{{ tweet.id }}/retweet" class="tweet-action-form">
+            {{ csrf_field }}
+            <button type="submit" class="tweet-action tweet-action-retweet" title="Retweet">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4m14 0v2a4 4 0 01-4 4H3"/></svg>
+            </button>
+        </form>
+
+        <form method="post" action="/tweet/{{ tweet.id }}/like" class="tweet-action-form">
+            {{ csrf_field }}
+            <button type="submit" class="tweet-action tweet-action-like {% if tweet.id in liked_ids %}active{% endif %}" title="Like">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="{% if tweet.id in liked_ids %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+            </button>
+        </form>
+
+        <form method="post" action="/tweet/{{ tweet.id }}/bookmark" class="tweet-action-form">
+            {{ csrf_field }}
+            <button type="submit" class="tweet-action tweet-action-bookmark {% if tweet.id in bookmarked_ids %}active{% endif %}" title="Bookmark">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="{% if tweet.id in bookmarked_ids %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+            </button>
+        </form>
+
+        {% if tweet.user_id == user.id %}
+        <form method="post" action="/tweet/{{ tweet.id }}/delete" class="tweet-action-form" data-confirm="Delete this tweet?">
+            {{ csrf_field }}
+            <button type="submit" class="tweet-action tweet-action-delete" title="Delete">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+            </button>
+        </form>
+        {% endif %}
+    </div>
+    {% endif %}
+</article>
+
+{# Reply form #}
+{% if user %}
+<div class="compose-box reply-box">
+    <div class="compose-avatar">
+        {% if user.picture_url %}
+        <img src="{{ user.picture_url }}" alt="{{ user.name }}" referrerpolicy="no-referrer">
+        {% else %}
+        <div class="avatar-placeholder">{{ (user.name or 'U')[0] }}</div>
+        {% endif %}
+    </div>
+    <form method="post" action="/tweet/{{ tweet.id }}/reply" class="compose-form">
+        {{ reply_form.csrf_field() }}
+        {% if reply_form.form_error %}
+        <div class="form-error">{{ reply_form.form_error }}</div>
+        {% endif %}
+        <textarea name="content" placeholder="Post your reply" maxlength="280" rows="2" required>{{ reply_form.value('content') }}</textarea>
+        {% if reply_form.error('content') %}
+        <div class="field-error">{{ reply_form.error('content') }}</div>
+        {% endif %}
+        <div class="compose-footer">
+            <span class="char-counter" data-max="280">280</span>
+            <button type="submit" class="btn btn-primary">Reply</button>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+{# Replies #}
+{% if replies %}
+<div class="replies-section">
+    <h3>Replies</h3>
+    <div class="tweet-list">
+        {% for tweet in replies %}
+            {% include "twitter/_tweet_card.html" %}
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

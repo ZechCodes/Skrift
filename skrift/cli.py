@@ -39,6 +39,7 @@ def serve(host, port, reload, workers, log_level):
         reload=reload,
         workers=workers if not reload else 1,
         log_level=log_level,
+        server_header=False,
     )
 
 

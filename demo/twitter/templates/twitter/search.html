@@ -1,0 +1,23 @@
+{% extends "twitter/base.html" %}
+
+{% block title %}{% if query %}{{ query }} - Search{% else %}Search{% endif %} | {{ site_name() }}{% endblock %}
+
+{% block twitter_content %}
+<div class="twitter-page-header">
+    <h2>Search</h2>
+</div>
+
+<form method="get" action="/search" class="search-form">
+    <div class="search-input-group">
+        <input type="text" name="q" value="{{ query }}" placeholder="Search tweets..." class="search-input" autofocus>
+        <button type="submit" class="btn btn-primary">Search</button>
+    </div>
+</form>
+
+{% if query %}
+<div class="search-results-header">
+    <p>Results for <strong>"{{ query }}"</strong></p>
+</div>
+{% include "twitter/_tweet_list.html" %}
+{% endif %}
+{% endblock %}

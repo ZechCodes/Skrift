@@ -344,6 +344,132 @@ async def save_thing(db_session: AsyncSession, data: dict) -> Thing:
     return thing
 ```
 
+## Form Patterns
+
+### Basic Form Model
+
+```python
+from skrift.forms import FormModel
+
+class ContactForm(FormModel, form_name="contact"):
+    name: str
+    email: str
+    message: str
+```
+
+### Form with Full Field Customization
+
+```python
+from pydantic import Field, EmailStr
+from skrift.forms import FormModel
+
+class ContactForm(FormModel, form_name="contact"):
+    name: str = Field(json_schema_extra={
+        "label": "Your Name",
+        "attrs": {"placeholder": "Jane Doe"},
+    })
+    email: EmailStr = Field(json_schema_extra={
+        "label": "Email Address",
+        "input_type": "email",
+        "help_text": "We'll never share your email.",
+    })
+    subject: str = Field(json_schema_extra={
+        "widget": "select",
+        "choices": [
+            ("general", "General Inquiry"),
+            ("support", "Technical Support"),
+        ],
+    })
+    message: str = Field(json_schema_extra={
+        "widget": "textarea",
+        "attrs": {"rows": "6"},
+    })
+    subscribe: bool = Field(default=False, json_schema_extra={
+        "label": "Subscribe to newsletter",
+    })
+```
+
+### Controller GET/POST Pattern
+
+```python
+from litestar import Controller, get, post, Request
+from litestar.response import Template as TemplateResponse, Redirect
+from skrift.forms import Form
+
+class ContactController(Controller):
+    path = "/contact"
+
+    @get("/")
+    async def show(self, request: Request) -> TemplateResponse:
+        form = Form(ContactForm, request)
+        return TemplateResponse("contact.html", context={"form": form})
+
+    @post("/")
+    async def submit(self, request: Request) -> TemplateResponse | Redirect:
+        form = Form(ContactForm, request)
+        if await form.validate():
+            # form.data is a validated ContactForm instance
+            await process_contact(form.data)
+            return Redirect("/contact?thanks=1")
+        return TemplateResponse("contact.html", context={"form": form})
+```
+
+### Custom Form Template
+
+```html
+{# templates/form-contact.html #}
+<form method="{{ form.method }}" class="contact-form">
+    {{ form.csrf_field() }}
+
+    {% if form.form_error %}
+        <div class="alert">{{ form.form_error }}</div>
+    {% endif %}
+
+    <div class="row">
+        <div class="col">
+            {{ form['name'].label_tag() }}
+            {{ form['name'].widget(class_="form-input") }}
+        </div>
+        <div class="col">
+            {{ form['email'].label_tag() }}
+            {{ form['email'].widget(class_="form-input") }}
+        </div>
+    </div>
+
+    {{ form['message'].label_tag() }}
+    {{ form['message'].widget(class_="form-input", rows="8") }}
+
+    <button type="submit">{{ submit_label }}</button>
+</form>
+```
+
+### Form with Hooks
+
+```python
+from skrift.lib.hooks import filter
+
+@filter("form_contact_validated")
+async def sanitize_contact(data):
+    data.message = data.message.strip()
+    return data
+
+@filter("form_validated")
+async def log_all_forms(data, name):
+    print(f"Form '{name}' submitted")
+    return data
+```
+
+### Decorator-Based Form
+
+```python
+from pydantic import BaseModel
+from skrift.forms import form
+
+@form("newsletter", action="/subscribe", method="post")
+class NewsletterForm(BaseModel):
+    email: str
+```
+
 ## Template Patterns
 
 ### Using Template Class

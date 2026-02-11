@@ -283,6 +283,9 @@ AFTER_PAGE_SAVE = "after_page_save"
 BEFORE_PAGE_DELETE = "before_page_delete"
 AFTER_PAGE_DELETE = "after_page_delete"
 
+# Form hooks
+FORM_VALIDATED = "form_validated"
+
 # Filters
 PAGE_SEO_META = "page_seo_meta"
 PAGE_OG_META = "page_og_meta"

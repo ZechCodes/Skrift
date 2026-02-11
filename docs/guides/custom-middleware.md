@@ -218,18 +218,19 @@ middleware:
 
 Middleware is applied in a specific order:
 
-1. **Session middleware** (built-in, always first) - Handles encrypted session cookies
-2. **Your middleware** - Applied in the order listed in `app.yaml`
+1. **Security headers middleware** (built-in, outermost) - Injects security response headers
+2. **Session middleware** (built-in) - Handles encrypted session cookies
+3. **Your middleware** - Applied in the order listed in `app.yaml`
 
 ```yaml
 middleware:
-  - middleware.logging:create_logging_middleware    # Runs second
-  - middleware.rate_limit:create_rate_limit_middleware  # Runs third
-  - middleware.cors:create_cors_middleware          # Runs fourth
+  - middleware.logging:create_logging_middleware    # Runs third
+  - middleware.rate_limit:create_rate_limit_middleware  # Runs fourth
+  - middleware.cors:create_cors_middleware          # Runs fifth
 ```
 
 !!! info "Middleware Execution"
-    Middleware wraps the application in reverse order. The first middleware listed is the outermost wrapper, meaning it sees requests first and responses last.
+    Middleware wraps the application in reverse order. The first middleware listed is the outermost wrapper, meaning it sees requests first and responses last. The security headers middleware is always outermost, so it adds headers to every response including error pages.
 
 ## Common Middleware Patterns
 

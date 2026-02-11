@@ -1,0 +1,51 @@
+{% extends "admin/base.html" %}
+
+{% block admin_content %}
+<div class="admin-page-header">
+    <h2>Tweet Moderation</h2>
+    <p>Manage and moderate user tweets.</p>
+</div>
+
+{% if tweets %}
+<table class="admin-table">
+    <thead>
+        <tr>
+            <th>Author</th>
+            <th>Content</th>
+            <th>Likes</th>
+            <th>Replies</th>
+            <th>Date</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for tweet in tweets %}
+        <tr>
+            <td>
+                <div class="admin-user-cell">
+                    {% if tweet.user.picture_url %}
+                    <img src="{{ tweet.user.picture_url }}" alt="{{ tweet.user.name }}" class="admin-avatar" referrerpolicy="no-referrer">
+                    {% endif %}
+                    {{ tweet.user.name or 'User' }}
+                </div>
+            </td>
+            <td class="admin-content-cell">{{ rendered_content[tweet.id] }}</td>
+            <td>{{ tweet.like_count }}</td>
+            <td>{{ tweet.reply_count }}</td>
+            <td>{{ tweet.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td>
+                <div class="admin-actions">
+                    <a href="/tweet/{{ tweet.id }}" class="btn btn-sm" target="_blank">View</a>
+                    <form method="post" action="/admin/tweets/{{ tweet.id }}/delete" data-confirm="Delete this tweet? This action cannot be undone.">
+                        <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No tweets to moderate.</p>
+{% endif %}
+{% endblock %}

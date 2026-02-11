@@ -18,6 +18,40 @@ Session data is encrypted using your `SECRET_KEY`, not just signed. This means s
 !!! info "Implementation"
     Session configuration is in `skrift/asgi.py:302-309`. The secret is derived from your `SECRET_KEY` using SHA-256.
 
+## Response Security Headers
+
+Skrift automatically injects security headers on every HTTP response. These protect against common web vulnerabilities like clickjacking, MIME-type sniffing, and cross-origin attacks.
+
+| Header | Default Value | Purpose |
+|--------|---------------|---------|
+| `Content-Security-Policy` | `default-src 'self'; style-src 'self' 'unsafe-inline'; ...` | Controls resource loading sources |
+| `X-Content-Type-Options` | `nosniff` | Prevents MIME-type sniffing |
+| `X-Frame-Options` | `DENY` | Prevents clickjacking via iframes |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Controls referrer information |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | Restricts browser feature access |
+| `Cross-Origin-Opener-Policy` | `same-origin` | Isolates browsing context |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` | Forces HTTPS (production only) |
+
+**Key behaviors:**
+
+- HSTS is only added when `debug=False` to avoid poisoning browsers during local HTTP development
+- Headers already set by a route handler are **not overwritten**, allowing per-route CSP overrides
+- The `Server` header is suppressed (no `Server: uvicorn` leak)
+
+Customize via `app.yaml`:
+
+```yaml
+security_headers:
+  x_frame_options: "SAMEORIGIN"          # Allow same-origin iframes
+  content_security_policy: null           # Disable CSP entirely
+  permissions_policy: "camera=(), microphone=(), geolocation=(), payment=()"
+```
+
+Set any header to `null` or empty string to disable it. Set `enabled: false` to disable the entire middleware.
+
+!!! info "Implementation"
+    Security headers middleware is in `skrift/middleware/security.py`. Configuration model is `SecurityHeadersConfig` in `skrift/config.py`.
+
 ## CSRF Protection
 
 Cross-site request forgery protection is built into the OAuth flow automatically.

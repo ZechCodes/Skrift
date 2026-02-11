@@ -98,6 +98,11 @@ controllers:
   - skrift.controllers.web:WebController
   - myapp.controllers:CustomController
 
+# Security headers (optional, defaults are secure)
+security_headers:
+  content_security_policy: "default-src 'self'; script-src 'self' https://cdn.example.com"
+  x_frame_options: "SAMEORIGIN"
+
 # Middleware (optional)
 middleware:
   - myapp.middleware:create_logging_middleware
@@ -116,6 +121,7 @@ class Settings(BaseSettings):
     db: DatabaseConfig
     auth: AuthConfig
     session: SessionConfig
+    security_headers: SecurityHeadersConfig  # Defaults are secure
 ```
 
 Access settings: `from skrift.config import get_settings`
@@ -309,6 +315,15 @@ Lower numbers execute first. Default is 10.
 - `sitemap_page(page_data, page)` - Modify sitemap entry
 - `robots_txt(content)` - Modify robots.txt
 - `template_context(context)` - Modify template context
+
+## Security Headers Middleware
+
+`skrift/middleware/security.py` — ASGI middleware that injects security response headers (CSP, HSTS, X-Frame-Options, etc.) into every HTTP response. Configured via `SecurityHeadersConfig` in `skrift/config.py`.
+
+- Pre-encodes headers at creation time (not per-request)
+- Does not overwrite headers already set by route handlers
+- HSTS excluded in debug mode
+- Server header suppressed via `server_header=False` in `skrift/cli.py`
 
 ## Static Files
 

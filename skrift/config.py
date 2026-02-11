@@ -134,10 +134,69 @@ class DummyProviderConfig(BaseModel):
 ProviderConfig = OAuthProviderConfig | DummyProviderConfig
 
 
+class SecurityHeadersConfig(BaseModel):
+    """Security response headers configuration.
+
+    Each header can be set to None or empty string to disable it.
+    Setting enabled=False disables the entire middleware.
+    """
+
+    enabled: bool = True
+    content_security_policy: str | None = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'; form-action 'self'; base-uri 'self'"
+    csp_nonce: bool = True
+    strict_transport_security: str | None = "max-age=63072000; includeSubDomains"
+    x_content_type_options: str | None = "nosniff"
+    x_frame_options: str | None = "DENY"
+    referrer_policy: str | None = "strict-origin-when-cross-origin"
+    permissions_policy: str | None = "camera=(), microphone=(), geolocation=()"
+    cross_origin_opener_policy: str | None = "same-origin"
+
+    def build_headers(self, debug: bool = False) -> list[tuple[bytes, bytes]]:
+        """Build pre-encoded header pairs, excluding disabled headers and CSP.
+
+        CSP is handled separately by the middleware for per-request nonce support.
+        HSTS is excluded when debug=True to avoid poisoning browsers during
+        local HTTP development.
+        """
+        header_map = {
+            "x-content-type-options": self.x_content_type_options,
+            "x-frame-options": self.x_frame_options,
+            "referrer-policy": self.referrer_policy,
+            "permissions-policy": self.permissions_policy,
+            "cross-origin-opener-policy": self.cross_origin_opener_policy,
+        }
+
+        # HSTS only in production (not debug mode)
+        if not debug:
+            header_map["strict-transport-security"] = self.strict_transport_security
+
+        return [
+            (name.encode(), value.encode())
+            for name, value in header_map.items()
+            if value
+        ]
+
+
 class SessionConfig(BaseModel):
     """Session cookie configuration."""
 
     cookie_domain: str | None = None  # None = exact host only
+    max_age: int = 86400  # 1 day in seconds
+
+
+class CSRFSettings(BaseModel):
+    """CSRF protection configuration."""
+
+    exclude: list[str] = []
+
+
+class RateLimitConfig(BaseModel):
+    """Rate limiting configuration."""
+
+    enabled: bool = True
+    requests_per_minute: int = 60
+    auth_requests_per_minute: int = 10
+    paths: dict[str, int] = {}  # per-path-prefix overrides, e.g. {"/api": 120}
 
 
 class AuthConfig(BaseModel):
@@ -186,6 +245,15 @@ class Settings(BaseSettings):
 
     # Session config (loaded from app.yaml)
     session: SessionConfig = SessionConfig()
+
+    # CSRF config (loaded from app.yaml)
+    csrf: CSRFSettings | None = None
+
+    # Security headers config (loaded from app.yaml)
+    security_headers: SecurityHeadersConfig = SecurityHeadersConfig()
+
+    # Rate limit config (loaded from app.yaml)
+    rate_limit: RateLimitConfig = RateLimitConfig()
 
 
 def clear_settings_cache() -> None:
@@ -251,6 +319,15 @@ def get_settings() -> Settings:
 
     if "session" in app_config:
         kwargs["session"] = SessionConfig(**app_config["session"])
+
+    if "csrf" in app_config:
+        kwargs["csrf"] = CSRFSettings(**app_config["csrf"])
+
+    if "security_headers" in app_config:
+        kwargs["security_headers"] = SecurityHeadersConfig(**app_config["security_headers"])
+
+    if "rate_limit" in app_config:
+        kwargs["rate_limit"] = RateLimitConfig(**app_config["rate_limit"])
 
     # Create Settings with YAML nested configs
     # BaseSettings will still load debug/secret_key from env, but kwargs take precedence

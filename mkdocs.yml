@@ -64,6 +64,11 @@ nav:
     - Creating Pages: guides/creating-pages.md
     - Custom Templates: guides/custom-templates.md
     - Custom Controllers: guides/custom-controllers.md
+    - Forms: guides/forms.md
+    - Hooks and Filters: guides/hooks-and-filters.md
+    - SEO Metadata: guides/seo-metadata.md
+    - Custom Middleware: guides/custom-middleware.md
+    - Markdown Content: guides/markdown-content.md
     - Protecting Routes: guides/protecting-routes.md
   - Admin:
     - admin/index.md

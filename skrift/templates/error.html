@@ -12,6 +12,13 @@
 
     <p>{{ message or "An unexpected error occurred." }}</p>
 
+    {% if hint %}
+    <details open>
+        <summary>How to fix this</summary>
+        {{ hint }}
+    </details>
+    {% endif %}
+
     <footer>
         <a href="/" role="button">Return Home</a>
     </footer>

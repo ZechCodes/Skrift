@@ -1,0 +1,11 @@
+{% extends "twitter/base.html" %}
+
+{% block title %}Bookmarks | {{ site_name() }}{% endblock %}
+
+{% block twitter_content %}
+<div class="twitter-page-header">
+    <h2>Bookmarks</h2>
+</div>
+
+{% include "twitter/_tweet_list.html" %}
+{% endblock %}

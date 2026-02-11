@@ -3,7 +3,7 @@
 {% block title %}Configuring Database - Skrift{% endblock %}
 
 {% block head %}
-<style>
+<style nonce="{{ csp_nonce() }}">
     .configuring-content {
         text-align: center;
         padding: 2rem 0;

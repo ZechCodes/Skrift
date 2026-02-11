@@ -1,0 +1,12 @@
+{% extends "twitter/base.html" %}
+
+{% block title %}Explore | {{ site_name() }}{% endblock %}
+
+{% block twitter_content %}
+<div class="twitter-page-header">
+    <h2>Explore</h2>
+    <p class="twitter-page-subtitle">Trending tweets by engagement</p>
+</div>
+
+{% include "twitter/_tweet_list.html" %}
+{% endblock %}
