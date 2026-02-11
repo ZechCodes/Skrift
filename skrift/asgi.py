@@ -445,7 +445,7 @@ def create_app() -> Litestar:
     session_secret = hashlib.sha256(settings.secret_key.encode()).digest()
     session_config = CookieBackendConfig(
         secret=session_secret,
-        max_age=60 * 60 * 24 * 7,  # 7 days
+        max_age=settings.session.max_age,
         httponly=True,
         secure=not settings.debug,
         samesite="lax",
@@ -496,7 +496,7 @@ def create_app() -> Litestar:
     # Search working directory first for user overrides, then package directory
     working_dir_templates = Path(os.getcwd()) / "templates"
     template_dir = Path(__file__).parent / "templates"
-    from skrift.forms import Form
+    from skrift.forms import Form, csrf_field as _csrf_field
 
     def configure_template_engine(engine):
         engine.engine.globals.update({
@@ -506,6 +506,7 @@ def create_app() -> Litestar:
             "site_copyright_holder": get_cached_site_copyright_holder,
             "site_copyright_start_year": get_cached_site_copyright_start_year,
             "Form": Form,
+            "csrf_field": _csrf_field,
             "csp_nonce": lambda: csp_nonce_var.get(""),
         })
         engine.engine.filters.update({"markdown": render_markdown})

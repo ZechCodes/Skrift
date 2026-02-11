@@ -19,6 +19,39 @@ CSRF_SESSION_KEY = "_csrf_token"
 CSRF_FIELD_NAME = "_csrf"
 
 
+async def verify_csrf(request: Request) -> bool:
+    """Verify CSRF token from form data against the session token.
+
+    Standalone version of Form.validate()'s CSRF check for use without
+    a Form instance (e.g. action endpoints that only need CSRF protection).
+
+    Returns True if the token is valid. Rotates the token on success.
+    """
+    form_data = await request.form()
+    submitted_token = form_data.get(CSRF_FIELD_NAME, "")
+    stored_token = request.session.get(CSRF_SESSION_KEY, "")
+
+    if not stored_token or not hmac.compare_digest(str(submitted_token), str(stored_token)):
+        return False
+
+    # Rotate token after successful check (single-use)
+    request.session[CSRF_SESSION_KEY] = secrets.token_urlsafe(32)
+    return True
+
+
+def csrf_field(request: Request) -> Markup:
+    """Generate a hidden CSRF input field, creating a session token if needed.
+
+    Standalone version of Form.csrf_field() for use without a Form instance.
+    """
+    if CSRF_SESSION_KEY not in request.session:
+        request.session[CSRF_SESSION_KEY] = secrets.token_urlsafe(32)
+    token = request.session[CSRF_SESSION_KEY]
+    return Markup(
+        f'<input type="hidden" name="{CSRF_FIELD_NAME}" value="{token}">'
+    )
+
+
 class Form(Generic[T]):
     """Model-based form with automatic CSRF and validation.
 

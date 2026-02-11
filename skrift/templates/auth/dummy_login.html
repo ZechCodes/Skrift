@@ -3,7 +3,7 @@
 {% block title %}Dummy Login (Dev) - {{ site_name() }}{% endblock %}
 
 {% block head %}
-<style>
+<style nonce="{{ csp_nonce() }}">
     .login-container {
         max-width: 400px;
         margin: 2rem auto;
@@ -82,6 +82,7 @@
         </div>
 
         <form method="post" action="/auth/dummy-login">
+            {{ csrf_field(request) }}
             <div class="form-group">
                 <label for="email">Email</label>
                 <input type="email" id="email" name="email" required placeholder="test@example.com">

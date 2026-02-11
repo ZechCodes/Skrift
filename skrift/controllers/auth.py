@@ -24,6 +24,7 @@ from sqlalchemy.orm import selectinload
 from skrift.config import get_settings
 from skrift.db.models.oauth_account import OAuthAccount
 from skrift.db.models.user import User
+from skrift.forms import verify_csrf
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
 
 
@@ -273,6 +274,32 @@ def extract_user_data(provider: str, user_info: dict) -> dict:
         }
 
 
+def _set_login_session(request: Request, user: "User") -> None:
+    """Rotate the session and populate it with user data.
+
+    Preserves flash/flash_messages across the rotation so login
+    success messages aren't lost.
+    """
+    # Preserve flash state
+    flash = request.session.get("flash")
+    flash_messages = request.session.get("flash_messages")
+
+    # Clear session to rotate the cookie
+    request.session.clear()
+
+    # Repopulate with user data
+    request.session["user_id"] = str(user.id)
+    request.session["user_name"] = user.name
+    request.session["user_email"] = user.email
+    request.session["user_picture_url"] = user.picture_url
+
+    # Restore flash state
+    if flash is not None:
+        request.session["flash"] = flash
+    if flash_messages is not None:
+        request.session["flash_messages"] = flash_messages
+
+
 class AuthController(Controller):
     path = "/auth"
 
@@ -441,12 +468,9 @@ class AuthController(Controller):
 
         await db_session.commit()
 
-        # Set session with user info
-        request.session["user_id"] = str(user.id)
-        request.session["user_name"] = user.name
-        request.session["user_email"] = user.email
-        request.session["user_picture_url"] = user.picture_url
+        # Set flash before rotation so it's preserved
         request.session["flash"] = "Successfully logged in!"
+        _set_login_session(request, user)
 
         return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
 
@@ -495,6 +519,11 @@ class AuthController(Controller):
 
         if DUMMY_PROVIDER_KEY not in settings.auth.providers:
             raise NotFoundException("Dummy provider not configured")
+
+        # Verify CSRF token
+        if not await verify_csrf(request):
+            request.session["flash"] = "Invalid request. Please try again."
+            return Redirect(path="/auth/dummy/login")
 
         # Parse form data from request
         form_data = await request.form()
@@ -579,12 +608,9 @@ class AuthController(Controller):
 
         await db_session.commit()
 
-        # Set session with user info
-        request.session["user_id"] = str(user.id)
-        request.session["user_name"] = user.name
-        request.session["user_email"] = user.email
-        request.session["user_picture_url"] = user.picture_url
+        # Set flash before rotation so it's preserved
         request.session["flash"] = "Successfully logged in!"
+        _set_login_session(request, user)
 
         return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
 

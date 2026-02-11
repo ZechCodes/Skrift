@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
 from pydantic import BaseModel
 
-from skrift.forms.core import Form, CSRF_SESSION_KEY, CSRF_FIELD_NAME
+from skrift.forms.core import Form, CSRF_SESSION_KEY, CSRF_FIELD_NAME, verify_csrf, csrf_field
 from skrift.forms.fields import BoundField
 
 
@@ -471,3 +471,77 @@ class TestNameResolution:
         request = make_request()
         form = Form(SimpleForm, request, method="get")
         assert form.method == "get"
+
+
+# ---------------------------------------------------------------------------
+# Standalone CSRF function tests
+# ---------------------------------------------------------------------------
+
+class TestStandaloneCSRF:
+    """Tests for verify_csrf() and csrf_field() standalone functions."""
+
+    @pytest.mark.asyncio
+    async def test_verify_csrf_accepts_valid_token(self):
+        token = "valid-token"
+        request = make_request(
+            session={CSRF_SESSION_KEY: token},
+            form_data={CSRF_FIELD_NAME: token},
+        )
+        result = await verify_csrf(request)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_verify_csrf_rejects_invalid_token(self):
+        request = make_request(
+            session={CSRF_SESSION_KEY: "real-token"},
+            form_data={CSRF_FIELD_NAME: "wrong-token"},
+        )
+        result = await verify_csrf(request)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_csrf_rejects_missing_token(self):
+        request = make_request(
+            session={CSRF_SESSION_KEY: "real-token"},
+            form_data={},
+        )
+        result = await verify_csrf(request)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_csrf_rejects_empty_session_token(self):
+        request = make_request(
+            session={},
+            form_data={CSRF_FIELD_NAME: "some-token"},
+        )
+        result = await verify_csrf(request)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_verify_csrf_rotates_token_on_success(self):
+        token = "original-token"
+        request = make_request(
+            session={CSRF_SESSION_KEY: token},
+            form_data={CSRF_FIELD_NAME: token},
+        )
+        await verify_csrf(request)
+        assert request.session[CSRF_SESSION_KEY] != token
+
+    def test_csrf_field_generates_hidden_input(self):
+        request = make_request(session={})
+        html = csrf_field(request)
+        assert f'type="hidden"' in str(html)
+        assert f'name="{CSRF_FIELD_NAME}"' in str(html)
+
+    def test_csrf_field_creates_token_if_missing(self):
+        request = make_request(session={})
+        csrf_field(request)
+        assert CSRF_SESSION_KEY in request.session
+        assert len(request.session[CSRF_SESSION_KEY]) > 0
+
+    def test_csrf_field_preserves_existing_token(self):
+        existing = "existing-token"
+        request = make_request(session={CSRF_SESSION_KEY: existing})
+        html = csrf_field(request)
+        assert f'value="{existing}"' in str(html)
+        assert request.session[CSRF_SESSION_KEY] == existing
