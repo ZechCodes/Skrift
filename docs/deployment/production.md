@@ -182,10 +182,10 @@ server {
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
     ssl_prefer_server_ciphers off;
 
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
+    # Security headers - most are handled at the application level by Skrift's
+    # built-in SecurityHeadersMiddleware. Add nginx-specific headers here if needed.
+    # add_header X-Frame-Options "SAMEORIGIN" always;
+    # add_header X-Content-Type-Options "nosniff" always;
 
     location / {
         proxy_pass http://127.0.0.1:8000;

@@ -36,6 +36,74 @@ session_secret = hashlib.sha256(settings.secret_key.encode()).digest()
 
 This produces a 32-byte key suitable for encryption.
 
+## Security Response Headers
+
+### SecurityHeadersConfig
+
+Configuration model in `skrift/config.py`:
+
+```python
+class SecurityHeadersConfig(BaseModel):
+    enabled: bool = True
+    content_security_policy: str | None = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'"
+    strict_transport_security: str | None = "max-age=63072000; includeSubDomains"
+    x_content_type_options: str | None = "nosniff"
+    x_frame_options: str | None = "DENY"
+    referrer_policy: str | None = "strict-origin-when-cross-origin"
+    permissions_policy: str | None = "camera=(), microphone=(), geolocation=()"
+    cross_origin_opener_policy: str | None = "same-origin"
+```
+
+| Field | Type | Default | Effect when `None`/empty |
+|-------|------|---------|--------------------------|
+| `enabled` | `bool` | `True` | Disables entire middleware |
+| `content_security_policy` | `str \| None` | CSP rules | Header omitted |
+| `strict_transport_security` | `str \| None` | 2-year HSTS | Header omitted |
+| `x_content_type_options` | `str \| None` | `nosniff` | Header omitted |
+| `x_frame_options` | `str \| None` | `DENY` | Header omitted |
+| `referrer_policy` | `str \| None` | `strict-origin-when-cross-origin` | Header omitted |
+| `permissions_policy` | `str \| None` | Camera/mic/geo disabled | Header omitted |
+| `cross_origin_opener_policy` | `str \| None` | `same-origin` | Header omitted |
+
+### build_headers() Method
+
+```python
+def build_headers(self, debug: bool = False) -> list[tuple[bytes, bytes]]:
+```
+
+Returns pre-encoded `(name, value)` byte tuples for all enabled headers. Excludes:
+- Headers set to `None` or empty string
+- HSTS when `debug=True`
+
+### SecurityHeadersMiddleware
+
+ASGI middleware in `skrift/middleware/security.py`:
+
+```python
+class SecurityHeadersMiddleware:
+    def __init__(self, app, headers: list[tuple[bytes, bytes]], debug: bool = False):
+        ...
+```
+
+Key behaviors:
+- Only processes `http` scope (passes through websocket/lifespan)
+- Injects headers into `http.response.start` messages
+- Does **not** overwrite headers already present in the response (case-insensitive comparison)
+- Headers are pre-encoded at middleware creation time, not per-request
+
+### Server Header Suppression
+
+The `Server: uvicorn` header is suppressed via `server_header=False` in `skrift/cli.py`.
+
+### Example app.yaml Configuration
+
+```yaml
+security_headers:
+  x_frame_options: "SAMEORIGIN"
+  content_security_policy: "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.example.com"
+  permissions_policy: "camera=(), microphone=(), geolocation=(), payment=()"
+```
+
 ## CSRF Protection
 
 ### State Token Generation

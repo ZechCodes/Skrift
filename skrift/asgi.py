@@ -26,6 +26,7 @@ from advanced_alchemy.extensions.litestar import (
 from skrift.db.session import SafeSQLAlchemyAsyncConfig
 from litestar import Litestar
 from litestar.config.compression import CompressionConfig
+from litestar.config.csrf import CSRFConfig as LitestarCSRFConfig
 from litestar.contrib.jinja import JinjaTemplateEngine
 from litestar.exceptions import HTTPException
 from litestar.middleware import DefineMiddleware
@@ -35,6 +36,7 @@ from litestar.template import TemplateConfig
 from litestar.types import ASGIApp, Receive, Scope, Send
 
 from skrift.config import get_config_path, get_settings, is_config_valid
+from skrift.middleware.security import SecurityHeadersMiddleware
 from skrift.db.base import Base
 from skrift.db.services.setting_service import (
     load_site_settings_cache,
@@ -360,14 +362,40 @@ class AppDispatcher:
         })
         await send({"type": "http.response.body", "body": b""})
 
+    def _get_config_error_hint(self, message: str) -> str | None:
+        """Return actionable guidance for known configuration errors."""
+        if "secret_key" in message.lower():
+            return (
+                "Skrift requires a SECRET_KEY environment variable. "
+                "Create a .env file in your project directory with:\n\n"
+                "SECRET_KEY=your-secret-key-here\n"
+                "DEBUG=true\n\n"
+                "Or set it directly in your shell:\n\n"
+                "export SECRET_KEY=your-secret-key-here"
+            )
+        return None
+
     async def _error_response(self, send: Send, message: str) -> None:
-        """Send an error response."""
-        body = f"<h1>Application Error</h1><p>{message}</p><p>Please check your configuration and restart the server.</p>".encode()
+        """Send an error response using the built-in error template."""
+        hint = self._get_config_error_hint(message)
+
+        try:
+            template_engine = self.setup_app.template_engine
+            template = template_engine.get_template("error.html")
+            body = template.render(
+                status_code=500,
+                message=message,
+                hint=hint,
+            ).encode()
+        except Exception:
+            # Fallback if template rendering fails
+            body = f"<h1>Configuration Error</h1><p>{message}</p>".encode()
+
         await send({
             "type": "http.response.start",
             "status": 500,
             "headers": [
-                (b"content-type", b"text/html"),
+                (b"content-type", b"text/html; charset=utf-8"),
                 (b"content-length", str(len(body)).encode()),
             ],
         })
@@ -423,6 +451,27 @@ def create_app() -> Litestar:
         domain=settings.session.cookie_domain,
     )
 
+    # Security headers middleware
+    security_middleware = []
+    if settings.security_headers.enabled:
+        headers = settings.security_headers.build_headers(debug=settings.debug)
+        if headers:
+            security_middleware = [
+                DefineMiddleware(SecurityHeadersMiddleware, headers=headers, debug=settings.debug)
+            ]
+
+    # CSRF configuration (if enabled in app.yaml)
+    csrf_config = None
+    if settings.csrf is not None:
+        csrf_config = LitestarCSRFConfig(
+            secret=settings.secret_key,
+            cookie_secure=not settings.debug,
+            cookie_httponly=False,
+            cookie_samesite="lax",
+            cookie_domain=settings.session.cookie_domain,
+            exclude=settings.csrf.exclude or None,
+        )
+
     # Template configuration
     # Search working directory first for user overrides, then package directory
     working_dir_templates = Path(os.getcwd()) / "templates"
@@ -469,9 +518,10 @@ def create_app() -> Litestar:
         on_startup=[on_startup],
         route_handlers=[*controllers, static_files_router],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[session_config.middleware, *user_middleware],
+        middleware=[*security_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip"),
+        csrf_config=csrf_config,
         exception_handlers={
             HTTPException: http_exception_handler,
             Exception: internal_server_error_handler,

@@ -110,10 +110,21 @@ These items significantly improve security.
 
 ### Headers
 
-If using a reverse proxy (nginx, Caddy), configure security headers:
+Skrift automatically injects security response headers (CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy) on every response. The `Server` header is also suppressed.
+
+- [ ] Review default `security_headers` config — customize CSP in `app.yaml` if your site loads external scripts, fonts, or styles
+- [ ] If using a reverse proxy, its headers are additive — Skrift won't overwrite headers already set by the proxy
+
+```yaml
+# app.yaml - customize if needed
+security_headers:
+  content_security_policy: "default-src 'self'; script-src 'self' https://cdn.example.com"
+```
+
+If you still want to add headers at the reverse proxy level (e.g., additional nginx-specific headers):
 
 ```nginx
-# nginx example
+# nginx example - these are optional since Skrift handles the core set
 add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;

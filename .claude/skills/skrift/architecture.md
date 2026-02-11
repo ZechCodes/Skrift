@@ -98,6 +98,11 @@ controllers:
   - skrift.controllers.web:WebController
   - myapp.controllers:CustomController
 
+# Security headers (optional, defaults are secure)
+security_headers:
+  content_security_policy: "default-src 'self'; script-src 'self' https://cdn.example.com"
+  x_frame_options: "SAMEORIGIN"
+
 # Middleware (optional)
 middleware:
   - myapp.middleware:create_logging_middleware
@@ -116,6 +121,7 @@ class Settings(BaseSettings):
     db: DatabaseConfig
     auth: AuthConfig
     session: SessionConfig
+    security_headers: SecurityHeadersConfig  # Defaults are secure
 ```
 
 Access settings: `from skrift.config import get_settings`
@@ -383,6 +389,15 @@ self.data = await hooks.apply_filters("form_validated", self.data, self.name)
 ### Jinja2 Global
 
 The `Form` class is registered as a Jinja2 global, making it accessible in templates without passing it through context.
+
+## Security Headers Middleware
+
+`skrift/middleware/security.py` — ASGI middleware that injects security response headers (CSP, HSTS, X-Frame-Options, etc.) into every HTTP response. Configured via `SecurityHeadersConfig` in `skrift/config.py`.
+
+- Pre-encodes headers at creation time (not per-request)
+- Does not overwrite headers already set by route handlers
+- HSTS excluded in debug mode
+- Server header suppressed via `server_header=False` in `skrift/cli.py`
 
 ## Static Files
 

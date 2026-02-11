@@ -41,6 +41,7 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 | `skrift/asgi.py` | AppDispatcher, app creation, middleware loading |
 | `skrift/config.py` | Settings management, YAML config loading |
 | `skrift/cli.py` | CLI commands (serve, secret, db) |
+| `skrift/middleware/` | Security headers middleware |
 | `skrift/lib/hooks.py` | WordPress-like hook/filter system |
 | `skrift/lib/template.py` | Template resolution with fallbacks |
 | `skrift/db/base.py` | SQLAlchemy Base class (UUIDAuditBase) |
