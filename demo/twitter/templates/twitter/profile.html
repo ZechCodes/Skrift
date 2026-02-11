@@ -1,0 +1,65 @@
+{% extends "twitter/base.html" %}
+
+{% block title %}{{ seo_meta.title }}{% endblock %}
+
+{% block seo_meta %}
+{% if seo_meta %}
+{% if seo_meta.description %}<meta name="description" content="{{ seo_meta.description }}">{% endif %}
+{% if seo_meta.robots %}<meta name="robots" content="{{ seo_meta.robots }}">{% endif %}
+<link rel="canonical" href="{{ seo_meta.canonical_url }}">
+{% endif %}
+{% endblock %}
+
+{% block og_meta %}
+{% if og_meta %}
+<meta property="og:title" content="{{ og_meta.title }}">
+{% if og_meta.description %}<meta property="og:description" content="{{ og_meta.description }}">{% endif %}
+{% if og_meta.image %}<meta property="og:image" content="{{ og_meta.image }}">{% endif %}
+<meta property="og:url" content="{{ og_meta.url }}">
+<meta property="og:site_name" content="{{ og_meta.site_name }}">
+<meta property="og:type" content="{{ og_meta.type }}">
+{% endif %}
+{% endblock %}
+
+{% block twitter_content %}
+<div class="profile-header">
+    <div class="profile-banner"></div>
+    <div class="profile-info">
+        <div class="profile-avatar-lg">
+            {% if profile_user.picture_url %}
+            <img src="{{ profile_user.picture_url }}" alt="{{ profile_user.name }}" referrerpolicy="no-referrer">
+            {% else %}
+            <div class="avatar-placeholder avatar-placeholder-lg">{{ (profile_user.name or 'U')[0] }}</div>
+            {% endif %}
+        </div>
+
+        {% if user and user.id != profile_user.id %}
+        <div class="profile-actions">
+            <form method="post" action="/profile/{{ profile_user.id }}/follow">
+                {{ csrf_field }}
+                <button type="submit" class="btn {% if is_following %}btn-outline{% else %}btn-primary{% endif %}">
+                    {{ "Following" if is_following else "Follow" }}
+                </button>
+            </form>
+        </div>
+        {% endif %}
+
+        <h2 class="profile-name">{{ profile_user.name or 'User' }}</h2>
+        {% if profile_user.email %}
+        <p class="profile-handle">{{ profile_user.email }}</p>
+        {% endif %}
+
+        <div class="profile-stats">
+            <span><strong>{{ tweet_count }}</strong> Tweets</span>
+            <a href="/profile/{{ profile_user.id }}/followers"><strong>{{ follower_count }}</strong> Followers</a>
+            <a href="/profile/{{ profile_user.id }}/following"><strong>{{ following_count }}</strong> Following</a>
+        </div>
+    </div>
+</div>
+
+<div class="profile-tweets-header">
+    <h3>Tweets</h3>
+</div>
+
+{% include "twitter/_tweet_list.html" %}
+{% endblock %}

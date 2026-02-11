@@ -1,0 +1,13 @@
+{# Reusable tweet list partial #}
+{# Expects: tweets, rendered_content, liked_ids, bookmarked_ids, user, csrf_field #}
+{% if tweets %}
+<div class="tweet-list">
+    {% for tweet in tweets %}
+        {% include "twitter/_tweet_card.html" %}
+    {% endfor %}
+</div>
+{% else %}
+<div class="tweet-empty">
+    <p>No tweets yet. Be the first!</p>
+</div>
+{% endif %}

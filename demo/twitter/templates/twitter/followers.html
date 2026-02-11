@@ -1,0 +1,36 @@
+{% extends "twitter/base.html" %}
+
+{% block title %}{{ list_type }} of {{ profile_user.name or 'User' }} | {{ site_name() }}{% endblock %}
+
+{% block twitter_content %}
+<div class="twitter-page-header">
+    <a href="/profile/{{ profile_user.id }}" class="back-link">&larr; {{ profile_user.name or 'User' }}</a>
+    <h2>{{ list_type }}</h2>
+</div>
+
+{% if users_list %}
+<div class="user-list">
+    {% for u in users_list %}
+    <a href="/profile/{{ u.id }}" class="user-card">
+        <div class="user-card-avatar">
+            {% if u.picture_url %}
+            <img src="{{ u.picture_url }}" alt="{{ u.name }}" referrerpolicy="no-referrer">
+            {% else %}
+            <div class="avatar-placeholder">{{ (u.name or 'U')[0] }}</div>
+            {% endif %}
+        </div>
+        <div class="user-card-info">
+            <span class="user-card-name">{{ u.name or 'User' }}</span>
+            {% if u.email %}
+            <span class="user-card-handle">{{ u.email }}</span>
+            {% endif %}
+        </div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="tweet-empty">
+    <p>No {{ list_type|lower }} yet.</p>
+</div>
+{% endif %}
+{% endblock %}

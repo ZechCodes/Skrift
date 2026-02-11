@@ -1,0 +1,41 @@
+{% extends "twitter/base.html" %}
+
+{% block title %}Home | {{ site_name() }}{% endblock %}
+
+{% block twitter_content %}
+<div class="twitter-page-header">
+    <h2>Home</h2>
+</div>
+
+{% if user %}
+<div class="compose-box">
+    <div class="compose-avatar">
+        {% if user.picture_url %}
+        <img src="{{ user.picture_url }}" alt="{{ user.name }}" referrerpolicy="no-referrer">
+        {% else %}
+        <div class="avatar-placeholder">{{ (user.name or 'U')[0] }}</div>
+        {% endif %}
+    </div>
+    <form method="post" action="/tweet/compose" class="compose-form">
+        {{ form.csrf_field() }}
+        {% if form.form_error %}
+        <div class="form-error">{{ form.form_error }}</div>
+        {% endif %}
+        <textarea name="content" placeholder="What's happening?" maxlength="280" rows="3" required>{{ form.value('content') }}</textarea>
+        {% if form.error('content') %}
+        <div class="field-error">{{ form.error('content') }}</div>
+        {% endif %}
+        <div class="compose-footer">
+            <span class="char-counter" data-max="280">280</span>
+            <button type="submit" class="btn btn-primary">Tweet</button>
+        </div>
+    </form>
+</div>
+{% else %}
+<div class="login-prompt">
+    <p>Welcome! <a href="/auth/login">Log in</a> to start tweeting.</p>
+</div>
+{% endif %}
+
+{% include "twitter/_tweet_list.html" %}
+{% endblock %}

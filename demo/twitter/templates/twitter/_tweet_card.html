@@ -1,0 +1,100 @@
+{# Single tweet card component #}
+{# Expects: tweet, rendered_content, liked_ids, bookmarked_ids, user #}
+<article class="tweet-card {% if tweet.retweet_of_id %}tweet-retweet{% endif %}">
+    {% if tweet.retweet_of_id %}
+    <div class="tweet-retweet-label">
+        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17 1l4 4-4 4m-10 4l-4 4 4 4M7 17h13V9M17 7H4v8"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M17 1l4 4-4 4"/></svg>
+        {{ tweet.user.name or 'User' }} retweeted
+    </div>
+    {% endif %}
+
+    <div class="tweet-card-inner">
+        <div class="tweet-avatar">
+            {% if tweet.retweet_of and tweet.retweet_of.user %}
+                {% set display_user = tweet.retweet_of.user %}
+            {% else %}
+                {% set display_user = tweet.user %}
+            {% endif %}
+            <a href="/profile/{{ display_user.id }}">
+                {% if display_user.picture_url %}
+                <img src="{{ display_user.picture_url }}" alt="{{ display_user.name }}" referrerpolicy="no-referrer">
+                {% else %}
+                <div class="avatar-placeholder">{{ (display_user.name or 'U')[0] }}</div>
+                {% endif %}
+            </a>
+        </div>
+
+        <div class="tweet-body">
+            <div class="tweet-header">
+                <a href="/profile/{{ display_user.id }}" class="tweet-author">{{ display_user.name or 'User' }}</a>
+                <span class="tweet-time">{{ tweet.created_at.strftime('%b %d') }}</span>
+            </div>
+
+            <div class="tweet-content">
+                {% if tweet.retweet_of %}
+                    {{ rendered_content[tweet.retweet_of_id] }}
+                {% else %}
+                    {{ rendered_content[tweet.id] }}
+                {% endif %}
+            </div>
+
+            <div class="tweet-actions">
+                <a href="/tweet/{{ tweet.retweet_of_id or tweet.id }}" class="tweet-action tweet-action-reply" title="Reply">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+                    <span>{{ tweet.reply_count }}</span>
+                </a>
+
+                {% if user %}
+                <form method="post" action="/tweet/{{ tweet.retweet_of_id or tweet.id }}/retweet" class="tweet-action-form">
+                    {{ csrf_field }}
+                    <button type="submit" class="tweet-action tweet-action-retweet {% if tweet.retweet_of_id %}active{% endif %}" title="Retweet">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4m14 0v2a4 4 0 01-4 4H3"/></svg>
+                        <span>{{ tweet.retweet_count }}</span>
+                    </button>
+                </form>
+
+                <form method="post" action="/tweet/{{ tweet.retweet_of_id or tweet.id }}/like" class="tweet-action-form">
+                    {{ csrf_field }}
+                    <button type="submit" class="tweet-action tweet-action-like {% if (tweet.retweet_of_id or tweet.id) in liked_ids %}active{% endif %}" title="Like">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="{% if (tweet.retweet_of_id or tweet.id) in liked_ids %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                        <span>{{ tweet.like_count }}</span>
+                    </button>
+                </form>
+
+                <form method="post" action="/tweet/{{ tweet.retweet_of_id or tweet.id }}/bookmark" class="tweet-action-form">
+                    {{ csrf_field }}
+                    <button type="submit" class="tweet-action tweet-action-bookmark {% if (tweet.retweet_of_id or tweet.id) in bookmarked_ids %}active{% endif %}" title="Bookmark">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="{% if (tweet.retweet_of_id or tweet.id) in bookmarked_ids %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+                    </button>
+                </form>
+
+                {% if user and tweet.user_id == user.id %}
+                <form method="post" action="/tweet/{{ tweet.id }}/delete" class="tweet-action-form" data-confirm="Delete this tweet?">
+                    {{ csrf_field }}
+                    <button type="submit" class="tweet-action tweet-action-delete" title="Delete">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                    </button>
+                </form>
+                {% else %}
+                <a href="/tweet/{{ tweet.retweet_of_id or tweet.id }}" class="tweet-action" title="View">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6m4-3h6v6m-11 5L21 3"/></svg>
+                </a>
+                {% endif %}
+            {% else %}
+                <a href="/tweet/{{ tweet.id }}" class="tweet-action tweet-action-reply" title="Reply">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+                    <span>{{ tweet.reply_count }}</span>
+                </a>
+                <span class="tweet-action">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4m14 0v2a4 4 0 01-4 4H3"/></svg>
+                    <span>{{ tweet.retweet_count }}</span>
+                </span>
+                <span class="tweet-action">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+                    <span>{{ tweet.like_count }}</span>
+                </span>
+            {% endif %}
+            </div>
+        </div>
+    </div>
+</article>
