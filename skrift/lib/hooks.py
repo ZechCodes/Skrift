@@ -293,3 +293,7 @@ SITEMAP_URLS = "sitemap_urls"
 SITEMAP_PAGE = "sitemap_page"
 ROBOTS_TXT = "robots_txt"
 TEMPLATE_CONTEXT = "template_context"
+
+# Notification hooks
+NOTIFICATION_SENT = "notification_sent"
+NOTIFICATION_DISMISSED = "notification_dismissed"
