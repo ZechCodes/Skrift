@@ -567,7 +567,7 @@ def create_app() -> Litestar:
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
-        compression_config=CompressionConfig(backend="gzip"),
+        compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream"),
         csrf_config=csrf_config,
         exception_handlers={
             HTTPException: http_exception_handler,

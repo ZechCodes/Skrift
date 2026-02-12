@@ -192,5 +192,7 @@ async def search_tweets(
 
 
 async def render_tweet_content(content: str) -> Markup:
-    rendered = await hooks.apply_filters(TWEET_CONTENT_RENDER, content)
+    from html import escape
+    safe_content = escape(content)
+    rendered = await hooks.apply_filters(TWEET_CONTENT_RENDER, safe_content)
     return Markup(rendered)
