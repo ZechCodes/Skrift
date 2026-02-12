@@ -589,6 +589,7 @@ def create_setup_app() -> Litestar:
             "site_tagline": lambda: "Setup",
             "site_copyright_holder": lambda: "",
             "site_copyright_start_year": lambda: None,
+            "csp_nonce": lambda: csp_nonce_var.get(""),
         })
         engine.engine.filters.update({"markdown": render_markdown})
 
