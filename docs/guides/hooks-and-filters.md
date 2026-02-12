@@ -139,6 +139,13 @@ result = await hooks.apply_filters("my_filter", initial_value, extra_arg)
 |------|------|-----------|-------------|
 | `template_context` | Filter | `context` | Modify template context |
 
+### Notification Hooks
+
+| Hook | Type | Arguments | Description |
+|------|------|-----------|-------------|
+| `notification_sent` | Action | `notification` | After a notification is sent |
+| `notification_dismissed` | Action | `notification` | After a notification is dismissed |
+
 ### Form Hooks
 
 | Hook | Type | Arguments | Description |
@@ -265,6 +272,8 @@ from skrift.lib.hooks import (
     ROBOTS_TXT,
     TEMPLATE_CONTEXT,
     FORM_VALIDATED,
+    NOTIFICATION_SENT,
+    NOTIFICATION_DISMISSED,
 )
 ```
 

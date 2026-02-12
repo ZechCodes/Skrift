@@ -13,6 +13,7 @@
             this._es = null;
             this._displayedIds = new Set();
             this._pendingSyncIds = new Set();
+            this._groupMap = new Map();
             this._synced = false;
             this._queue = [];
             this._visibleCount = 0;
@@ -78,6 +79,15 @@
 
             // Skip duplicates
             if (this._displayedIds.has(data.id)) return;
+
+            // Group replacement: dismiss the previous notification in the same group
+            if (data.group) {
+                const oldId = this._groupMap.get(data.group);
+                if (oldId) {
+                    this._removeDismissed(oldId);
+                }
+                this._groupMap.set(data.group, data.id);
+            }
 
             // Dispatch cancelable custom event
             const event = new CustomEvent("sk:notification", {
@@ -178,6 +188,7 @@
                 el.remove();
                 this._visibleCount--;
                 this._displayedIds.delete(id);
+                this._cleanGroupMap(id);
                 this._showNextFromQueue();
             }, { once: true });
 
@@ -192,6 +203,7 @@
                 // May be in overflow queue
                 this._queue = this._queue.filter((d) => d.id !== id);
                 this._displayedIds.delete(id);
+                this._cleanGroupMap(id);
                 return;
             }
 
@@ -200,8 +212,18 @@
                 el.remove();
                 this._visibleCount--;
                 this._displayedIds.delete(id);
+                this._cleanGroupMap(id);
                 this._showNextFromQueue();
             }, { once: true });
+        }
+
+        _cleanGroupMap(id) {
+            for (const [group, gid] of this._groupMap) {
+                if (gid === id) {
+                    this._groupMap.delete(group);
+                    break;
+                }
+            }
         }
 
         _showNextFromQueue() {

@@ -429,17 +429,21 @@ NotificationService (singleton, in-memory)
 
 | Function | Stored? | Target | Use case |
 |----------|---------|--------|----------|
-| `notify_session(nid, type, **payload)` | Yes | Single session | Transient feedback (saves, errors) |
-| `notify_user(user_id, type, **payload)` | Yes | All sessions of user | Cross-device (replies, likes) |
-| `notify_broadcast(type, **payload)` | No | All connections | Feed updates (new posts) |
+| `notify_session(nid, type, *, group=None, **payload)` | Yes | Single session | Transient feedback (saves, errors) |
+| `notify_user(user_id, type, *, group=None, **payload)` | Yes | All sessions of user | Cross-device (replies, likes) |
+| `notify_broadcast(type, *, group=None, **payload)` | No | All connections | Feed updates (new posts) |
 
 Stored notifications replay on reconnect. Broadcast notifications are ephemeral.
+
+**Group key:** When `group` is set, sending a new notification with the same group key automatically dismisses the previous one in the queue and pushes a `"dismissed"` event to active connections. This enables replace-in-place patterns (progress bars, status updates). For broadcasts (ephemeral), the group key flows to the client via `to_dict()` and the client handles replacement.
 
 ### SSE Protocol (Three-Phase)
 
 1. **Flush**: Server sends all queued notifications for the session/user
 2. **Sync**: Server sends `event: sync` — client reconciles (removes dismissed-elsewhere items)
 3. **Live**: Server pushes new notifications as they arrive; 30s keepalive comments prevent proxy timeouts
+
+During the Live phase, group-based replacement sends a `"dismissed"` event for the old notification followed by the new one, so clients see a seamless in-place update.
 
 ### Client Behavior
 
@@ -457,6 +461,8 @@ Stored notifications replay on reconnect. Broadcast notifications are ephemeral.
 2. Client sends `DELETE /notifications/{id}`
 3. Server removes from queues, broadcasts `"dismissed"` event to user's other sessions
 4. Other sessions remove the toast via `_removeDismissed()`
+
+**Backend dismiss by group:** The `dismiss` method accepts an optional `group` keyword as an alternative to `notification_id`. Convenience functions `dismiss_session_group(nid, group)` and `dismiss_user_group(user_id, group)` wrap this for common use cases.
 
 ### Integration with Hooks
 

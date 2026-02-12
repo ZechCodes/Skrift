@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ site_name() }}{% endblock %}</title>
+
+    {# SEO Meta Tags #}
+    {% block seo_meta %}
+    {% if seo_meta %}
+    {% if seo_meta.description %}<meta name="description" content="{{ seo_meta.description }}">{% endif %}
+    {% if seo_meta.robots %}<meta name="robots" content="{{ seo_meta.robots }}">{% endif %}
+    <link rel="canonical" href="{{ seo_meta.canonical_url }}">
+    {% endif %}
+    {% endblock %}
+
+    {# OpenGraph Tags #}
+    {% block og_meta %}
+    {% if og_meta %}
+    <meta property="og:title" content="{{ og_meta.title }}">
+    {% if og_meta.description %}<meta property="og:description" content="{{ og_meta.description }}">{% endif %}
+    {% if og_meta.image %}<meta property="og:image" content="{{ og_meta.image }}">{% endif %}
+    <meta property="og:url" content="{{ og_meta.url }}">
+    <meta property="og:site_name" content="{{ og_meta.site_name }}">
+    <meta property="og:type" content="{{ og_meta.type }}">
+    {% endif %}
+    {% endblock %}
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Lora:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ static_url('css/skrift.css') }}">
+    <link rel="stylesheet" href="{{ static_url('css/site.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    {% block body %}
+    {% block masthead %}
+    <header class="sk-masthead">
+        <h1><a href="/" style="color: inherit; text-decoration: none;">{{ site_name() }}</a></h1>
+        {% if site_tagline() %}
+        <p class="sk-tagline">{{ site_tagline() }}</p>
+        {% endif %}
+    </header>
+    {% endblock %}
+
+    <main class="sk-content{% block main_class %}{% endblock %}">
+        {# Flash messages #}
+        {% if flash_messages %}
+        <div class="sk-flash-messages" role="status" aria-live="polite">
+            {% for msg in flash_messages %}
+            <article role="alert" class="sk-flash sk-flash-{{ msg.type.value }}" {% if msg.dismissible %}data-dismissible{% endif %}>
+                <span class="sk-flash-message">{{ msg.message }}</span>
+                {% if msg.dismissible %}
+                <button type="button" class="sk-flash-dismiss" aria-label="Dismiss">&times;</button>
+                {% endif %}
+            </article>
+            {% endfor %}
+        </div>
+        {% elif flash %}
+        <div class="sk-flash-messages" role="status" aria-live="polite">
+            <article role="alert" class="sk-flash sk-flash-info" data-dismissible>
+                <span class="sk-flash-message">{{ flash }}</span>
+                <button type="button" class="sk-flash-dismiss" aria-label="Dismiss">&times;</button>
+            </article>
+        </div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="sk-footer">
+        <div class="sk-footer-brand">{{ site_name() }}</div>
+        <p>&copy; {% if site_copyright_start_year() and site_copyright_start_year() != now().year %}{{ site_copyright_start_year() }}-{% endif %}{{ now().year }} {{ site_copyright_holder() or site_name() }}. All rights reserved.</p>
+    </footer>
+
+    <nav class="sk-bottombar">
+        <span class="sk-bottombar-brand">{{ site_name() }}</span>
+        <span class="sk-bottombar-sep"></span>
+        {% block nav_links %}
+        <a href="/" class="sk-bottombar-link">Home</a>
+        {% if nav_pages %}
+        {% for pg in nav_pages %}
+        <a href="/{{ pg.slug }}" class="sk-bottombar-link">{{ pg.title }}</a>
+        {% endfor %}
+        {% endif %}
+        {% endblock %}
+        <span class="sk-bottombar-sep"></span>
+        {% if user %}
+            <a href="/admin" class="sk-bottombar-link">Dashboard</a>
+            <a href="/auth/logout" class="sk-bottombar-link">Logout</a>
+        {% else %}
+            <a href="/auth/login" class="sk-bottombar-link">Login</a>
+        {% endif %}
+    </nav>
+    {% endblock %}
+
+    {% block scripts %}{% endblock %}
+
+    <script src="{{ static_url('js/notifications.js') }}"></script>
+    <script>
+    // Flash message dismissal
+    document.querySelectorAll('.sk-flash-dismiss').forEach(btn => {
+        btn.addEventListener('click', () => {
+            btn.closest('.sk-flash').remove();
+        });
+    });
+    // Auto-dismiss success messages after 5 seconds
+    document.querySelectorAll('.sk-flash-success[data-dismissible]').forEach(flash => {
+        setTimeout(() => {
+            flash.style.opacity = '0';
+            setTimeout(() => flash.remove(), 300);
+        }, 5000);
+    });
+    </script>
+</body>
+</html>
