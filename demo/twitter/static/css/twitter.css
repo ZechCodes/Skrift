@@ -734,3 +734,13 @@ main.sk-content.twitter-layout {
         border-left: none;
     }
 }
+
+/* ========================================
+   Dark Theme (System Preference)
+   ======================================== */
+
+@media (prefers-color-scheme: dark) {
+    .form-error {
+        background-color: rgba(224, 85, 69, 0.12);
+    }
+}
