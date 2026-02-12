@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Lora:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/skrift.css">
     <style nonce="{{ csp_nonce() }}">
         .setup-container {
             max-width: 600px;
@@ -47,38 +47,38 @@
             justify-content: center;
             font-weight: bold;
             font-size: 0.875rem;
-            background: var(--color-surface);
-            color: var(--color-text-muted);
-            border: 1px solid var(--color-border);
+            background: var(--sk-color-surface);
+            color: var(--sk-color-muted);
+            border: 1px solid var(--sk-color-border);
         }
 
         .setup-progress-dot.active {
-            background: var(--color-primary);
-            color: var(--color-primary-text);
-            border-color: var(--color-primary);
+            background: var(--sk-color-accent);
+            color: var(--sk-color-accent-text);
+            border-color: var(--sk-color-accent);
         }
 
         .setup-progress-dot.completed {
-            background: var(--color-success);
+            background: var(--sk-color-success);
             color: white;
-            border-color: var(--color-success);
+            border-color: var(--sk-color-success);
         }
 
         .setup-progress-line {
             width: 2rem;
             height: 2px;
-            background: var(--color-border);
+            background: var(--sk-color-border);
         }
 
         .setup-progress-line.completed {
-            background: var(--color-success);
+            background: var(--sk-color-success);
         }
 
         .setup-card {
-            background: var(--color-surface);
-            border-radius: var(--radius-md);
+            background: var(--sk-color-surface);
+            border-radius: var(--sk-radius-md);
             padding: 2rem;
-            border: 1px solid var(--color-border);
+            border: 1px solid var(--sk-color-border);
         }
 
         .setup-card h2 {
@@ -87,7 +87,7 @@
         }
 
         .setup-card p.description {
-            color: var(--color-text-muted);
+            color: var(--sk-color-muted);
             margin-bottom: 1.5rem;
         }
 
@@ -104,7 +104,7 @@
         .form-group small {
             display: block;
             margin-top: 0.25rem;
-            color: var(--color-text-muted);
+            color: var(--sk-color-muted);
         }
 
         .form-group.env-toggle {
@@ -138,20 +138,20 @@
             align-items: flex-start;
             gap: 0.5rem;
             padding: 1rem;
-            border: 2px solid var(--color-border);
-            border-radius: var(--radius-md);
+            border: 2px solid var(--sk-color-border);
+            border-radius: var(--sk-radius-md);
             cursor: pointer;
             flex: 1;
-            background: var(--color-bg);
+            background: var(--sk-color-bg);
         }
 
         .radio-option:hover {
-            border-color: var(--color-primary);
+            border-color: var(--sk-color-accent);
         }
 
         .radio-option.selected {
-            border-color: var(--color-primary);
-            background: var(--color-surface);
+            border-color: var(--sk-color-accent);
+            background: var(--sk-color-surface);
         }
 
         .radio-option input[type="radio"] {
@@ -168,14 +168,14 @@
         }
 
         .radio-option .radio-content small {
-            color: var(--color-text-muted);
+            color: var(--sk-color-muted);
         }
 
         .conditional-fields {
             display: none;
             margin-top: 1.5rem;
             padding-top: 1.5rem;
-            border-top: 1px solid var(--color-border);
+            border-top: 1px solid var(--sk-color-border);
         }
 
         .conditional-fields.visible {
@@ -197,32 +197,32 @@
 
         .alert {
             padding: 1rem;
-            border-radius: var(--radius-md);
+            border-radius: var(--sk-radius-md);
             margin-bottom: 1rem;
         }
 
         .alert-error {
             background: rgba(239, 68, 68, 0.1);
-            color: var(--color-error);
-            border: 1px solid var(--color-error);
+            color: var(--sk-color-error);
+            border: 1px solid var(--sk-color-error);
         }
 
         .alert-success {
             background: rgba(16, 185, 129, 0.1);
-            color: var(--color-success);
-            border: 1px solid var(--color-success);
+            color: var(--sk-color-success);
+            border: 1px solid var(--sk-color-success);
         }
 
         .provider-card {
-            border: 2px solid var(--color-border);
-            border-radius: var(--radius-md);
+            border: 2px solid var(--sk-color-border);
+            border-radius: var(--sk-radius-md);
             margin-bottom: 1rem;
             overflow: hidden;
-            background: var(--color-bg);
+            background: var(--sk-color-bg);
         }
 
         .provider-card.enabled {
-            border-color: var(--color-primary);
+            border-color: var(--sk-color-accent);
         }
 
         .provider-header {
@@ -231,7 +231,7 @@
             gap: 1rem;
             padding: 1rem;
             cursor: pointer;
-            background: var(--color-surface);
+            background: var(--sk-color-surface);
         }
 
         .provider-header input[type="checkbox"] {
@@ -247,7 +247,7 @@
         .provider-fields {
             display: none;
             padding: 1rem;
-            border-top: 1px solid var(--color-border);
+            border-top: 1px solid var(--sk-color-border);
         }
 
         .provider-card.enabled .provider-fields {
@@ -259,9 +259,9 @@
         }
 
         .provider-instructions details {
-            background: var(--color-surface);
+            background: var(--sk-color-surface);
             padding: 0.5rem 1rem;
-            border-radius: var(--radius-sm);
+            border-radius: var(--sk-radius-sm);
         }
 
         .provider-instructions summary {
@@ -273,20 +273,20 @@
             white-space: pre-wrap;
             font-size: 0.875rem;
             margin: 0.5rem 0;
-            background: var(--color-bg);
+            background: var(--sk-color-bg);
             padding: 0.75rem;
-            border-radius: var(--radius-sm);
+            border-radius: var(--sk-radius-sm);
         }
 
         .redirect-url {
-            background: var(--color-bg);
+            background: var(--sk-color-bg);
             padding: 0.5rem;
-            border-radius: var(--radius-sm);
-            font-family: var(--font-family-mono);
+            border-radius: var(--sk-radius-sm);
+            font-family: var(--sk-font-mono);
             font-size: 0.875rem;
             word-break: break-all;
             margin: 0.5rem 0 1rem;
-            border: 1px solid var(--color-border);
+            border: 1px solid var(--sk-color-border);
         }
 
         .oauth-buttons {
@@ -301,7 +301,7 @@
             justify-content: center;
             gap: 0.75rem;
             padding: 1rem 1.5rem;
-            border-radius: var(--radius-pill);
+            border-radius: var(--sk-radius-pill);
             font-size: 1rem;
             font-weight: 600;
             text-decoration: none;
@@ -356,13 +356,13 @@
         }
 
         .complete-message h2 {
-            color: var(--color-success);
+            color: var(--sk-color-success);
         }
 
         .complete-icon {
             font-size: 4rem;
             margin-bottom: 1rem;
-            color: var(--color-success);
+            color: var(--sk-color-success);
         }
     </style>
     {% block head %}{% endblock %}

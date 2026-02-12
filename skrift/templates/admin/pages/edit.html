@@ -14,7 +14,7 @@
 
     <label for="slug">Slug</label>
     <input type="text" id="slug" name="slug" value="{{ page.slug if page else '' }}" required placeholder="e.g., about or services/consulting">
-    <small class="text-muted">The URL path for this page (e.g., "about" becomes /about)</small>
+    <small class="sk-text-muted">The URL path for this page (e.g., "about" becomes /about)</small>
 
     <label for="content">Content</label>
     <textarea id="content" name="content" rows="15">{{ page.content if page else '' }}</textarea>
@@ -29,11 +29,11 @@
 
         <label for="order">Display Order</label>
         <input type="number" id="order" name="order" value="{{ page.order if page else 0 }}" min="0">
-        <small class="text-muted">Lower numbers appear first (default: 0)</small>
+        <small class="sk-text-muted">Lower numbers appear first (default: 0)</small>
 
         <label for="publish_at">Schedule Publish</label>
         <input type="datetime-local" id="publish_at" name="publish_at" value="{{ page.publish_at.strftime('%Y-%m-%dT%H:%M') if page and page.publish_at else '' }}">
-        <small class="text-muted">Leave empty to publish immediately when published is checked</small>
+        <small class="sk-text-muted">Leave empty to publish immediately when published is checked</small>
     </fieldset>
 
     <details class="seo-settings">
@@ -61,11 +61,11 @@
         </fieldset>
     </details>
 
-    <div class="form-actions">
+    <div class="sk-form-actions">
         <button type="submit">{{ "Update" if page else "Create" }} Page</button>
-        <a href="/admin/pages" role="button" class="outline">Cancel</a>
+        <a href="/admin/pages" role="button" class="sk-btn-outline">Cancel</a>
         {% if page %}
-        <a href="/admin/pages/{{ page.id }}/revisions" role="button" class="outline secondary">View History</a>
+        <a href="/admin/pages/{{ page.id }}/revisions" role="button" class="sk-btn-outline">View History</a>
         {% endif %}
     </div>
 </form>

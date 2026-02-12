@@ -1,0 +1,343 @@
+/* Skrift CMS — Public Site Theme
+   ======================================== */
+
+/* ========================================
+   Bottom Bar
+   ======================================== */
+
+.sk-bottombar {
+    position: fixed;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9998;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: var(--sk-bottombar-bg, #1e2a3a);
+    border-radius: 1.25rem;
+    padding: 0.375rem 0.5rem;
+    box-shadow: var(--sk-shadow-lg);
+}
+
+.sk-bottombar-brand {
+    font-family: var(--sk-font-display);
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: 0.06em;
+    padding: 0.375rem 1rem;
+}
+
+.sk-bottombar-sep {
+    width: 1px;
+    height: 1.25rem;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.sk-bottombar-link {
+    font-size: 1rem;
+    color: rgba(255, 255, 255, 0.4);
+    padding: 0.375rem 0.875rem;
+    border-radius: 0.875rem;
+    transition: all var(--sk-transition-fast);
+    text-decoration: none;
+}
+
+.sk-bottombar-link:hover {
+    color: rgba(255, 255, 255, 0.8);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.sk-bottombar-link.active {
+    color: #fff;
+    background: var(--sk-color-accent);
+}
+
+/* ========================================
+   Masthead
+   ======================================== */
+
+.sk-masthead {
+    max-width: var(--sk-content-width, 66.25rem);
+    margin: 0 auto;
+    padding: 3rem 1.5rem 2rem;
+    text-align: center;
+}
+
+.sk-masthead h1 {
+    font-family: var(--sk-font-display);
+    font-size: 2.25rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: var(--sk-color-text);
+    margin-bottom: 0.375rem;
+}
+
+.sk-masthead .sk-tagline {
+    font-size: 1rem;
+    font-style: italic;
+    color: var(--sk-color-muted);
+    margin: 0;
+}
+
+/* ========================================
+   Content Container
+   ======================================== */
+
+.sk-content {
+    max-width: var(--sk-content-width, 66.25rem);
+    margin: 0 auto;
+    padding: 0 1.5rem var(--sk-space-2xl);
+    min-height: calc(100vh - 16.25rem);
+}
+
+/* ========================================
+   Hero Card
+   ======================================== */
+
+.sk-hero {
+    background: var(--sk-color-surface);
+    border: 1px solid var(--sk-color-border);
+    border-radius: var(--sk-radius-xl);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    overflow: hidden;
+    margin-bottom: 2.5rem;
+    transition: box-shadow var(--sk-transition-normal);
+}
+
+.sk-hero:hover {
+    box-shadow: 0 0.25rem 1.25rem rgba(0, 0, 0, 0.06);
+}
+
+.sk-hero-img {
+    background: linear-gradient(135deg, var(--sk-color-accent), #6c5ce7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 21.25rem;
+    color: rgba(255, 255, 255, 0.15);
+    font-family: var(--sk-font-display);
+    font-size: 5rem;
+    font-weight: 600;
+}
+
+.sk-hero-text {
+    padding: 2.75rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.sk-hero .sk-badge {
+    display: inline-block;
+    font-size: 1rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.375rem;
+    background: var(--sk-color-accent-soft);
+    color: var(--sk-color-accent);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 1rem;
+    align-self: flex-start;
+}
+
+.sk-hero h2 {
+    font-family: var(--sk-font-display);
+    font-size: 1.625rem;
+    font-weight: 500;
+    line-height: var(--sk-line-height-tight);
+    margin-bottom: 0.875rem;
+}
+
+.sk-hero p {
+    font-size: 1rem;
+    line-height: 1.7;
+    color: var(--sk-color-muted);
+    margin-bottom: 1rem;
+}
+
+.sk-hero .sk-meta {
+    font-size: 1rem;
+    color: var(--sk-color-muted);
+}
+
+.sk-hero .sk-meta strong {
+    color: var(--sk-color-text);
+}
+
+@media (max-width: 768px) {
+    .sk-hero {
+        grid-template-columns: 1fr;
+    }
+
+    .sk-hero-img {
+        min-height: 12.5rem;
+        font-size: 3rem;
+    }
+
+    .sk-hero-text {
+        padding: 1.5rem;
+    }
+}
+
+/* ========================================
+   Section Labels
+   ======================================== */
+
+.sk-section-label {
+    font-family: var(--sk-font-display);
+    font-size: 1rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--sk-color-muted);
+    margin-bottom: 1.25rem;
+}
+
+/* ========================================
+   Card Grid
+   ======================================== */
+
+.sk-card-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+}
+
+@media (max-width: 900px) {
+    .sk-card-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 600px) {
+    .sk-card-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ========================================
+   Post Cards
+   ======================================== */
+
+.sk-post-card {
+    background: var(--sk-color-surface);
+    border: 1px solid var(--sk-color-border);
+    border-radius: 0.875rem;
+    overflow: hidden;
+    transition: box-shadow var(--sk-transition-normal), transform var(--sk-transition-normal);
+}
+
+.sk-post-card:hover {
+    box-shadow: 0 0.375rem 1.5rem rgba(0, 0, 0, 0.06);
+    transform: translateY(-0.125rem);
+}
+
+.sk-post-card-img {
+    height: 10rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.2);
+    font-family: var(--sk-font-display);
+    font-size: 2rem;
+    font-weight: 600;
+    background: linear-gradient(135deg, var(--sk-color-accent), #6c5ce7);
+}
+
+.sk-post-card-body {
+    padding: 1.375rem;
+}
+
+.sk-post-card .sk-badge {
+    display: inline-block;
+    font-size: 1rem;
+    padding: 0.1875rem 0.5625rem;
+    border-radius: 0.3125rem;
+    background: var(--sk-color-accent-soft);
+    color: var(--sk-color-accent);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.625rem;
+}
+
+.sk-post-card h3 {
+    font-family: var(--sk-font-display);
+    font-size: 1.0625rem;
+    font-weight: 500;
+    line-height: 1.35;
+    margin-bottom: 0.625rem;
+}
+
+.sk-post-card p {
+    font-size: 1rem;
+    line-height: var(--sk-line-height);
+    color: var(--sk-color-muted);
+    margin-bottom: 0.75rem;
+}
+
+.sk-post-card .sk-meta {
+    font-size: 1rem;
+    color: var(--sk-color-muted);
+}
+
+/* ========================================
+   Footer
+   ======================================== */
+
+.sk-footer {
+    background: var(--sk-color-warm);
+    border-top: 1px solid var(--sk-color-border);
+    color: var(--sk-color-muted);
+    text-align: center;
+    padding: 2.25rem 2.25rem 6.25rem;
+    font-size: 1rem;
+}
+
+.sk-footer-brand {
+    font-family: var(--sk-font-display);
+    font-size: 1rem;
+    color: var(--sk-color-text);
+    letter-spacing: 0.08em;
+    margin-bottom: 0.375rem;
+}
+
+/* ========================================
+   Article / Page Content
+   ======================================== */
+
+article {
+    margin-bottom: var(--sk-space-lg);
+}
+
+article:last-child {
+    margin-bottom: 0;
+}
+
+article header {
+    padding: 0;
+    margin-bottom: var(--sk-space-md);
+}
+
+article footer {
+    padding: 0;
+    margin-top: var(--sk-space-lg);
+}
+
+/* ========================================
+   Responsive Masthead
+   ======================================== */
+
+@media (max-width: 600px) {
+    .sk-masthead {
+        padding: 2rem 1rem 1.5rem;
+    }
+
+    .sk-masthead h1 {
+        font-size: 1.75rem;
+    }
+}

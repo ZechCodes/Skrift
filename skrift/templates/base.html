@@ -29,50 +29,39 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Lora:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/skrift.css">
+    <link rel="stylesheet" href="/static/css/site.css">
     {% block head %}{% endblock %}
 </head>
 <body>
-    <header class="container">
-        <nav>
-            <ul>
-                <li><a href="/" class="site-name">{{ site_name() }}</a></li>
-            </ul>
-            <ul>
-                {% if user %}
-                    <li class="user-info">
-                        {% if user.picture_url %}
-                            <img src="{{ user.picture_url }}" alt="{{ user.name }}" referrerpolicy="no-referrer">
-                        {% endif %}
-                        <span>{{ user.name or user.email }}</span>
-                    </li>
-                    <li><a href="/auth/logout" role="button" class="outline">Logout</a></li>
-                {% else %}
-                    <li><a href="/auth/login" role="button">Login</a></li>
-                {% endif %}
-            </ul>
-        </nav>
+    {% block body %}
+    {% block masthead %}
+    <header class="sk-masthead">
+        <h1><a href="/" style="color: inherit; text-decoration: none;">{{ site_name() }}</a></h1>
+        {% if site_tagline() %}
+        <p class="sk-tagline">{{ site_tagline() }}</p>
+        {% endif %}
     </header>
+    {% endblock %}
 
-    <main class="container{% block main_class %}{% endblock %}">
-        {# Enhanced flash messages with types #}
+    <main class="sk-content{% block main_class %}{% endblock %}">
+        {# Flash messages #}
         {% if flash_messages %}
-        <div class="flash-messages" role="status" aria-live="polite">
+        <div class="sk-flash-messages" role="status" aria-live="polite">
             {% for msg in flash_messages %}
-            <article role="alert" class="flash flash-{{ msg.type.value }}" {% if msg.dismissible %}data-dismissible{% endif %}>
-                <span class="flash-message">{{ msg.message }}</span>
+            <article role="alert" class="sk-flash sk-flash-{{ msg.type.value }}" {% if msg.dismissible %}data-dismissible{% endif %}>
+                <span class="sk-flash-message">{{ msg.message }}</span>
                 {% if msg.dismissible %}
-                <button type="button" class="flash-dismiss" aria-label="Dismiss">&times;</button>
+                <button type="button" class="sk-flash-dismiss" aria-label="Dismiss">&times;</button>
                 {% endif %}
             </article>
             {% endfor %}
         </div>
-        {# Backwards compatibility: old single flash string #}
         {% elif flash %}
-        <div class="flash-messages" role="status" aria-live="polite">
-            <article role="alert" class="flash flash-info" data-dismissible>
-                <span class="flash-message">{{ flash }}</span>
-                <button type="button" class="flash-dismiss" aria-label="Dismiss">&times;</button>
+        <div class="sk-flash-messages" role="status" aria-live="polite">
+            <article role="alert" class="sk-flash sk-flash-info" data-dismissible>
+                <span class="sk-flash-message">{{ flash }}</span>
+                <button type="button" class="sk-flash-dismiss" aria-label="Dismiss">&times;</button>
             </article>
         </div>
         {% endif %}
@@ -80,22 +69,38 @@
         {% block content %}{% endblock %}
     </main>
 
-    <footer class="container">
-        <hr>
-        <p><small>&copy; {% if site_copyright_start_year() and site_copyright_start_year() != now().year %}{{ site_copyright_start_year() }}-{% endif %}{{ now().year }} {{ site_copyright_holder() or site_name() }}. All rights reserved.</small></p>
+    <footer class="sk-footer">
+        <div class="sk-footer-brand">{{ site_name() }}</div>
+        <p>&copy; {% if site_copyright_start_year() and site_copyright_start_year() != now().year %}{{ site_copyright_start_year() }}-{% endif %}{{ now().year }} {{ site_copyright_holder() or site_name() }}. All rights reserved.</p>
     </footer>
+
+    <nav class="sk-bottombar">
+        <span class="sk-bottombar-brand">{{ site_name() }}</span>
+        <span class="sk-bottombar-sep"></span>
+        {% block nav_links %}
+        <a href="/" class="sk-bottombar-link">Home</a>
+        {% endblock %}
+        <span class="sk-bottombar-sep"></span>
+        {% if user %}
+            <a href="/admin" class="sk-bottombar-link">Dashboard</a>
+            <a href="/auth/logout" class="sk-bottombar-link">Logout</a>
+        {% else %}
+            <a href="/auth/login" class="sk-bottombar-link">Login</a>
+        {% endif %}
+    </nav>
+    {% endblock %}
 
     {% block scripts %}{% endblock %}
 
     <script>
     // Flash message dismissal
-    document.querySelectorAll('.flash-dismiss').forEach(btn => {
+    document.querySelectorAll('.sk-flash-dismiss').forEach(btn => {
         btn.addEventListener('click', () => {
-            btn.closest('.flash').remove();
+            btn.closest('.sk-flash').remove();
         });
     });
     // Auto-dismiss success messages after 5 seconds
-    document.querySelectorAll('.flash-success[data-dismissible]').forEach(flash => {
+    document.querySelectorAll('.sk-flash-success[data-dismissible]').forEach(flash => {
         setTimeout(() => {
             flash.style.opacity = '0';
             setTimeout(() => flash.remove(), 300);
