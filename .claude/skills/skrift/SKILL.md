@@ -47,6 +47,9 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 | `skrift/db/base.py` | SQLAlchemy Base class (UUIDAuditBase) |
 | `skrift/forms/` | Form system (CSRF, validation, rendering) |
 | `skrift/auth/` | Guards, roles, permissions |
+| `skrift/lib/notifications.py` | Real-time notification service (SSE) |
+| `skrift/controllers/notifications.py` | SSE stream + dismiss endpoints |
+| `skrift/static/js/notifications.js` | Client-side notification handler |
 
 ### CLI Commands
 
@@ -152,8 +155,51 @@ result = await hooks.apply_filters("my_filter", initial_value, arg1)
 ```
 
 Built-in hooks:
-- Actions: `before_page_save`, `after_page_save`, `before_page_delete`, `after_page_delete`
+- Actions: `before_page_save`, `after_page_save`, `before_page_delete`, `after_page_delete`, `notification_sent`, `notification_dismissed`
 - Filters: `page_seo_meta`, `page_og_meta`, `sitemap_urls`, `sitemap_page`, `robots_txt`, `template_context`, `form_{name}_validated`, `form_validated`
+
+### Using Notifications
+
+Skrift includes a real-time notification system delivered via Server-Sent Events (SSE). Notifications appear as toast popups and persist until dismissed.
+
+**Three delivery scopes:**
+
+```python
+from skrift.lib.notifications import notify_session, notify_user, notify_broadcast, _ensure_nid
+
+# Session-scoped — stored, replayed on reconnect
+nid = _ensure_nid(request)
+notify_session(nid, "generic", title="Saved", message="Your draft was saved.")
+
+# User-scoped — stored, delivered to all sessions of a user
+notify_user(str(user.id), "generic", title="New reply", message="Someone replied to your post.")
+
+# Broadcast — ephemeral, not stored, all active connections
+notify_broadcast("new_tweet", tweet_id="...", content_html="...")
+```
+
+**Built-in notification types:**
+- `"generic"` — rendered as a toast with `title` + `message` (built-in UI)
+- `"dismissed"` — internal, triggers client-side removal
+- Custom types — dispatched via `sk:notification` CustomEvent for app-specific handling
+
+**Client-side custom event handling:**
+
+```javascript
+document.addEventListener('sk:notification', (e) => {
+    const data = e.detail;  // { type, id, ...payload }
+    if (data.type === 'my_custom_type') {
+        // Handle custom notification — build your own UI
+        e.preventDefault();  // Prevents default generic toast
+    }
+});
+```
+
+**Key details:**
+- SSE endpoint: `GET /notifications/stream` (auto-connected by `notifications.js`)
+- Dismiss endpoint: `DELETE /notifications/{id}`
+- SSE excluded from gzip compression in `skrift/asgi.py`
+- Hook constants: `NOTIFICATION_SENT`, `NOTIFICATION_DISMISSED` (in `skrift/lib/hooks.py`)
 
 ### Using Forms
 

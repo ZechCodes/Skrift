@@ -405,6 +405,65 @@ Served from `/static/` with same priority as templates:
 1. `./static/` (project root - user overrides)
 2. `skrift/static/` (package - defaults)
 
+## Notification System
+
+### Architecture
+
+```
+NotificationService (singleton, in-memory)
+├── Session queues  →  keyed by session ID (_nid)
+├── User queues     →  keyed by user ID
+└── Connections     →  asyncio.Queue per active SSE stream
+```
+
+**Files:**
+
+| File | Purpose |
+|------|---------|
+| `skrift/lib/notifications.py` | `NotificationService` singleton, convenience functions |
+| `skrift/controllers/notifications.py` | SSE stream + dismiss HTTP endpoints |
+| `skrift/static/js/notifications.js` | `SkriftNotifications` client class |
+| `skrift/static/css/skrift.css` | `.sk-notification*` toast styles |
+
+### Delivery Scopes
+
+| Function | Stored? | Target | Use case |
+|----------|---------|--------|----------|
+| `notify_session(nid, type, **payload)` | Yes | Single session | Transient feedback (saves, errors) |
+| `notify_user(user_id, type, **payload)` | Yes | All sessions of user | Cross-device (replies, likes) |
+| `notify_broadcast(type, **payload)` | No | All connections | Feed updates (new posts) |
+
+Stored notifications replay on reconnect. Broadcast notifications are ephemeral.
+
+### SSE Protocol (Three-Phase)
+
+1. **Flush**: Server sends all queued notifications for the session/user
+2. **Sync**: Server sends `event: sync` — client reconciles (removes dismissed-elsewhere items)
+3. **Live**: Server pushes new notifications as they arrive; 30s keepalive comments prevent proxy timeouts
+
+### Client Behavior
+
+- Auto-connects on page load and `window.focus`, disconnects on `window.blur`
+- Reconnects after 5s on error
+- Deduplicates via `_displayedIds` Set
+- Max visible toasts: 3 (desktop) / 2 (mobile); excess queued
+- Dispatches `sk:notification` CustomEvent (cancelable) for every notification
+- Only renders `"generic"` type as toast; custom types handled via event listeners
+- Global instance: `window.__skriftNotifications`
+
+### Dismiss Flow
+
+1. User clicks dismiss → client adds `.sk-notification-exit` (slide-out animation)
+2. Client sends `DELETE /notifications/{id}`
+3. Server removes from queues, broadcasts `"dismissed"` event to user's other sessions
+4. Other sessions remove the toast via `_removeDismissed()`
+
+### Integration with Hooks
+
+Two hook constants defined in `skrift/lib/hooks.py`:
+- `NOTIFICATION_SENT` — action fired after a notification is sent
+- `NOTIFICATION_DISMISSED` — action fired after a notification is dismissed
+
 ## Error Handling
 
 Custom exception handlers in `skrift/lib/exceptions.py`:

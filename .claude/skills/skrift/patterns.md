@@ -344,6 +344,78 @@ async def save_thing(db_session: AsyncSession, data: dict) -> Thing:
     return thing
 ```
 
+## Notification Patterns
+
+### Send a Generic Toast Notification
+
+```python
+from skrift.lib.notifications import notify_user, notify_session, _ensure_nid
+
+# To a specific user (persists, cross-device)
+notify_user(str(user.id), "generic", title="New follower", message="Alice followed you.")
+
+# To the current session only (persists until dismissed)
+nid = _ensure_nid(request)
+notify_session(nid, "generic", title="Draft saved", message="Your changes were saved.")
+```
+
+### Broadcast an Ephemeral Event
+
+```python
+from skrift.lib.notifications import notify_broadcast
+
+# Ephemeral — not stored, won't replay on reconnect
+notify_broadcast(
+    "new_post",
+    post_id=str(post.id),
+    author=post.author.name,
+    title=post.title,
+)
+```
+
+### Handle Custom Notification Types (Client-Side)
+
+```javascript
+// Listen for custom notification types
+document.addEventListener('sk:notification', (e) => {
+    const data = e.detail;
+    if (data.type !== 'new_post') return;
+
+    // Custom rendering logic
+    const list = document.querySelector('.post-list');
+    if (list) {
+        const el = buildPostCard(data);
+        list.prepend(el);
+    }
+
+    // Prevent default generic toast rendering
+    e.preventDefault();
+});
+```
+
+### Notify on Action (Controller Pattern)
+
+```python
+from skrift.lib.notifications import notify_user
+
+@post("/{item_id:uuid}/comment", guards=[auth_guard])
+async def comment(self, request: Request, db_session: AsyncSession, item_id: UUID) -> Redirect:
+    user = await self._get_user(request, db_session)
+    comment = await comment_service.create(db_session, user.id, item_id, form.data.content)
+
+    # Notify item owner (skip if self-comment)
+    item = await item_service.get_by_id(db_session, item_id)
+    if item and str(item.user_id) != str(user.id):
+        notify_user(
+            str(item.user_id),
+            "generic",
+            title=f"{user.name} commented on your post",
+            message=form.data.content[:100],
+        )
+
+    return Redirect(path=f"/items/{item_id}")
+```
+
 ## Form Patterns
 
 ### Basic Form Model
