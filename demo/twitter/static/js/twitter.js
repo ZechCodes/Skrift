@@ -1,5 +1,41 @@
 /* The Feed — interactions & micro-animations */
 
+/* ── Client-side HTML sanitizer (defense-in-depth) ── */
+function sanitizeHTML(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const allowed = { A: ['href', 'rel', 'target'] };
+
+    function clean(parent) {
+        for (const node of Array.from(parent.childNodes)) {
+            if (node.nodeType === Node.TEXT_NODE) continue;
+            if (node.nodeType !== Node.ELEMENT_NODE) {
+                node.remove();
+                continue;
+            }
+            const tag = node.tagName;
+            if (!(tag in allowed)) {
+                // Replace disallowed element with its text content
+                node.replaceWith(document.createTextNode(node.textContent));
+                continue;
+            }
+            // Strip disallowed attributes
+            for (const attr of Array.from(node.attributes)) {
+                if (!allowed[tag].includes(attr.name)) {
+                    node.removeAttribute(attr.name);
+                }
+            }
+            // Block javascript: URIs
+            if (node.hasAttribute('href') && /^\s*javascript\s*:/i.test(node.getAttribute('href'))) {
+                node.removeAttribute('href');
+            }
+            clean(node);
+        }
+    }
+
+    clean(doc.body);
+    return doc.body.innerHTML;
+}
+
 /* ── SVG icon constants (match _tweet_card.html) ── */
 const ICON_REPLY = '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>';
 const ICON_RETWEET = '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4m14 0v2a4 4 0 01-4 4H3"/></svg>';
@@ -87,7 +123,7 @@ function buildTweetCard(data) {
     // Content (server-rendered, escaped HTML)
     const content = document.createElement('div');
     content.className = 'tweet-content';
-    content.innerHTML = data.content_html;
+    content.innerHTML = sanitizeHTML(data.content_html);
 
     // Actions
     const actions = document.createElement('div');

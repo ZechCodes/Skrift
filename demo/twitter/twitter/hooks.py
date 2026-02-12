@@ -1,5 +1,4 @@
 import re
-from html import escape
 
 from skrift.lib.hooks import filter as filter_hook
 
@@ -29,8 +28,7 @@ _HASHTAG_RE = re.compile(r'#(\w+)')
 
 @filter_hook(TWEET_CONTENT_RENDER, priority=10)
 def linkify_urls(content: str) -> str:
-    """Escape HTML then convert URLs to clickable links."""
-    content = escape(content)
+    """Convert URLs to clickable links. Content is pre-escaped by render_tweet_content."""
     return _URL_RE.sub(r'<a href="\1" rel="nofollow noopener" target="_blank">\1</a>', content)
 
 

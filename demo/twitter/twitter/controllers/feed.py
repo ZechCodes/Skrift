@@ -104,7 +104,7 @@ class FeedController(Controller):
     async def search(self, request: Request, db_session: AsyncSession) -> TemplateResponse:
         user = await self._get_user(request, db_session)
         flash_messages = get_flash_messages(request)
-        q = request.query_params.get("q", "").strip()
+        q = request.query_params.get("q", "").strip()[:200]
 
         tweets = []
         if q:
