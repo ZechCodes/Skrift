@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skrift — Editorial</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Lora:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+body { font-family: 'Lora', Georgia, serif; background: #faf6f1; color: #2c2420; min-height: 100vh; }
+a { text-decoration: none; color: inherit; }
+button { cursor: pointer; border: none; background: none; font-family: inherit; }
+
+/* --- Overlay Nav --- */
+.overlay-trigger {
+  position: fixed; top: 20px; right: 20px; z-index: 9999;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: rgba(107,58,42,0.85); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; backdrop-filter: blur(8px);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+  transition: transform 0.2s;
+}
+.overlay-trigger:hover { transform: scale(1.08); }
+.overlay-nav {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0,0,0,0.85); backdrop-filter: blur(20px);
+  display: none; align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px;
+}
+.overlay-nav.open { display: flex; }
+.overlay-nav .close-btn {
+  position: absolute; top: 24px; right: 24px;
+  font-size: 28px; color: #fff; opacity: 0.6; transition: opacity 0.2s;
+}
+.overlay-nav .close-btn:hover { opacity: 1; }
+.overlay-nav .nav-title {
+  font-family: 'Cinzel', serif; font-size: 12px; font-weight: 600;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  color: rgba(255,255,255,0.4); margin-bottom: 20px;
+}
+.overlay-nav a {
+  font-family: 'Cinzel', serif; font-size: 28px; font-weight: 500;
+  color: rgba(255,255,255,0.5); transition: color 0.2s;
+  letter-spacing: 0.04em; padding: 8px 0;
+}
+.overlay-nav a:hover { color: #fff; }
+.overlay-nav a.current { color: #fff; }
+
+/* --- View Toggle (top-left pill) --- */
+.view-toggle {
+  position: fixed; top: 20px; left: 20px; z-index: 9998;
+  display: flex; gap: 2px;
+  background: rgba(0,0,0,0.06); border-radius: 20px; padding: 3px;
+}
+.view-toggle button {
+  font-family: 'Lora', serif; font-size: 13px;
+  padding: 6px 18px; border-radius: 18px;
+  color: #8a7e74; transition: all 0.2s;
+}
+.view-toggle button:hover { color: #2c2420; }
+.view-toggle button.active { background: #fff; color: #2c2420; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+
+:root {
+  --bg: #faf6f1; --text: #2c2420; --muted: #8a7e74;
+  --accent: #a0522d; --accent2: #6b3a2a;
+  --border: #e2dbd3; --surface: #fff; --warm: #f0e8df;
+}
+.variation-view { display: none; }
+.variation-view.active { display: block; }
+
+/* ==========================================================
+   EDITORIAL DASHBOARD
+   Centered masthead with nav below it. No sidebar.
+   Two-column: wide content + narrow aside.
+   ========================================================== */
+.dash { padding-top: 64px; }
+
+/* Masthead - centered, grand */
+.dash-mast {
+  text-align: center; padding: 40px 40px 0;
+}
+.dash-mast h1 {
+  font-family: 'Cinzel', serif; font-size: 32px; font-weight: 600;
+  letter-spacing: 0.1em; color: var(--accent2);
+}
+.dash-mast .tagline {
+  font-style: italic; color: var(--muted); font-size: 14px; margin-top: 4px;
+}
+/* Decorative rule */
+.dash-rule {
+  max-width: 600px; margin: 20px auto; height: 1px;
+  background: var(--border); position: relative;
+}
+.dash-rule::after {
+  content: '❦'; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg); padding: 0 12px;
+  color: var(--accent); font-size: 16px;
+}
+/* Nav row - centered, spaced, editorial feel */
+.dash-nav-row {
+  display: flex; justify-content: center; gap: 36px;
+  padding: 16px 0 20px;
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
+  border-bottom: 2px solid var(--text);
+  max-width: 700px; margin: 0 auto;
+}
+.dash-nav-row span { cursor: pointer; transition: color 0.2s; }
+.dash-nav-row span:hover { color: var(--accent); }
+.dash-nav-row span.current { color: var(--accent); font-weight: 600; }
+
+/* Two-column body: wide + narrow aside */
+.dash-body {
+  max-width: 960px; margin: 0 auto; padding: 32px 40px;
+  display: grid; grid-template-columns: 1fr 260px; gap: 48px;
+}
+
+/* Left column - main content */
+.dash-main h2 {
+  font-family: 'Cinzel', serif; font-size: 14px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
+  margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.dash-welcome {
+  font-size: 17px; line-height: 1.7; color: var(--muted);
+  margin-bottom: 32px; font-style: italic;
+  border-left: 3px solid var(--accent); padding-left: 20px;
+}
+.dash-stats-row {
+  display: flex; gap: 0; margin-bottom: 36px;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.dash-stat-item {
+  flex: 1; padding: 20px 24px; text-align: center;
+  border-right: 1px solid var(--border);
+}
+.dash-stat-item:last-child { border-right: none; }
+.dash-stat-item .num {
+  font-family: 'Cinzel', serif; font-size: 28px; font-weight: 600;
+  color: var(--accent2);
+}
+.dash-stat-item .lbl {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--muted); margin-top: 4px;
+}
+
+/* Content list (not a table - editorial style) */
+.content-list-item {
+  display: flex; align-items: baseline; gap: 16px;
+  padding: 16px 0; border-bottom: 1px solid var(--border);
+}
+.content-list-item:first-child { border-top: 1px solid var(--border); }
+.cli-num {
+  font-family: 'Cinzel', serif; font-size: 11px; color: var(--accent);
+  min-width: 20px;
+}
+.cli-body { flex: 1; }
+.cli-title { font-weight: 600; font-size: 15px; margin-bottom: 3px; color: var(--accent2); }
+.cli-meta { font-size: 12px; color: var(--muted); font-style: italic; }
+.cli-status {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 3px 10px; font-weight: 600;
+}
+.cli-status.pub { color: #3a7a2a; }
+.cli-status.draft { color: var(--accent); }
+
+.btn-new-post {
+  display: inline-block; margin-top: 20px;
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--accent); border: 1px solid var(--accent);
+  padding: 8px 20px; transition: all 0.2s; font-weight: 600;
+}
+.btn-new-post:hover { background: var(--accent); color: #fff; }
+
+/* Right aside */
+.dash-aside h3 {
+  font-family: 'Cinzel', serif; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
+  margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.aside-section { margin-bottom: 28px; }
+.aside-row {
+  display: flex; justify-content: space-between;
+  padding: 8px 0; font-size: 13px;
+  border-bottom: 1px dotted var(--border);
+}
+.aside-row .ar-label { color: var(--muted); }
+.aside-row .ar-val { font-weight: 600; }
+.aside-activity {
+  padding: 10px 0; border-bottom: 1px dotted var(--border);
+  font-size: 13px; color: var(--muted);
+}
+.aside-activity strong { color: var(--text); }
+.aside-activity .time { font-size: 11px; margin-top: 2px; }
+.aside-user {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 0;
+}
+.aside-user .av {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Cinzel', serif; font-size: 11px; font-weight: 600;
+}
+.aside-user .av-info { font-size: 13px; }
+.aside-user .av-info .name { font-weight: 600; }
+.aside-user .av-info .role { font-size: 11px; color: var(--muted); }
+
+/* ==========================================================
+   EDITORIAL BLOG
+   Grand centered masthead, single-column, literary feel.
+   No sidebar. Generous whitespace. Pull quotes.
+   ========================================================== */
+.blog { padding-top: 64px; }
+.blog-mast {
+  text-align: center; padding: 56px 40px 32px;
+}
+.blog-mast h1 {
+  font-family: 'Cinzel', serif; font-size: 42px; font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.blog-mast .tagline { font-style: italic; color: var(--muted); font-size: 15px; margin-top: 8px; }
+.blog-mast-rule {
+  max-width: 500px; margin: 24px auto; height: 1px;
+  background: var(--border); position: relative;
+}
+.blog-mast-rule::after {
+  content: '❦'; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg); padding: 0 12px;
+  color: var(--accent); font-size: 16px;
+}
+.blog-nav {
+  display: flex; justify-content: center; gap: 32px;
+  padding: 0 0 24px; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  border-bottom: 2px solid var(--text);
+  max-width: 600px; margin: 0 auto;
+}
+.blog-nav span { cursor: pointer; }
+.blog-nav span:hover { color: var(--accent); }
+
+/* Featured post - large, centered */
+.blog-featured {
+  max-width: 680px; margin: 56px auto 0; padding: 0 24px;
+}
+.blog-featured .cat {
+  font-family: 'Cinzel', serif; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--accent); text-align: center; margin-bottom: 16px;
+}
+.blog-featured h2 {
+  font-family: 'Cinzel', serif; font-size: 34px; font-weight: 500;
+  line-height: 1.25; text-align: center; margin-bottom: 20px;
+}
+.blog-featured .pull-quote {
+  font-size: 19px; line-height: 1.7; color: var(--muted);
+  font-style: italic; text-align: center;
+  margin: 0 auto 20px; max-width: 560px;
+  position: relative; padding: 20px 0;
+}
+.blog-featured .pull-quote::before,
+.blog-featured .pull-quote::after {
+  content: ''; display: block; width: 40px; height: 1px;
+  background: var(--accent); margin: 0 auto;
+}
+.blog-featured .pull-quote::before { margin-bottom: 20px; }
+.blog-featured .pull-quote::after { margin-top: 20px; }
+.blog-featured .meta {
+  font-size: 13px; color: var(--muted); text-align: center;
+}
+.blog-featured .meta strong { color: var(--text); }
+
+/* Section divider */
+.section-rule {
+  max-width: 680px; margin: 48px auto;
+  border: none; border-top: 1px solid var(--border);
+}
+
+/* Recent posts - editorial list, not cards */
+.blog-recent {
+  max-width: 680px; margin: 0 auto; padding: 0 24px;
+}
+.blog-recent h3 {
+  font-family: 'Cinzel', serif; font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--muted); margin-bottom: 20px; text-align: center;
+}
+.blog-post-item {
+  padding: 28px 0; border-bottom: 1px solid var(--border);
+}
+.blog-post-item:first-child { border-top: 1px solid var(--border); }
+.blog-post-item .post-cat {
+  font-family: 'Cinzel', serif; font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--accent); margin-bottom: 6px;
+}
+.blog-post-item h4 {
+  font-family: 'Cinzel', serif; font-size: 20px; font-weight: 500;
+  line-height: 1.3; margin-bottom: 8px;
+}
+.blog-post-item p {
+  font-size: 15px; line-height: 1.65; color: var(--muted); margin-bottom: 8px;
+}
+.blog-post-item .meta { font-size: 12px; color: var(--muted); font-style: italic; }
+
+.blog-footer {
+  text-align: center; padding: 48px 40px;
+  border-top: 2px solid var(--text); margin-top: 48px;
+  max-width: 680px; margin-left: auto; margin-right: auto;
+}
+.blog-footer .ft-name {
+  font-family: 'Cinzel', serif; font-size: 16px; font-weight: 600;
+  letter-spacing: 0.1em; margin-bottom: 6px;
+}
+.blog-footer p { font-size: 12px; color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<button class="overlay-trigger" onclick="document.querySelector('.overlay-nav').classList.add('open')">&#9783;</button>
+<div class="overlay-nav">
+  <button class="close-btn" onclick="this.parentElement.classList.remove('open')">&times;</button>
+  <div class="nav-title">Design Variations</div>
+  <a href="skrift-editorial.html" class="current">Editorial</a>
+  <a href="skrift-slate.html">Slate</a>
+  <a href="skrift-ink.html">Ink</a>
+  <a href="skrift-paper.html">Paper</a>
+  <a href="skrift-garden.html">Garden</a>
+</div>
+
+<div class="view-toggle">
+  <button class="active" onclick="showView('dash')">Dashboard</button>
+  <button onclick="showView('blog')">Blog</button>
+</div>
+
+<!-- ==================== DASHBOARD ==================== -->
+<div class="variation-view dash active" id="view-dash">
+  <div class="dash-mast">
+    <h1>Skrift</h1>
+    <p class="tagline">Content Management System</p>
+  </div>
+  <div class="dash-rule"></div>
+  <div class="dash-nav-row">
+    <span class="current">Dashboard</span>
+    <span>Content</span>
+    <span>Media</span>
+    <span>Comments</span>
+    <span>Settings</span>
+  </div>
+
+  <div class="dash-body">
+    <div class="dash-main">
+      <p class="dash-welcome">Welcome back, Eleanor. Your publication has been steadily growing — three new pieces this week, and readership is up twelve percent.</p>
+
+      <h2>At a Glance</h2>
+      <div class="dash-stats-row">
+        <div class="dash-stat-item">
+          <div class="num">47</div>
+          <div class="lbl">Published</div>
+        </div>
+        <div class="dash-stat-item">
+          <div class="num">12</div>
+          <div class="lbl">Drafts</div>
+        </div>
+        <div class="dash-stat-item">
+          <div class="num">8.4k</div>
+          <div class="lbl">Readers</div>
+        </div>
+        <div class="dash-stat-item">
+          <div class="num">156</div>
+          <div class="lbl">Comments</div>
+        </div>
+      </div>
+
+      <h2>Recent Content</h2>
+      <div class="content-list-item">
+        <div class="cli-num">I</div>
+        <div class="cli-body">
+          <div class="cli-title">The Art of Slow Reading</div>
+          <div class="cli-meta">Eleanor Vance &middot; February 10, 2026</div>
+        </div>
+        <div class="cli-status pub">Published</div>
+      </div>
+      <div class="content-list-item">
+        <div class="cli-num">II</div>
+        <div class="cli-body">
+          <div class="cli-title">Margins and Meaning: On White Space</div>
+          <div class="cli-meta">James Aldric &middot; February 8, 2026</div>
+        </div>
+        <div class="cli-status pub">Published</div>
+      </div>
+      <div class="content-list-item">
+        <div class="cli-num">III</div>
+        <div class="cli-body">
+          <div class="cli-title">Typography as Atmosphere</div>
+          <div class="cli-meta">Eleanor Vance &middot; February 7, 2026</div>
+        </div>
+        <div class="cli-status draft">Draft</div>
+      </div>
+      <div class="content-list-item">
+        <div class="cli-num">IV</div>
+        <div class="cli-body">
+          <div class="cli-title">A Letter to the Reader</div>
+          <div class="cli-meta">Clara Ashford &middot; February 5, 2026</div>
+        </div>
+        <div class="cli-status pub">Published</div>
+      </div>
+      <div class="content-list-item">
+        <div class="cli-num">V</div>
+        <div class="cli-body">
+          <div class="cli-title">On Keeping a Commonplace Book</div>
+          <div class="cli-meta">James Aldric &middot; February 3, 2026</div>
+        </div>
+        <div class="cli-status draft">Draft</div>
+      </div>
+      <button class="btn-new-post">+ New Post</button>
+    </div>
+
+    <div class="dash-aside">
+      <div class="aside-section">
+        <h3>Account</h3>
+        <div class="aside-user">
+          <div class="av">EV</div>
+          <div class="av-info">
+            <div class="name">Eleanor Vance</div>
+            <div class="role">Editor-in-Chief</div>
+          </div>
+        </div>
+      </div>
+      <div class="aside-section">
+        <h3>This Week</h3>
+        <div class="aside-row"><span class="ar-label">New posts</span><span class="ar-val">3</span></div>
+        <div class="aside-row"><span class="ar-label">Page views</span><span class="ar-val">2,140</span></div>
+        <div class="aside-row"><span class="ar-label">New subscribers</span><span class="ar-val">48</span></div>
+        <div class="aside-row"><span class="ar-label">Comments</span><span class="ar-val">18</span></div>
+      </div>
+      <div class="aside-section">
+        <h3>Recent Activity</h3>
+        <div class="aside-activity"><strong>James</strong> submitted a new draft<div class="time">2 hours ago</div></div>
+        <div class="aside-activity"><strong>Clara</strong> edited "A Letter to the Reader"<div class="time">5 hours ago</div></div>
+        <div class="aside-activity"><strong>Eleanor</strong> published "Slow Reading"<div class="time">Yesterday</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== BLOG ==================== -->
+<div class="variation-view blog" id="view-blog">
+  <div class="blog-mast">
+    <h1>The Skrift Review</h1>
+    <p class="tagline">A quarterly journal of letters, language, and the literary arts</p>
+  </div>
+  <div class="blog-mast-rule"></div>
+  <div class="blog-nav">
+    <span>Essays</span>
+    <span>Fiction</span>
+    <span>Poetry</span>
+    <span>Criticism</span>
+    <span>About</span>
+  </div>
+
+  <div class="blog-featured">
+    <div class="cat">Featured Essay</div>
+    <h2>The Art of Slow Reading in an Age of Infinite Scroll</h2>
+    <div class="pull-quote">We have forgotten how to dwell inside a sentence. In our haste to consume, we have lost the ability to inhabit — to let a paragraph unfold around us like a room we've only just entered.</div>
+    <div class="meta">By <strong>Eleanor Vance</strong> &middot; February 10, 2026 &middot; 14 min read</div>
+  </div>
+
+  <hr class="section-rule">
+
+  <div class="blog-recent">
+    <h3>Recent</h3>
+    <div class="blog-post-item">
+      <div class="post-cat">Criticism</div>
+      <h4>Margins and Meaning: What White Space Tells Us</h4>
+      <p>The emptiness of a page is never truly empty. It speaks in silences, framing words the way a gallery wall frames art.</p>
+      <div class="meta">James Aldric &middot; Feb 8, 2026</div>
+    </div>
+    <div class="blog-post-item">
+      <div class="post-cat">Essay</div>
+      <h4>A Letter to the Reader, Wherever You Are</h4>
+      <p>You are holding something fragile — a thread between my mind and yours, stretched across time and distance.</p>
+      <div class="meta">Clara Ashford &middot; Feb 5, 2026</div>
+    </div>
+    <div class="blog-post-item">
+      <div class="post-cat">Poetry</div>
+      <h4>On Keeping a Commonplace Book</h4>
+      <p>What we copy, we keep. What we transcribe by hand, letter by letter, enters us differently than what we merely read.</p>
+      <div class="meta">James Aldric &middot; Feb 3, 2026</div>
+    </div>
+    <div class="blog-post-item">
+      <div class="post-cat">Fiction</div>
+      <h4>The Bookshop on Rue Descartes</h4>
+      <p>She found it between Montaigne and Montesquieu — a slim volume with no author, no title, only a date.</p>
+      <div class="meta">Eleanor Vance &middot; Jan 30, 2026</div>
+    </div>
+  </div>
+
+  <div class="blog-footer">
+    <div class="ft-name">The Skrift Review</div>
+    <p>&copy; 2026 &middot; Published with Skrift CMS</p>
+  </div>
+</div>
+
+<script>
+function showView(view) {
+  document.querySelectorAll('.variation-view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.view-toggle button').forEach(b => b.classList.remove('active'));
+  document.getElementById('view-' + view).classList.add('active');
+  document.querySelectorAll('.view-toggle button').forEach(b => {
+    if (b.textContent.toLowerCase() === (view === 'dash' ? 'dashboard' : 'blog')) b.classList.add('active');
+  });
+}
+</script>
+</body>
+</html>

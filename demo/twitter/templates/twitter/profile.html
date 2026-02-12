@@ -37,7 +37,7 @@
         <div class="profile-actions">
             <form method="post" action="/profile/{{ profile_user.id }}/follow">
                 {{ csrf_field }}
-                <button type="submit" class="btn {% if is_following %}btn-outline{% else %}btn-primary{% endif %}">
+                <button type="submit" class="{% if is_following %}sk-btn-outline{% endif %}">
                     {{ "Following" if is_following else "Follow" }}
                 </button>
             </form>

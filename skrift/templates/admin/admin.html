@@ -3,14 +3,16 @@
 {% block title %}Admin - {{ site_name() }}{% endblock %}
 
 {% block admin_content %}
-<hgroup>
-    <h1>Admin Dashboard</h1>
-    <p>Welcome to the admin area</p>
-</hgroup>
+<div class="sk-admin-header">
+    <hgroup>
+        <h1>Admin Dashboard</h1>
+        <p>Welcome to the admin area</p>
+    </hgroup>
+</div>
 
-<section class="admin-quick-links">
+<section class="sk-admin-cards">
     {% for item in admin_nav %}
-    <a href="{{ item.path }}" class="admin-card">
+    <a href="{{ item.path }}" class="sk-admin-card">
         <h3>{{ item.label }}</h3>
         <p>Manage {{ item.label | lower }}</p>
     </a>

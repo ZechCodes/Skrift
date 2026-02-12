@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skrift — Slate</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Lora:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+body { font-family: 'Lora', Georgia, serif; background: #f4f6f9; color: #1e2a3a; min-height: 100vh; }
+a { text-decoration: none; color: inherit; }
+button { cursor: pointer; border: none; background: none; font-family: inherit; }
+
+/* --- Overlay Nav --- */
+.overlay-trigger {
+  position: fixed; top: 20px; right: 20px; z-index: 9999;
+  width: 44px; height: 44px; border-radius: 12px;
+  background: rgba(30,42,58,0.85); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; backdrop-filter: blur(8px);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.15); transition: transform 0.2s;
+}
+.overlay-trigger:hover { transform: scale(1.08); }
+.overlay-nav {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0,0,0,0.85); backdrop-filter: blur(20px);
+  display: none; align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px;
+}
+.overlay-nav.open { display: flex; }
+.overlay-nav .close-btn {
+  position: absolute; top: 24px; right: 24px;
+  font-size: 28px; color: #fff; opacity: 0.6; transition: opacity 0.2s;
+}
+.overlay-nav .close-btn:hover { opacity: 1; }
+.overlay-nav .nav-title {
+  font-family: 'Cinzel', serif; font-size: 12px; font-weight: 600;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  color: rgba(255,255,255,0.4); margin-bottom: 20px;
+}
+.overlay-nav a {
+  font-family: 'Cinzel', serif; font-size: 28px; font-weight: 500;
+  color: rgba(255,255,255,0.5); transition: color 0.2s;
+  letter-spacing: 0.04em; padding: 8px 0;
+}
+.overlay-nav a:hover { color: #fff; }
+.overlay-nav a.current { color: #fff; }
+
+:root {
+  --bg: #f4f6f9; --text: #1e2a3a; --muted: #6b7b8d;
+  --accent: #3b6ce7; --accent2: #2851b8;
+  --border: #dfe4eb; --surface: #fff; --dark: #1e2a3a;
+}
+.variation-view { display: none; }
+.variation-view.active { display: block; }
+.variation-view.dash.active { display: grid; }
+
+/* ==========================================================
+   SLATE DASHBOARD
+   Persistent left sidebar. Content fills right.
+   ========================================================== */
+
+.dash { grid-template-columns: 240px 1fr; min-height: 100vh; }
+
+.sidebar {
+  background: var(--dark); color: #fff; padding: 0;
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100vh;
+}
+.sidebar-brand {
+  padding: 24px 24px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.sidebar-brand h1 {
+  font-family: 'Cinzel', serif; font-size: 18px; font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.sidebar-brand .sub { font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 2px; }
+
+/* View toggle inside sidebar */
+.sidebar-view-toggle {
+  display: flex; margin: 16px 16px 8px; gap: 4px;
+  background: rgba(255,255,255,0.06); border-radius: 8px; padding: 3px;
+}
+.sidebar-view-toggle button {
+  flex: 1; font-family: 'Lora', serif; font-size: 12px;
+  padding: 6px 0; border-radius: 6px;
+  color: rgba(255,255,255,0.4); transition: all 0.2s;
+}
+.sidebar-view-toggle button:hover { color: rgba(255,255,255,0.7); }
+.sidebar-view-toggle button.active { background: var(--accent); color: #fff; }
+
+.sidebar-section {
+  padding: 16px 0 8px;
+}
+.sidebar-section-label {
+  font-family: 'Cinzel', serif; font-size: 9px; font-weight: 600;
+  letter-spacing: 0.15em; text-transform: uppercase;
+  color: rgba(255,255,255,0.25); padding: 0 24px 8px;
+}
+.sidebar-link {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 24px; font-size: 13px;
+  color: rgba(255,255,255,0.5); transition: all 0.15s;
+  cursor: pointer;
+}
+.sidebar-link:hover { color: #fff; background: rgba(255,255,255,0.04); }
+.sidebar-link.active { color: #fff; background: rgba(59,108,231,0.2); border-right: 3px solid var(--accent); }
+
+.sidebar-user {
+  margin-top: auto; padding: 16px 24px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  display: flex; align-items: center; gap: 10px;
+}
+.sidebar-user .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; }
+.sidebar-user .uname { font-size: 12px; color: rgba(255,255,255,0.6); }
+
+/* Main content area */
+.dash-content { padding: 28px 32px; overflow-y: auto; }
+.page-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 24px;
+}
+.page-header h2 {
+  font-family: 'Cinzel', serif; font-size: 24px; font-weight: 500;
+}
+.page-header .breadcrumb { font-size: 12px; color: var(--muted); }
+
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+.metric {
+  background: var(--surface); border-radius: 12px; padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.metric .m-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.metric .m-val { font-family: 'Cinzel', serif; font-size: 30px; font-weight: 600; }
+.metric .m-sub { font-size: 11px; color: var(--accent); margin-top: 4px; }
+
+.content-panel {
+  background: var(--surface); border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04); overflow: hidden;
+}
+.panel-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.panel-head h3 { font-family: 'Cinzel', serif; font-size: 14px; font-weight: 500; }
+.btn-primary {
+  font-size: 12px; padding: 7px 16px; border-radius: 8px;
+  background: var(--accent); color: #fff; font-weight: 600; transition: background 0.2s;
+}
+.btn-primary:hover { background: var(--accent2); }
+.content-row {
+  display: flex; align-items: center; padding: 13px 20px;
+  border-bottom: 1px solid var(--border); transition: background 0.1s;
+}
+.content-row:last-child { border-bottom: none; }
+.content-row:hover { background: #f8f9fb; }
+.cr-title { flex: 1; font-weight: 600; font-size: 14px; }
+.cr-author { flex: 0 0 120px; font-size: 12px; color: var(--muted); }
+.cr-date { flex: 0 0 100px; font-size: 12px; color: var(--muted); }
+.cr-status { flex: 0 0 90px; }
+.pill {
+  display: inline-block; font-size: 10px; padding: 3px 10px;
+  border-radius: 6px; font-weight: 600;
+}
+.pill.pub { background: #e0f2e9; color: #1a7a3a; }
+.pill.draft { background: #e8edf4; color: #5a6b80; }
+.pill.review { background: #fef3e0; color: #a07a2d; }
+
+/* ==========================================================
+   SLATE BLOG
+   Clean top nav bar, hero card, 3-col cards.
+   ========================================================== */
+.blog { background: var(--bg); }
+.blog-topbar {
+  background: var(--dark); padding: 0 40px;
+}
+.blog-topbar-inner {
+  max-width: 1060px; margin: 0 auto; height: 60px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.blog-topbar h1 {
+  font-family: 'Cinzel', serif; font-size: 18px; font-weight: 600;
+  letter-spacing: 0.06em; color: #fff;
+}
+.blog-topbar nav { display: flex; gap: 24px; font-size: 13px; color: rgba(255,255,255,0.5); }
+.blog-topbar nav span { cursor: pointer; transition: color 0.15s; }
+.blog-topbar nav span:hover { color: #fff; }
+.blog-topbar .sub-btn {
+  font-size: 12px; padding: 7px 18px; border-radius: 8px;
+  background: var(--accent); color: #fff; font-weight: 600;
+}
+
+.blog-body { max-width: 1060px; margin: 0 auto; padding: 32px 20px 48px; }
+
+.hero-card {
+  background: var(--surface); border-radius: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;
+  margin-bottom: 36px;
+}
+.hero-card .hero-img {
+  background: linear-gradient(135deg, var(--accent), #6c5ce7);
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,0.2); font-family: 'Cinzel', serif;
+  font-size: 72px; font-weight: 600; min-height: 320px;
+}
+.hero-card .hero-text { padding: 40px; display: flex; flex-direction: column; justify-content: center; }
+.hero-card .badge {
+  display: inline-block; font-size: 10px; padding: 4px 10px;
+  border-radius: 6px; background: rgba(59,108,231,0.1);
+  color: var(--accent); font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; margin-bottom: 14px; align-self: flex-start;
+}
+.hero-card h2 {
+  font-family: 'Cinzel', serif; font-size: 26px; font-weight: 500;
+  line-height: 1.3; margin-bottom: 14px;
+}
+.hero-card p { font-size: 15px; line-height: 1.65; color: var(--muted); margin-bottom: 16px; }
+.hero-card .meta { font-size: 12px; color: var(--muted); }
+.hero-card .meta strong { color: var(--text); }
+
+.card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.post-card {
+  background: var(--surface); border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05); overflow: hidden;
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+.post-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); transform: translateY(-2px); }
+.post-card .card-img {
+  height: 150px; display: flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,0.25); font-family: 'Cinzel', serif;
+  font-size: 32px; font-weight: 600;
+}
+.post-card .card-body { padding: 20px; }
+.post-card .badge { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 4px; background: rgba(59,108,231,0.08); color: var(--accent); font-weight: 600; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+.post-card h3 { font-family: 'Cinzel', serif; font-size: 16px; font-weight: 500; line-height: 1.35; margin-bottom: 8px; }
+.post-card p { font-size: 13px; line-height: 1.55; color: var(--muted); margin-bottom: 10px; }
+.post-card .meta { font-size: 11px; color: var(--muted); }
+
+.blog-footer {
+  background: var(--dark); color: rgba(255,255,255,0.4); text-align: center;
+  padding: 32px; font-size: 12px;
+}
+.blog-footer .ft { font-family: 'Cinzel', serif; font-size: 13px; color: rgba(255,255,255,0.7); margin-bottom: 4px; letter-spacing: 0.06em; }
+
+/* Blog view toggle - floating pill */
+.blog-view-toggle {
+  position: fixed; top: 20px; left: 20px; z-index: 9998;
+  display: flex; gap: 2px;
+  background: rgba(30,42,58,0.08); border-radius: 10px; padding: 3px;
+  backdrop-filter: blur(8px);
+}
+.blog-view-toggle button {
+  font-family: 'Lora', serif; font-size: 12px;
+  padding: 6px 16px; border-radius: 8px;
+  color: var(--muted); transition: all 0.2s;
+}
+.blog-view-toggle button:hover { color: var(--text); }
+.blog-view-toggle button.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+</style>
+</head>
+<body>
+
+<button class="overlay-trigger" onclick="document.querySelector('.overlay-nav').classList.add('open')">&#9783;</button>
+<div class="overlay-nav">
+  <button class="close-btn" onclick="this.parentElement.classList.remove('open')">&times;</button>
+  <div class="nav-title">Design Variations</div>
+  <a href="skrift-editorial.html">Editorial</a>
+  <a href="skrift-slate.html" class="current">Slate</a>
+  <a href="skrift-ink.html">Ink</a>
+  <a href="skrift-paper.html">Paper</a>
+  <a href="skrift-garden.html">Garden</a>
+</div>
+
+<!-- ==================== DASHBOARD ==================== -->
+<div class="variation-view dash active" id="view-dash">
+  <div class="sidebar">
+    <div class="sidebar-brand">
+      <h1>Skrift</h1>
+      <div class="sub">Content Management</div>
+    </div>
+    <div class="sidebar-view-toggle">
+      <button class="active" onclick="showView('dash')">Dashboard</button>
+      <button onclick="showView('blog')">Blog</button>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">General</div>
+      <div class="sidebar-link active">Overview</div>
+      <div class="sidebar-link">Analytics</div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Content</div>
+      <div class="sidebar-link">All Posts</div>
+      <div class="sidebar-link">Drafts</div>
+      <div class="sidebar-link">Pages</div>
+      <div class="sidebar-link">Media</div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">System</div>
+      <div class="sidebar-link">Users</div>
+      <div class="sidebar-link">Settings</div>
+    </div>
+    <div class="sidebar-user">
+      <div class="dot"></div>
+      <div class="uname">M. Chen</div>
+    </div>
+  </div>
+
+  <div class="dash-content">
+    <div class="page-header">
+      <h2>Overview</h2>
+      <div class="breadcrumb">Last 30 days</div>
+    </div>
+    <div class="metrics">
+      <div class="metric"><div class="m-label">Total Posts</div><div class="m-val">134</div><div class="m-sub">+8 this month</div></div>
+      <div class="metric"><div class="m-label">Page Views</div><div class="m-val">24.1k</div><div class="m-sub">+18% vs prior</div></div>
+      <div class="metric"><div class="m-label">Subscribers</div><div class="m-val">1,847</div><div class="m-sub">+62 new</div></div>
+      <div class="metric"><div class="m-label">Avg. Read Time</div><div class="m-val">4:32</div><div class="m-sub">+0:24</div></div>
+    </div>
+    <div class="content-panel">
+      <div class="panel-head"><h3>Recent Content</h3><button class="btn-primary">+ New Post</button></div>
+      <div class="content-row"><div class="cr-title">Building Design Systems That Scale</div><div class="cr-author">M. Chen</div><div class="cr-date">Feb 11</div><div class="cr-status"><span class="pill pub">Published</span></div></div>
+      <div class="content-row"><div class="cr-title">The Case for Semantic HTML</div><div class="cr-author">A. Park</div><div class="cr-date">Feb 9</div><div class="cr-status"><span class="pill pub">Published</span></div></div>
+      <div class="content-row"><div class="cr-title">Accessibility Beyond Compliance</div><div class="cr-author">M. Chen</div><div class="cr-date">Feb 7</div><div class="cr-status"><span class="pill review">In Review</span></div></div>
+      <div class="content-row"><div class="cr-title">Color Theory for Interface Design</div><div class="cr-author">S. Kumar</div><div class="cr-date">Feb 5</div><div class="cr-status"><span class="pill draft">Draft</span></div></div>
+      <div class="content-row"><div class="cr-title">Performance Budgets in Practice</div><div class="cr-author">A. Park</div><div class="cr-date">Feb 3</div><div class="cr-status"><span class="pill pub">Published</span></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== BLOG ==================== -->
+<div class="variation-view blog" id="view-blog">
+  <div class="blog-view-toggle">
+    <button onclick="showView('dash')">Dashboard</button>
+    <button class="active" onclick="showView('blog')">Blog</button>
+  </div>
+  <div class="blog-topbar">
+    <div class="blog-topbar-inner">
+      <h1>Skrift</h1>
+      <nav><span>Articles</span><span>Tutorials</span><span>Resources</span><span>About</span></nav>
+      <button class="sub-btn">Subscribe</button>
+    </div>
+  </div>
+  <div class="blog-body">
+    <div class="hero-card">
+      <div class="hero-img">S</div>
+      <div class="hero-text">
+        <div class="badge">Featured</div>
+        <h2>Building Design Systems That Actually Scale</h2>
+        <p>How to create component libraries that grow with your team without becoming an unmaintainable mess. Lessons from building systems at three different scales.</p>
+        <div class="meta">By <strong>M. Chen</strong> &middot; Feb 11, 2026 &middot; 9 min read</div>
+      </div>
+    </div>
+    <div class="card-grid">
+      <div class="post-card">
+        <div class="card-img" style="background:linear-gradient(135deg,#667eea,#764ba2);">S</div>
+        <div class="card-body"><div class="badge">Engineering</div><h3>The Case for Semantic HTML</h3><p>Why reaching for a div is almost always the wrong first instinct.</p><div class="meta">A. Park &middot; Feb 9</div></div>
+      </div>
+      <div class="post-card">
+        <div class="card-img" style="background:linear-gradient(135deg,#f093fb,#f5576c);">S</div>
+        <div class="card-body"><div class="badge">Design</div><h3>Color Theory for Interface Design</h3><p>A practical guide to colors that work together and communicate meaning.</p><div class="meta">S. Kumar &middot; Feb 5</div></div>
+      </div>
+      <div class="post-card">
+        <div class="card-img" style="background:linear-gradient(135deg,#4facfe,#00f2fe);">S</div>
+        <div class="card-body"><div class="badge">Performance</div><h3>Performance Budgets in Practice</h3><p>Setting, measuring, and enforcing performance budgets in real projects.</p><div class="meta">A. Park &middot; Feb 3</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="blog-footer"><div class="ft">Skrift</div><p>&copy; 2026 &middot; Built with Skrift CMS</p></div>
+</div>
+
+<script>
+function showView(view) {
+  document.querySelectorAll('.variation-view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + view).classList.add('active');
+  // Update all toggle buttons across both views
+  document.querySelectorAll('.sidebar-view-toggle button, .blog-view-toggle button').forEach(b => {
+    b.classList.remove('active');
+    if (b.textContent.toLowerCase() === (view === 'dash' ? 'dashboard' : 'blog')) b.classList.add('active');
+  });
+}
+</script>
+</body>
+</html>

@@ -1,23 +1,61 @@
 {% extends "base.html" %}
 
-{% block main_class %} admin-layout{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/css/admin.css">
+{% endblock %}
 
-{% block content %}
-<div class="admin-container">
-    <aside class="admin-sidebar">
-        <nav class="admin-nav">
-            <ul>
-                {% for item in admin_nav %}
-                <li>
-                    <a href="{{ item.path }}" {% if current_path == item.path %}class="active"{% endif %}>
-                        {{ item.label }}
-                    </a>
-                </li>
-                {% endfor %}
-            </ul>
+{% block body %}
+<div class="sk-admin">
+    <aside class="sk-sidebar">
+        <div class="sk-sidebar-brand">
+            <h1><a href="/admin">{{ site_name() }}</a></h1>
+            <div class="sk-sidebar-sub">Content Management</div>
+        </div>
+        <nav class="sk-sidebar-nav">
+            {% for item in admin_nav %}
+            <a href="{{ item.path }}" class="sk-sidebar-link{% if current_path == item.path %} active{% endif %}">
+                {{ item.label }}
+            </a>
+            {% endfor %}
         </nav>
+        <div class="sk-sidebar-footer">
+            {% if user %}
+            <div class="sk-sidebar-avatar">
+                {% if user.picture_url %}
+                <img src="{{ user.picture_url }}" alt="{{ user.name }}" referrerpolicy="no-referrer">
+                {% else %}
+                {{ (user.name or user.email)[:2] | upper }}
+                {% endif %}
+            </div>
+            <div class="sk-sidebar-user">
+                <div class="sk-sidebar-name">{{ user.name or user.email }}</div>
+                <div class="sk-sidebar-role"><a href="/auth/logout">Logout</a></div>
+            </div>
+            {% endif %}
+        </div>
     </aside>
-    <div class="admin-content">
+    <div class="sk-admin-content">
+        {# Flash messages #}
+        {% if flash_messages %}
+        <div class="sk-flash-messages" role="status" aria-live="polite" style="position: static; max-width: none; margin-bottom: var(--sk-space-lg);">
+            {% for msg in flash_messages %}
+            <article role="alert" class="sk-flash sk-flash-{{ msg.type.value }}" {% if msg.dismissible %}data-dismissible{% endif %}>
+                <span class="sk-flash-message">{{ msg.message }}</span>
+                {% if msg.dismissible %}
+                <button type="button" class="sk-flash-dismiss" aria-label="Dismiss">&times;</button>
+                {% endif %}
+            </article>
+            {% endfor %}
+        </div>
+        {% elif flash %}
+        <div class="sk-flash-messages" role="status" aria-live="polite" style="position: static; max-width: none; margin-bottom: var(--sk-space-lg);">
+            <article role="alert" class="sk-flash sk-flash-info" data-dismissible>
+                <span class="sk-flash-message">{{ flash }}</span>
+                <button type="button" class="sk-flash-dismiss" aria-label="Dismiss">&times;</button>
+            </article>
+        </div>
+        {% endif %}
+
         {% block admin_content %}{% endblock %}
     </div>
 </div>

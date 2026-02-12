@@ -8,13 +8,13 @@
     <p>Assign roles to {{ target_user.name or target_user.email }}</p>
 </hgroup>
 
-<div class="user-info-card">
+<div class="sk-user-info-card">
     {% if target_user.picture_url %}
-    <img src="{{ target_user.picture_url }}" alt="{{ target_user.name }}" class="user-avatar-large" referrerpolicy="no-referrer">
+    <img src="{{ target_user.picture_url }}" alt="{{ target_user.name }}" class="sk-user-avatar-large" referrerpolicy="no-referrer">
     {% endif %}
     <div>
         <strong>{{ target_user.name or "—" }}</strong>
-        <p class="text-muted">{{ target_user.email }}</p>
+        <p class="sk-text-muted">{{ target_user.email }}</p>
     </div>
 </div>
 
@@ -27,16 +27,16 @@
             <span>
                 <strong>{{ role_def.display_name or role_name }}</strong>
                 {% if role_def.description %}
-                <small class="text-muted"> — {{ role_def.description }}</small>
+                <small class="sk-text-muted"> — {{ role_def.description }}</small>
                 {% endif %}
             </span>
         </label>
         {% endfor %}
     </fieldset>
 
-    <div class="form-actions">
+    <div class="sk-form-actions">
         <button type="submit">Save Roles</button>
-        <a href="/admin/users" role="button" class="outline">Cancel</a>
+        <a href="/admin/users" role="button" class="sk-btn-outline">Cancel</a>
     </div>
 </form>
 {% endblock %}

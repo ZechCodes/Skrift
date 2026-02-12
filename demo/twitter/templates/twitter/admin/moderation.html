@@ -35,9 +35,9 @@
             <td>{{ tweet.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
             <td>
                 <div class="admin-actions">
-                    <a href="/tweet/{{ tweet.id }}" class="btn btn-sm" target="_blank">View</a>
+                    <a href="/tweet/{{ tweet.id }}" role="button" class="sk-btn-small sk-btn-outline" target="_blank">View</a>
                     <form method="post" action="/admin/tweets/{{ tweet.id }}/delete" data-confirm="Delete this tweet? This action cannot be undone.">
-                        <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                        <button type="submit" class="sk-btn-small sk-btn-danger">Delete</button>
                     </form>
                 </div>
             </td>
