@@ -62,11 +62,11 @@
         <span><strong>{{ tweet.like_count }}</strong> Likes</span>
     </div>
 
-    {% if user %}
     <div class="tweet-actions tweet-actions-detail">
+        {% if user %}
         <form method="post" action="/tweet/{{ tweet.id }}/retweet" class="tweet-action-form">
             {{ csrf_field }}
-            <button type="submit" class="tweet-action tweet-action-retweet" title="Retweet">
+            <button type="submit" class="tweet-action tweet-action-retweet {% if tweet.id in retweeted_ids %}active{% endif %}" title="Retweet">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4m14 0v2a4 4 0 01-4 4H3"/></svg>
             </button>
         </form>
@@ -80,7 +80,7 @@
 
         <form method="post" action="/tweet/{{ tweet.id }}/bookmark" class="tweet-action-form">
             {{ csrf_field }}
-            <button type="submit" class="tweet-action tweet-action-bookmark {% if tweet.id in bookmarked_ids %}active{% endif %}" title="Bookmark">
+            <button type="submit" class="tweet-action tweet-action-bookmark {% if tweet.id in bookmarked_ids %}active{% endif %}" title="Save">
                 <svg viewBox="0 0 24 24" width="18" height="18"><path fill="{% if tweet.id in bookmarked_ids %}currentColor{% else %}none{% endif %}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
             </button>
         </form>
@@ -93,8 +93,22 @@
             </button>
         </form>
         {% endif %}
+        {% else %}
+        <span class="tweet-action">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M17 1l4 4-4 4M3 11V9a4 4 0 014-4h14M7 23l-4-4 4-4m14 0v2a4 4 0 01-4 4H3"/></svg>
+        </span>
+        <span class="tweet-action">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>
+        </span>
+        <span class="tweet-action">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+        </span>
+        {% endif %}
+
+        <button type="button" class="tweet-action tweet-action-share" title="Share" data-share-url="/tweet/{{ tweet.id }}">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13"/></svg>
+        </button>
     </div>
-    {% endif %}
 </article>
 
 {# Reply form #}

@@ -228,6 +228,19 @@ main.sk-content.twitter-layout {
     background-color: var(--sk-color-warm);
 }
 
+.tweet-card-new {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+    animation: tweetSlideIn 0.3s ease-out forwards;
+}
+
+@keyframes tweetSlideIn {
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 .tweet-retweet-label {
     display: flex;
     align-items: center;
@@ -373,6 +386,14 @@ main.sk-content.twitter-layout {
 
 .tweet-action-delete:hover {
     color: var(--sk-color-error);
+}
+
+.tweet-action-share:hover {
+    color: var(--sk-color-accent);
+}
+
+.tweet-action-share.copied {
+    color: var(--sk-color-success);
 }
 
 /* Detail page actions variant */

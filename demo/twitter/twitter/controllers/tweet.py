@@ -12,12 +12,14 @@ from skrift.db.models.user import User
 from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url
 from skrift.lib.flash import flash_success, flash_error, get_flash_messages
 from skrift.lib.hooks import hooks
+from skrift.lib.notifications import notify_user, notify_broadcast
 from skrift.lib.seo import SEOMeta, OpenGraphMeta
 from skrift.forms import Form, verify_csrf, csrf_field
 
 from twitter.forms import ComposeTweetForm, ReplyForm
 from twitter.hooks import TWEET_SEO_META, TWEET_OG_META
 from twitter.services import tweet_service, like_service, feed_service
+from twitter.services.feed_service import get_retweeted_tweet_ids
 
 
 class TweetController(Controller):
@@ -36,8 +38,18 @@ class TweetController(Controller):
         form = Form(ComposeTweetForm, request)
 
         if await form.validate():
-            await tweet_service.create_tweet(db_session, user.id, form.data.content)
+            tweet = await tweet_service.create_tweet(db_session, user.id, form.data.content)
             flash_success(request, "Tweet posted!")
+            rendered = await tweet_service.render_tweet_content(tweet.content)
+            notify_broadcast(
+                "new_tweet",
+                tweet_id=str(tweet.id),
+                user_id=str(tweet.user_id),
+                user_name=tweet.user.name or "User",
+                user_picture_url=tweet.user.picture_url,
+                content_html=str(rendered),
+                created_at=tweet.created_at.strftime("%b %d"),
+            )
         else:
             errors = "; ".join(form.errors.values())
             flash_error(request, f"Could not post tweet: {errors}")
@@ -63,13 +75,15 @@ class TweetController(Controller):
         for r in replies:
             rendered_replies[r.id] = await tweet_service.render_tweet_content(r.content)
 
-        # Check like/bookmark state
+        # Check like/bookmark/retweet state
         liked_ids: set = set()
         bookmarked_ids: set = set()
+        retweeted_ids: set = set()
         all_ids = [tweet.id] + [r.id for r in replies]
         if user:
             liked_ids = await like_service.get_liked_tweet_ids(db_session, user.id, all_ids)
             bookmarked_ids = await feed_service.get_bookmarked_tweet_ids(db_session, user.id, all_ids)
+            retweeted_ids = await get_retweeted_tweet_ids(db_session, user.id, all_ids)
 
         # SEO
         site_name = get_cached_site_name()
@@ -108,6 +122,7 @@ class TweetController(Controller):
                 "rendered_content": {tweet.id: rendered_content, **rendered_replies},
                 "liked_ids": liked_ids,
                 "bookmarked_ids": bookmarked_ids,
+                "retweeted_ids": retweeted_ids,
                 "csrf_field": csrf_field(request) if user else "",
                 "seo_meta": seo_meta,
                 "og_meta": og_meta,
@@ -121,10 +136,17 @@ class TweetController(Controller):
         form = Form(ReplyForm, request)
 
         if await form.validate():
-            await tweet_service.create_tweet(
+            reply_tweet = await tweet_service.create_tweet(
                 db_session, user.id, form.data.content, parent_id=tweet_id
             )
             flash_success(request, "Reply posted!")
+            if reply_tweet.parent and str(reply_tweet.parent.user_id) != str(user.id):
+                notify_user(
+                    str(reply_tweet.parent.user_id),
+                    "generic",
+                    title=f"{user.name} replied to your tweet",
+                    message=form.data.content[:100],
+                )
         else:
             errors = "; ".join(form.errors.values())
             flash_error(request, f"Could not post reply: {errors}")
@@ -140,6 +162,15 @@ class TweetController(Controller):
         user = await self._get_user(request, db_session)
         liked = await like_service.toggle_like(db_session, user.id, tweet_id)
         flash_success(request, "Liked!" if liked else "Unliked")
+        if liked:
+            tweet = await tweet_service.get_tweet_by_id(db_session, tweet_id)
+            if tweet and str(tweet.user_id) != str(user.id):
+                notify_user(
+                    str(tweet.user_id),
+                    "generic",
+                    title=f"{user.name} liked your tweet",
+                    message=tweet.content[:100],
+                )
         return Redirect(path=referer)
 
     @post("/{tweet_id:uuid}/retweet", guards=[auth_guard])
@@ -152,6 +183,13 @@ class TweetController(Controller):
         result = await tweet_service.create_retweet(db_session, user.id, tweet_id)
         if result:
             flash_success(request, "Retweeted!")
+            if result.retweet_of and str(result.retweet_of.user_id) != str(user.id):
+                notify_user(
+                    str(result.retweet_of.user_id),
+                    "generic",
+                    title=f"{user.name} retweeted your tweet",
+                    message=result.retweet_of.content[:100],
+                )
         else:
             flash_error(request, "Already retweeted or tweet not found")
         return Redirect(path=referer)

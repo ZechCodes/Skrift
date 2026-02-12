@@ -562,6 +562,107 @@ a[role="button"] {
 }
 
 /* ========================================
+   Notifications (SSE Toast UI)
+   ======================================== */
+
+.sk-notifications {
+    position: fixed;
+    bottom: var(--sk-space-md);
+    right: var(--sk-space-md);
+    display: flex;
+    flex-direction: column-reverse;
+    gap: var(--sk-space-sm);
+    z-index: 1000;
+    max-width: 380px;
+    pointer-events: none;
+}
+
+.sk-notification {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sk-space-sm);
+    padding: var(--sk-space-md);
+    background-color: var(--sk-color-surface);
+    border-left: 4px solid var(--sk-color-accent);
+    border-radius: var(--sk-radius-md);
+    box-shadow: var(--sk-shadow-lg);
+    animation: sk-notification-slide-in 0.3s ease;
+}
+
+.sk-notification-exit {
+    animation: sk-notification-slide-out 0.3s ease forwards;
+}
+
+.sk-notification-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.sk-notification-title {
+    font-weight: 600;
+    color: var(--sk-color-text);
+    font-size: 1rem;
+}
+
+.sk-notification-message {
+    color: var(--sk-color-muted);
+    font-size: 1rem;
+    margin-top: var(--sk-space-xs);
+}
+
+.sk-notification-dismiss {
+    background: none;
+    border: none;
+    font-size: 1.25rem;
+    cursor: pointer;
+    opacity: 0.5;
+    padding: 0;
+    line-height: 1;
+    color: var(--sk-color-text);
+    box-shadow: none;
+    border-radius: 0;
+    flex-shrink: 0;
+}
+
+.sk-notification-dismiss:hover {
+    opacity: 1;
+    background: none;
+    box-shadow: none;
+    transform: none;
+}
+
+@keyframes sk-notification-slide-in {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes sk-notification-slide-out {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+}
+
+@media (max-width: 767px) {
+    .sk-notifications {
+        left: var(--sk-space-sm);
+        right: var(--sk-space-sm);
+        max-width: none;
+    }
+}
+
+/* ========================================
    Tables
    ======================================== */
 
