@@ -10,6 +10,7 @@ The application uses a dispatcher architecture:
 import asyncio
 import hashlib
 import importlib
+import logging
 import os
 import sys
 from datetime import datetime
@@ -36,20 +37,16 @@ from litestar.template import TemplateConfig
 from litestar.types import ASGIApp, Receive, Scope, Send
 
 from skrift.config import get_config_path, get_settings, is_config_valid
-from skrift.middleware.rate_limit import RateLimitMiddleware
-from skrift.middleware.security import SecurityHeadersMiddleware, csp_nonce_var
 from skrift.db.base import Base
 from skrift.db.services.setting_service import (
     load_site_settings_cache,
-    get_cached_site_name,
-    get_cached_site_tagline,
-    get_cached_site_copyright_holder,
-    get_cached_site_copyright_start_year,
     get_setting,
     SETUP_COMPLETED_AT_KEY,
 )
 from skrift.lib.exceptions import http_exception_handler, internal_server_error_handler
 from skrift.lib.markdown import render_markdown
+
+logger = logging.getLogger(__name__)
 
 
 def load_controllers() -> list:
@@ -189,7 +186,11 @@ async def check_setup_complete(db_config: SQLAlchemyAsyncConfig) -> bool:
         async with db_config.get_session() as session:
             value = await get_setting(session, SETUP_COMPLETED_AT_KEY)
             return value is not None
-    except Exception:
+    except (OSError, ConnectionError) as exc:
+        logger.debug("Cannot check setup complete (connection error): %s", exc)
+        return False
+    except Exception as exc:
+        logger.debug("Cannot check setup complete: %s", exc)
         return False
 
 
@@ -276,8 +277,8 @@ class AppDispatcher:
         async def run_lifespan():
             try:
                 await self._main_app(scope, receive, send)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Lifespan handler exited: %s", exc)
 
         # Start lifespan handler in background
         self._lifespan_task = asyncio.create_task(run_lifespan())
@@ -343,15 +344,19 @@ class AppDispatcher:
                 db_url = get_database_url_from_yaml()
                 if db_url:
                     self._db_url = db_url  # Cache for future requests
-            except Exception:
-                pass
+            except (FileNotFoundError, yaml.YAMLError, ValueError) as exc:
+                logger.debug("Could not read database URL from yaml: %s", exc)
 
         if not db_url:
             return False
 
         try:
             return await check_setup_in_db(db_url)
-        except Exception:
+        except (OSError, ConnectionError) as exc:
+            logger.debug("Cannot check setup in DB (connection): %s", exc)
+            return False
+        except Exception as exc:
+            logger.debug("Cannot check setup in DB: %s", exc)
             return False
 
     async def _redirect(self, send: Send, location: str) -> None:
@@ -409,76 +414,32 @@ def create_app() -> Litestar:
     This app has all routes for normal operation. It is used by the dispatcher
     after setup is complete.
     """
+    from skrift.app_config import (
+        build_db_config,
+        build_session_config,
+        build_security_middleware,
+        build_rate_limit_middleware,
+        build_template_config,
+        build_static_files_router,
+    )
+
     # CRITICAL: Check for dummy auth in production BEFORE anything else
     from skrift.setup.providers import validate_no_dummy_auth_in_production
     validate_no_dummy_auth_in_production()
 
     settings = get_settings()
 
-    # Load controllers from app.yaml
+    # Load controllers and middleware from app.yaml
     controllers = load_controllers()
-
-    # Load middleware from app.yaml
     user_middleware = load_middleware()
 
-    # Database configuration
-    if "sqlite" in settings.db.url:
-        engine_config = EngineConfig(echo=settings.db.echo)
-    else:
-        engine_config = EngineConfig(
-            pool_size=settings.db.pool_size,
-            max_overflow=settings.db.pool_overflow,
-            pool_timeout=settings.db.pool_timeout,
-            pool_pre_ping=settings.db.pool_pre_ping,
-            echo=settings.db.echo,
-        )
-
-    db_config = SafeSQLAlchemyAsyncConfig(
-        connection_string=settings.db.url,
-        metadata=Base.metadata,
-        create_all=False,
-        session_config=AsyncSessionConfig(expire_on_commit=False),
-        engine_config=engine_config,
-    )
-
-    # Session configuration (client-side encrypted cookies)
-    session_secret = hashlib.sha256(settings.secret_key.encode()).digest()
-    session_config = CookieBackendConfig(
-        secret=session_secret,
-        max_age=settings.session.max_age,
-        httponly=True,
-        secure=not settings.debug,
-        samesite="lax",
-        domain=settings.session.cookie_domain,
-    )
-
-    # Security headers middleware
-    security_middleware = []
-    if settings.security_headers.enabled:
-        headers = settings.security_headers.build_headers(debug=settings.debug)
-        csp_value = settings.security_headers.content_security_policy
-        if headers or csp_value:
-            security_middleware = [
-                DefineMiddleware(
-                    SecurityHeadersMiddleware,
-                    headers=headers,
-                    csp_value=csp_value,
-                    csp_nonce=settings.security_headers.csp_nonce,
-                    debug=settings.debug,
-                )
-            ]
-
-    # Rate limiting middleware
-    rate_limit_middleware = []
-    if settings.rate_limit.enabled:
-        rate_limit_middleware = [
-            DefineMiddleware(
-                RateLimitMiddleware,
-                requests_per_minute=settings.rate_limit.requests_per_minute,
-                auth_requests_per_minute=settings.rate_limit.auth_requests_per_minute,
-                paths=settings.rate_limit.paths,
-            )
-        ]
+    # Build configuration components
+    db_config = build_db_config(settings)
+    session_config = build_session_config(settings)
+    security_middleware = build_security_middleware(settings)
+    rate_limit_middleware = build_rate_limit_middleware(settings)
+    template_config = build_template_config()
+    static_files_router = build_static_files_router()
 
     # CSRF configuration (if enabled in app.yaml)
     csrf_config = None
@@ -492,38 +453,6 @@ def create_app() -> Litestar:
             exclude=settings.csrf.exclude or None,
         )
 
-    # Template configuration
-    # Search working directory first for user overrides, then package directory
-    working_dir_templates = Path(os.getcwd()) / "templates"
-    template_dir = Path(__file__).parent / "templates"
-    from skrift.forms import Form, csrf_field as _csrf_field
-
-    def configure_template_engine(engine):
-        engine.engine.globals.update({
-            "now": datetime.now,
-            "site_name": get_cached_site_name,
-            "site_tagline": get_cached_site_tagline,
-            "site_copyright_holder": get_cached_site_copyright_holder,
-            "site_copyright_start_year": get_cached_site_copyright_start_year,
-            "Form": Form,
-            "csrf_field": _csrf_field,
-            "csp_nonce": lambda: csp_nonce_var.get(""),
-        })
-        engine.engine.filters.update({"markdown": render_markdown})
-
-    template_config = TemplateConfig(
-        directory=[working_dir_templates, template_dir],
-        engine=JinjaTemplateEngine,
-        engine_callback=configure_template_engine,
-    )
-
-    # Static files - working directory first for user overrides, then package directory
-    working_dir_static = Path(os.getcwd()) / "static"
-    static_files_router = create_static_files_router(
-        path="/static",
-        directories=[working_dir_static, Path(__file__).parent / "static"],
-    )
-
     from skrift.auth import sync_roles_to_database
 
     async def on_startup(_app: Litestar) -> None:
@@ -533,8 +462,7 @@ def create_app() -> Litestar:
                 await sync_roles_to_database(session)
                 await load_site_settings_cache(session)
         except Exception:
-            # Database might not exist yet during setup
-            pass
+            logger.debug("Could not sync roles/settings on startup (database may not exist yet)")
 
     return Litestar(
         on_startup=[on_startup],
@@ -626,8 +554,8 @@ def create_setup_app() -> Litestar:
                         if Path(db_file).exists():
                             db_url = f"sqlite+aiosqlite:///{db_file}"
                             break
-            except Exception:
-                pass
+            except (FileNotFoundError, yaml.YAMLError, KeyError) as exc:
+                logger.debug("Could not read raw db URL from config: %s", exc)
 
     plugins = []
     route_handlers = [SetupController, SetupAuthController, static_files_router]
@@ -662,8 +590,8 @@ def create_setup_app() -> Litestar:
                 from skrift.auth import sync_roles_to_database
                 async with db_config.get_session() as session:
                     await sync_roles_to_database(session)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not sync roles during setup startup: %s", exc)
 
     return Litestar(
         on_startup=[on_startup],
@@ -691,7 +619,11 @@ async def check_setup_in_db(db_url: str) -> bool:
         async with async_session() as session:
             value = await get_setting(session, SETUP_COMPLETED_AT_KEY)
             return value is not None
-    except Exception:
+    except (OSError, ConnectionError) as exc:
+        logger.debug("Cannot check setup in DB (connection): %s", exc)
+        return False
+    except Exception as exc:
+        logger.debug("Cannot check setup in DB: %s", exc)
         return False
     finally:
         await engine.dispose()
@@ -714,8 +646,8 @@ def create_dispatcher() -> ASGIApp:
     db_url: str | None = None
     try:
         db_url = get_database_url_from_yaml()
-    except Exception:
-        pass
+    except (FileNotFoundError, yaml.YAMLError, ValueError) as exc:
+        logger.debug("Could not read database URL: %s", exc)
 
     # Check if setup is already complete
     initial_setup_complete = False
@@ -728,10 +660,10 @@ def create_dispatcher() -> ASGIApp:
             # No running event loop, try creating one
             try:
                 initial_setup_complete = asyncio.run(check_setup_in_db(db_url))
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as exc:
+                logger.debug("Could not check setup in DB: %s", exc)
+        except Exception as exc:
+            logger.debug("Could not check setup in DB: %s", exc)
 
     # Also check if config is valid
     config_valid, _ = is_config_valid()
@@ -745,8 +677,8 @@ def create_dispatcher() -> ASGIApp:
     if config_valid:
         try:
             main_app = create_app()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not create main app: %s", exc)
 
     # Always use dispatcher - it handles lazy main app creation
     setup_app = create_setup_app()

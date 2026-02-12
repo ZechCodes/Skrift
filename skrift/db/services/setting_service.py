@@ -1,12 +1,19 @@
 """Setting service for CRUD operations on site settings."""
 
+import asyncio
+import logging
+
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models import Setting
 
+logger = logging.getLogger(__name__)
+
 # In-memory cache for site settings (avoids DB queries on every page render)
 _site_settings_cache: dict[str, str] = {}
+_site_settings_lock = asyncio.Lock()
 
 
 async def get_setting(
@@ -169,11 +176,13 @@ async def load_site_settings_cache(db_session: AsyncSession) -> None:
         db_session: Database session
     """
     global _site_settings_cache
-    try:
-        _site_settings_cache = await get_site_settings(db_session)
-    except Exception:
-        # Table might not exist yet (before migration), use defaults
-        _site_settings_cache = SITE_DEFAULTS.copy()
+    async with _site_settings_lock:
+        try:
+            _site_settings_cache = await get_site_settings(db_session)
+        except (OperationalError, ProgrammingError) as exc:
+            # Table might not exist yet (before migration), use defaults
+            logger.debug("Settings table not available, using defaults: %s", exc)
+            _site_settings_cache = SITE_DEFAULTS.copy()
 
 
 def invalidate_site_settings_cache() -> None:

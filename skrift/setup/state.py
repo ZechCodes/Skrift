@@ -7,13 +7,17 @@ This module implements a two-tier detection strategy:
 Smart step detection: If config is already present, skip to the first incomplete step.
 """
 
+import logging
 import os
 import subprocess
 from enum import Enum
 from pathlib import Path
 import yaml
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+logger = logging.getLogger(__name__)
 
 # Track if migrations have been run this session to avoid running multiple times
 _migrations_run = False
@@ -88,7 +92,8 @@ def get_database_url_from_yaml() -> str | None:
             return None
 
         return db_url
-    except Exception:
+    except (FileNotFoundError, yaml.YAMLError, KeyError) as exc:
+        logger.debug("Could not read database URL from yaml: %s", exc)
         return None
 
 
@@ -108,7 +113,9 @@ async def can_connect_to_database() -> tuple[bool, str | None]:
             await conn.execute(text("SELECT 1"))
         await engine.dispose()
         return True, None
-    except Exception as e:
+    except (OSError, ConnectionError) as e:
+        return False, str(e)
+    except OperationalError as e:
         return False, str(e)
 
 
@@ -117,8 +124,9 @@ async def is_setup_complete(db_session: AsyncSession) -> bool:
     try:
         value = await get_setting(db_session, SETUP_COMPLETED_AT_KEY)
         return value is not None
-    except Exception:
+    except (OperationalError, ProgrammingError) as exc:
         # Table might not exist yet
+        logger.debug("Cannot check setup_completed_at (table may not exist): %s", exc)
         return False
 
 
@@ -154,7 +162,8 @@ def is_auth_configured() -> bool:
                 return True
 
         return False
-    except Exception:
+    except (FileNotFoundError, yaml.YAMLError) as exc:
+        logger.debug("Could not check auth configuration: %s", exc)
         return False
 
 
@@ -203,7 +212,7 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
         return False, "Migration timed out"
     except FileNotFoundError:
         return False, "skrift db command not found"
-    except Exception as e:
+    except OSError as e:
         return False, str(e)
 
 
@@ -230,10 +239,12 @@ async def is_site_configured() -> bool:
             try:
                 site_name = await get_setting(session, SITE_NAME_KEY)
                 return site_name is not None
-            except Exception:
+            except (OperationalError, ProgrammingError) as exc:
                 # Table might not exist yet (before migration)
+                logger.debug("Settings table not available: %s", exc)
                 return False
-    except Exception:
+    except (OSError, ConnectionError, OperationalError) as exc:
+        logger.debug("Cannot connect to database for site check: %s", exc)
         return False
     finally:
         if engine:
