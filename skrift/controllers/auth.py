@@ -8,8 +8,9 @@ import base64
 import fnmatch
 import hashlib
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Callable
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -28,6 +29,199 @@ from skrift.forms import verify_csrf
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
 
 
+# ---------------------------------------------------------------------------
+# Provider data extraction registry (replaces the if-elif chain)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class UserData:
+    """Normalized user data extracted from any OAuth provider."""
+    oauth_id: str | None
+    email: str | None
+    name: str | None
+    picture_url: str | None
+
+
+# Registry mapping provider name -> extraction function
+_user_data_extractors: dict[str, Callable[[dict], UserData]] = {}
+
+
+def _register_extractor(provider: str):
+    """Decorator to register a user-data extractor for a provider."""
+    def decorator(fn: Callable[[dict], UserData]):
+        _user_data_extractors[provider] = fn
+        return fn
+    return decorator
+
+
+@_register_extractor("google")
+def _extract_google(info: dict) -> UserData:
+    return UserData(
+        oauth_id=info.get("id"),
+        email=info.get("email"),
+        name=info.get("name"),
+        picture_url=info.get("picture"),
+    )
+
+
+@_register_extractor("github")
+def _extract_github(info: dict) -> UserData:
+    return UserData(
+        oauth_id=str(info.get("id")),
+        email=info.get("email"),
+        name=info.get("name") or info.get("login"),
+        picture_url=info.get("avatar_url"),
+    )
+
+
+@_register_extractor("microsoft")
+def _extract_microsoft(info: dict) -> UserData:
+    return UserData(
+        oauth_id=info.get("id"),
+        email=info.get("mail") or info.get("userPrincipalName"),
+        name=info.get("displayName"),
+        picture_url=None,
+    )
+
+
+@_register_extractor("discord")
+def _extract_discord(info: dict) -> UserData:
+    avatar = info.get("avatar")
+    user_id = info.get("id")
+    avatar_url = None
+    if avatar and user_id:
+        avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar}.png"
+    return UserData(
+        oauth_id=user_id,
+        email=info.get("email"),
+        name=info.get("global_name") or info.get("username"),
+        picture_url=avatar_url,
+    )
+
+
+@_register_extractor("facebook")
+def _extract_facebook(info: dict) -> UserData:
+    picture = info.get("picture", {}).get("data", {})
+    return UserData(
+        oauth_id=info.get("id"),
+        email=info.get("email"),
+        name=info.get("name"),
+        picture_url=picture.get("url") if not picture.get("is_silhouette") else None,
+    )
+
+
+@_register_extractor("twitter")
+def _extract_twitter(info: dict) -> UserData:
+    return UserData(
+        oauth_id=info.get("id"),
+        email=info.get("email"),
+        name=info.get("name") or info.get("username"),
+        picture_url=None,
+    )
+
+
+def _extract_default(info: dict) -> UserData:
+    return UserData(
+        oauth_id=str(info.get("id", info.get("sub"))),
+        email=info.get("email"),
+        name=info.get("name"),
+        picture_url=info.get("picture"),
+    )
+
+
+def extract_user_data(provider: str, user_info: dict) -> UserData:
+    """Extract normalized user data from provider-specific response."""
+    extractor = _user_data_extractors.get(provider, _extract_default)
+    return extractor(user_info)
+
+
+# ---------------------------------------------------------------------------
+# Shared account-linking logic (used by both OAuth callback and dummy login)
+# ---------------------------------------------------------------------------
+
+async def find_or_create_user_for_oauth(
+    db_session: AsyncSession,
+    provider: str,
+    oauth_id: str,
+    email: str | None,
+    name: str | None,
+    picture_url: str | None,
+    provider_metadata: dict,
+) -> User:
+    """Find or create a user for an OAuth login, linking accounts as needed.
+
+    Three-step logic:
+    1. If an OAuthAccount already exists for (provider, oauth_id), update and return its user.
+    2. Else if a User with the same email exists, link a new OAuthAccount to that user.
+    3. Else create a brand-new User and OAuthAccount.
+    """
+    # Step 1: Check if OAuth account already exists
+    result = await db_session.execute(
+        select(OAuthAccount)
+        .options(selectinload(OAuthAccount.user))
+        .where(OAuthAccount.provider == provider, OAuthAccount.provider_account_id == oauth_id)
+    )
+    oauth_account = result.scalar_one_or_none()
+
+    if oauth_account:
+        user = oauth_account.user
+        user.name = name
+        if picture_url:
+            user.picture_url = picture_url
+        user.last_login_at = datetime.now(UTC)
+        if email:
+            oauth_account.provider_email = email
+        oauth_account.provider_metadata = provider_metadata
+        await db_session.commit()
+        return user
+
+    # Step 2: Check if a user with this email already exists
+    user = None
+    if email:
+        result = await db_session.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+
+    if user:
+        oauth_account = OAuthAccount(
+            provider=provider,
+            provider_account_id=oauth_id,
+            provider_email=email,
+            provider_metadata=provider_metadata,
+            user_id=user.id,
+        )
+        db_session.add(oauth_account)
+        user.name = name
+        if picture_url:
+            user.picture_url = picture_url
+        user.last_login_at = datetime.now(UTC)
+    else:
+        # Step 3: Create new user + OAuth account
+        user = User(
+            email=email,
+            name=name,
+            picture_url=picture_url,
+            last_login_at=datetime.now(UTC),
+        )
+        db_session.add(user)
+        await db_session.flush()
+
+        oauth_account = OAuthAccount(
+            provider=provider,
+            provider_account_id=oauth_id,
+            provider_email=email,
+            provider_metadata=provider_metadata,
+            user_id=user.id,
+        )
+        db_session.add(oauth_account)
+
+    await db_session.commit()
+    return user
+
+
+# ---------------------------------------------------------------------------
+# URL safety helpers
+# ---------------------------------------------------------------------------
+
 def _is_safe_redirect_url(url: str, allowed_domains: list[str]) -> bool:
     """Check if URL is safe to redirect to.
 
@@ -43,7 +237,7 @@ def _is_safe_redirect_url(url: str, allowed_domains: list[str]) -> bool:
     # Parse absolute URL
     try:
         parsed = urlparse(url)
-    except Exception:
+    except ValueError:
         return False
 
     # Must have scheme and netloc
@@ -77,6 +271,10 @@ def _get_safe_redirect_url(request: Request, allowed_domains: list[str], default
         return next_url
     return default
 
+
+# ---------------------------------------------------------------------------
+# OAuth URL / token / userinfo helpers
+# ---------------------------------------------------------------------------
 
 def get_auth_url(provider: str, settings, state: str, code_challenge: str | None = None) -> str:
     """Build the OAuth authorization URL for a provider."""
@@ -215,64 +413,9 @@ async def fetch_user_info(provider: str, access_token: str) -> dict:
         return user_info
 
 
-def extract_user_data(provider: str, user_info: dict) -> dict:
-    """Extract normalized user data from provider-specific response."""
-    if provider == "google":
-        return {
-            "oauth_id": user_info.get("id"),
-            "email": user_info.get("email"),
-            "name": user_info.get("name"),
-            "picture_url": user_info.get("picture"),
-        }
-    elif provider == "github":
-        return {
-            "oauth_id": str(user_info.get("id")),
-            "email": user_info.get("email"),
-            "name": user_info.get("name") or user_info.get("login"),
-            "picture_url": user_info.get("avatar_url"),
-        }
-    elif provider == "microsoft":
-        return {
-            "oauth_id": user_info.get("id"),
-            "email": user_info.get("mail") or user_info.get("userPrincipalName"),
-            "name": user_info.get("displayName"),
-            "picture_url": None,  # Microsoft Graph requires separate call for photo
-        }
-    elif provider == "discord":
-        avatar = user_info.get("avatar")
-        user_id = user_info.get("id")
-        avatar_url = None
-        if avatar and user_id:
-            avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar}.png"
-        return {
-            "oauth_id": user_id,
-            "email": user_info.get("email"),
-            "name": user_info.get("global_name") or user_info.get("username"),
-            "picture_url": avatar_url,
-        }
-    elif provider == "facebook":
-        picture = user_info.get("picture", {}).get("data", {})
-        return {
-            "oauth_id": user_info.get("id"),
-            "email": user_info.get("email"),
-            "name": user_info.get("name"),
-            "picture_url": picture.get("url") if not picture.get("is_silhouette") else None,
-        }
-    elif provider == "twitter":
-        return {
-            "oauth_id": user_info.get("id"),
-            "email": user_info.get("email"),
-            "name": user_info.get("name") or user_info.get("username"),
-            "picture_url": None,
-        }
-    else:
-        return {
-            "oauth_id": str(user_info.get("id", user_info.get("sub"))),
-            "email": user_info.get("email"),
-            "name": user_info.get("name"),
-            "picture_url": user_info.get("picture"),
-        }
-
+# ---------------------------------------------------------------------------
+# Session helpers
+# ---------------------------------------------------------------------------
 
 def _set_login_session(request: Request, user: "User") -> None:
     """Rotate the session and populate it with user data.
@@ -299,6 +442,10 @@ def _set_login_session(request: Request, user: "User") -> None:
     if flash_messages is not None:
         request.session["flash_messages"] = flash_messages
 
+
+# ---------------------------------------------------------------------------
+# Controller
+# ---------------------------------------------------------------------------
 
 class AuthController(Controller):
     path = "/auth"
@@ -396,77 +543,19 @@ class AuthController(Controller):
         user_info = await fetch_user_info(provider, access_token)
         user_data = extract_user_data(provider, user_info)
 
-        oauth_id = user_data["oauth_id"]
-        if not oauth_id:
+        if not user_data.oauth_id:
             raise HTTPException(status_code=400, detail="Could not determine user ID")
 
-        email = user_data["email"]
-
-        # Step 1: Check if OAuth account already exists
-        result = await db_session.execute(
-            select(OAuthAccount)
-            .options(selectinload(OAuthAccount.user))
-            .where(OAuthAccount.provider == provider, OAuthAccount.provider_account_id == oauth_id)
+        # Unified account linking
+        user = await find_or_create_user_for_oauth(
+            db_session,
+            provider=provider,
+            oauth_id=user_data.oauth_id,
+            email=user_data.email,
+            name=user_data.name,
+            picture_url=user_data.picture_url,
+            provider_metadata=user_info,
         )
-        oauth_account = result.scalar_one_or_none()
-
-        if oauth_account:
-            # Existing OAuth account - update user profile
-            user = oauth_account.user
-            user.name = user_data["name"]
-            if user_data["picture_url"]:
-                user.picture_url = user_data["picture_url"]
-            user.last_login_at = datetime.now(UTC)
-            # Update provider email if changed
-            if email:
-                oauth_account.provider_email = email
-            # Update provider metadata
-            oauth_account.provider_metadata = user_info
-        else:
-            # Step 2: Check if a user with this email already exists
-            user = None
-            if email:
-                result = await db_session.execute(
-                    select(User).where(User.email == email)
-                )
-                user = result.scalar_one_or_none()
-
-            if user:
-                # Link new OAuth account to existing user
-                oauth_account = OAuthAccount(
-                    provider=provider,
-                    provider_account_id=oauth_id,
-                    provider_email=email,
-                    provider_metadata=user_info,
-                    user_id=user.id,
-                )
-                db_session.add(oauth_account)
-                # Update user profile
-                user.name = user_data["name"]
-                if user_data["picture_url"]:
-                    user.picture_url = user_data["picture_url"]
-                user.last_login_at = datetime.now(UTC)
-            else:
-                # Step 3: Create new user + OAuth account
-                user = User(
-                    email=email,
-                    name=user_data["name"],
-                    picture_url=user_data["picture_url"],
-                    last_login_at=datetime.now(UTC),
-                )
-                db_session.add(user)
-                await db_session.flush()
-
-                oauth_account = OAuthAccount(
-                    provider=provider,
-                    provider_account_id=oauth_id,
-                    provider_email=email,
-                    provider_metadata=user_info,
-                    user_id=user.id,
-                )
-                db_session.add(oauth_account)
-
-        await db_session.commit()
 
         # Set flash before rotation so it's preserved
         request.session["flash"] = "Successfully logged in!"
@@ -548,65 +637,16 @@ class AuthController(Controller):
             "name": name,
         }
 
-        # Step 1: Check if OAuth account already exists
-        result = await db_session.execute(
-            select(OAuthAccount)
-            .options(selectinload(OAuthAccount.user))
-            .where(
-                OAuthAccount.provider == DUMMY_PROVIDER_KEY,
-                OAuthAccount.provider_account_id == oauth_id,
-            )
+        # Unified account linking (same logic as OAuth callback)
+        user = await find_or_create_user_for_oauth(
+            db_session,
+            provider=DUMMY_PROVIDER_KEY,
+            oauth_id=oauth_id,
+            email=email,
+            name=name,
+            picture_url=None,
+            provider_metadata=dummy_metadata,
         )
-        oauth_account = result.scalar_one_or_none()
-
-        if oauth_account:
-            # Existing OAuth account - update user profile
-            user = oauth_account.user
-            user.name = name
-            user.email = email
-            user.last_login_at = datetime.now(UTC)
-            oauth_account.provider_email = email
-            oauth_account.provider_metadata = dummy_metadata
-        else:
-            # Step 2: Check if a user with this email already exists
-            result = await db_session.execute(
-                select(User).where(User.email == email)
-            )
-            user = result.scalar_one_or_none()
-
-            if user:
-                # Link new OAuth account to existing user
-                oauth_account = OAuthAccount(
-                    provider=DUMMY_PROVIDER_KEY,
-                    provider_account_id=oauth_id,
-                    provider_email=email,
-                    provider_metadata=dummy_metadata,
-                    user_id=user.id,
-                )
-                db_session.add(oauth_account)
-                # Update user profile
-                user.name = name
-                user.last_login_at = datetime.now(UTC)
-            else:
-                # Step 3: Create new user + OAuth account
-                user = User(
-                    email=email,
-                    name=name,
-                    last_login_at=datetime.now(UTC),
-                )
-                db_session.add(user)
-                await db_session.flush()
-
-                oauth_account = OAuthAccount(
-                    provider=DUMMY_PROVIDER_KEY,
-                    provider_account_id=oauth_id,
-                    provider_email=email,
-                    provider_metadata=dummy_metadata,
-                    user_id=user.id,
-                )
-                db_session.add(oauth_account)
-
-        await db_session.commit()
 
         # Set flash before rotation so it's preserved
         request.session["flash"] = "Successfully logged in!"

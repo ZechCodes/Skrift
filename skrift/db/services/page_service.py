@@ -4,7 +4,7 @@ from datetime import datetime, UTC
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models import Page
@@ -13,6 +13,27 @@ from skrift.lib.hooks import hooks, BEFORE_PAGE_SAVE, AFTER_PAGE_SAVE, BEFORE_PA
 
 
 OrderBy = Literal["order", "created", "published", "title"]
+
+_UNSET = object()  # Sentinel for distinguishing None from "not provided"
+
+
+def published_filter() -> list[ColumnElement]:
+    """Return SQLAlchemy filter clauses for published + scheduling checks.
+
+    Use this anywhere you need to filter to only visible/published pages.
+    """
+    now = datetime.now(UTC)
+    return [
+        Page.is_published == True,
+        or_(Page.publish_at.is_(None), Page.publish_at <= now),
+    ]
+
+
+def _apply_field_updates(page: Page, updates: dict) -> None:
+    """Apply a dict of {field_name: value} to a Page, skipping _UNSET values."""
+    for field, value in updates.items():
+        if value is not _UNSET:
+            setattr(page, field, value)
 
 
 async def list_pages(
@@ -41,10 +62,7 @@ async def list_pages(
     # Build filters
     filters = []
     if published_only:
-        now = datetime.now(UTC)
-        filters.append(Page.is_published == True)
-        # Respect scheduling: either no publish_at set, or publish_at is in the past
-        filters.append(or_(Page.publish_at.is_(None), Page.publish_at <= now))
+        filters.extend(published_filter())
     if user_id:
         filters.append(Page.user_id == user_id)
 
@@ -89,10 +107,8 @@ async def get_page_by_slug(
     query = select(Page).where(Page.slug == slug)
 
     if published_only:
-        now = datetime.now(UTC)
-        query = query.where(Page.is_published == True)
-        # Respect scheduling: either no publish_at set, or publish_at is in the past
-        query = query.where(or_(Page.publish_at.is_(None), Page.publish_at <= now))
+        for clause in published_filter():
+            query = query.where(clause)
 
     result = await db_session.execute(query)
     return result.scalar_one_or_none()
@@ -181,9 +197,6 @@ async def create_page(
     return page
 
 
-_UNSET = object()  # Sentinel for distinguishing None from "not provided"
-
-
 async def update_page(
     db_session: AsyncSession,
     page_id: UUID,
@@ -240,30 +253,21 @@ async def update_page(
     # Fire before_page_save action (is_new=False for updates)
     await hooks.do_action(BEFORE_PAGE_SAVE, page, is_new=False)
 
-    if slug is not None:
-        page.slug = slug
-    if title is not None:
-        page.title = title
-    if content is not None:
-        page.content = content
-    if is_published is not None:
-        page.is_published = is_published
-    if published_at is not None:
-        page.published_at = published_at
-    if order is not None:
-        page.order = order
-    if publish_at is not _UNSET:
-        page.publish_at = publish_at
-    if meta_description is not _UNSET:
-        page.meta_description = meta_description
-    if og_title is not _UNSET:
-        page.og_title = og_title
-    if og_description is not _UNSET:
-        page.og_description = og_description
-    if og_image is not _UNSET:
-        page.og_image = og_image
-    if meta_robots is not _UNSET:
-        page.meta_robots = meta_robots
+    # Apply non-None field updates (use _UNSET sentinel for nullable fields)
+    _apply_field_updates(page, {
+        "slug": slug if slug is not None else _UNSET,
+        "title": title if title is not None else _UNSET,
+        "content": content if content is not None else _UNSET,
+        "is_published": is_published if is_published is not None else _UNSET,
+        "published_at": published_at if published_at is not None else _UNSET,
+        "order": order if order is not None else _UNSET,
+        "publish_at": publish_at,
+        "meta_description": meta_description,
+        "og_title": og_title,
+        "og_description": og_description,
+        "og_image": og_image,
+        "meta_robots": meta_robots,
+    })
 
     await db_session.commit()
     await db_session.refresh(page)

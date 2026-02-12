@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -15,9 +17,11 @@ from skrift.db.models.role import Role, RolePermission
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+logger = logging.getLogger(__name__)
 
 # Cache for user permissions with TTL
 _permission_cache: dict[str, tuple[datetime, "UserPermissions"]] = {}
+_permission_cache_lock = asyncio.Lock()
 CACHE_TTL = timedelta(minutes=5)
 
 
@@ -39,11 +43,12 @@ async def get_user_permissions(
     """
     user_id_str = str(user_id)
 
-    # Check cache
-    if user_id_str in _permission_cache:
-        cached_time, cached_perms = _permission_cache[user_id_str]
-        if datetime.now() - cached_time < CACHE_TTL:
-            return cached_perms
+    # Check cache (read under lock to avoid partial-read races)
+    async with _permission_cache_lock:
+        if user_id_str in _permission_cache:
+            cached_time, cached_perms = _permission_cache[user_id_str]
+            if datetime.now() - cached_time < CACHE_TTL:
+                return cached_perms
 
     # Query user with roles and permissions
     from skrift.db.models.user import User
@@ -63,8 +68,9 @@ async def get_user_permissions(
             for role_perm in role.permissions:
                 permissions.permissions.add(role_perm.permission)
 
-    # Update cache
-    _permission_cache[user_id_str] = (datetime.now(), permissions)
+    # Update cache under lock
+    async with _permission_cache_lock:
+        _permission_cache[user_id_str] = (datetime.now(), permissions)
 
     return permissions
 
