@@ -3,6 +3,7 @@ from uuid import UUID
 from markupsafe import Markup
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from skrift.lib.hooks import hooks
 from twitter.hooks import (
@@ -84,7 +85,9 @@ async def create_retweet(
 
 async def get_tweet_by_id(db_session: AsyncSession, tweet_id: UUID) -> Tweet | None:
     result = await db_session.execute(
-        select(Tweet).where(and_(Tweet.id == tweet_id, Tweet.is_deleted == False))
+        select(Tweet)
+        .options(selectinload(Tweet.retweet_of).selectinload(Tweet.user))
+        .where(and_(Tweet.id == tweet_id, Tweet.is_deleted == False))
     )
     return result.scalar_one_or_none()
 
@@ -97,6 +100,7 @@ async def get_tweet_replies(
 ) -> list[Tweet]:
     result = await db_session.execute(
         select(Tweet)
+        .options(selectinload(Tweet.retweet_of).selectinload(Tweet.user))
         .where(and_(Tweet.parent_id == tweet_id, Tweet.is_deleted == False))
         .order_by(Tweet.created_at.asc())
         .offset(offset)
@@ -113,6 +117,7 @@ async def get_user_tweets(
 ) -> list[Tweet]:
     result = await db_session.execute(
         select(Tweet)
+        .options(selectinload(Tweet.retweet_of).selectinload(Tweet.user))
         .where(
             and_(
                 Tweet.user_id == user_id,
@@ -171,6 +176,7 @@ async def search_tweets(
 ) -> list[Tweet]:
     result = await db_session.execute(
         select(Tweet)
+        .options(selectinload(Tweet.retweet_of).selectinload(Tweet.user))
         .where(
             and_(
                 Tweet.content.ilike(f"%{query}%"),

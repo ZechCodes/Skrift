@@ -17,6 +17,7 @@ from skrift.forms import verify_csrf, csrf_field
 from twitter.hooks import TWEET_SEO_META, TWEET_OG_META
 from twitter.models.tweet import Tweet
 from twitter.services import tweet_service, like_service, follow_service, feed_service
+from twitter.services.feed_service import get_retweeted_tweet_ids
 
 
 class ProfileController(Controller):
@@ -64,17 +65,20 @@ class ProfileController(Controller):
         if user and user.id != profile_id:
             is_following = await follow_service.is_following(db_session, user.id, profile_id)
 
-        # Tweet interaction state
-        tweet_ids = [t.id for t in tweets]
+        # Tweet interaction state — use original tweet IDs for retweets
+        source_ids = [t.retweet_of.id if t.retweet_of else t.id for t in tweets]
         liked_ids: set = set()
         bookmarked_ids: set = set()
+        retweeted_ids: set = set()
         if user:
-            liked_ids = await like_service.get_liked_tweet_ids(db_session, user.id, tweet_ids)
-            bookmarked_ids = await feed_service.get_bookmarked_tweet_ids(db_session, user.id, tweet_ids)
+            liked_ids = await like_service.get_liked_tweet_ids(db_session, user.id, source_ids)
+            bookmarked_ids = await feed_service.get_bookmarked_tweet_ids(db_session, user.id, source_ids)
+            retweeted_ids = await get_retweeted_tweet_ids(db_session, user.id, source_ids)
 
         rendered = {}
         for t in tweets:
-            rendered[t.id] = await tweet_service.render_tweet_content(t.content)
+            source = t.retweet_of if t.retweet_of else t
+            rendered[source.id] = await tweet_service.render_tweet_content(source.content)
 
         # SEO
         site_name = get_cached_site_name()
@@ -111,6 +115,7 @@ class ProfileController(Controller):
                 "is_following": is_following,
                 "liked_ids": liked_ids,
                 "bookmarked_ids": bookmarked_ids,
+                "retweeted_ids": retweeted_ids,
                 "rendered_content": rendered,
                 "csrf_field": csrf_field(request) if user else "",
                 "seo_meta": seo_meta,

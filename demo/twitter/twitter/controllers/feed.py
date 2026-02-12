@@ -15,7 +15,7 @@ from skrift.forms import Form, csrf_field
 
 from twitter.forms import ComposeTweetForm
 from twitter.services import feed_service, tweet_service, like_service
-from twitter.services.feed_service import get_bookmarked_tweet_ids
+from twitter.services.feed_service import get_bookmarked_tweet_ids, get_retweeted_tweet_ids
 
 # Import to trigger hook/role registration at module load
 import twitter.hooks  # noqa: F401
@@ -35,21 +35,27 @@ class FeedController(Controller):
     async def _tweet_context(
         self, request: Request, tweets: list, user: User | None, db_session: AsyncSession
     ) -> dict:
-        """Build context for tweet lists: render content and get like/bookmark state."""
-        tweet_ids = [t.id for t in tweets]
+        """Build context for tweet lists: render content and get like/bookmark/retweet state."""
+        # Collect source IDs: original tweet ID for retweets, own ID otherwise
+        source_ids = [t.retweet_of.id if t.retweet_of else t.id for t in tweets]
+
         liked_ids: set = set()
         bookmarked_ids: set = set()
+        retweeted_ids: set = set()
         if user:
-            liked_ids = await like_service.get_liked_tweet_ids(db_session, user.id, tweet_ids)
-            bookmarked_ids = await get_bookmarked_tweet_ids(db_session, user.id, tweet_ids)
+            liked_ids = await like_service.get_liked_tweet_ids(db_session, user.id, source_ids)
+            bookmarked_ids = await get_bookmarked_tweet_ids(db_session, user.id, source_ids)
+            retweeted_ids = await get_retweeted_tweet_ids(db_session, user.id, source_ids)
 
         rendered = {}
         for t in tweets:
-            rendered[t.id] = await tweet_service.render_tweet_content(t.content)
+            source = t.retweet_of if t.retweet_of else t
+            rendered[source.id] = await tweet_service.render_tweet_content(source.content)
 
         return {
             "liked_ids": liked_ids,
             "bookmarked_ids": bookmarked_ids,
+            "retweeted_ids": retweeted_ids,
             "rendered_content": rendered,
             "csrf_field": csrf_field(request) if user else Markup(""),
         }
