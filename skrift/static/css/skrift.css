@@ -837,3 +837,54 @@ hr {
 :focus:not(:focus-visible) {
     outline: none;
 }
+
+/* ========================================
+   Dark Theme (System Preference)
+   ======================================== */
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --sk-color-bg: #181b20;
+        --sk-color-text: #e0e4eb;
+        --sk-color-muted: #888e9e;
+        --sk-color-accent: #5b8cf7;
+        --sk-color-accent-hover: #7ba3ff;
+        --sk-color-accent-soft: rgba(91, 140, 247, 0.12);
+        --sk-color-border: #2c3240;
+        --sk-color-surface: #1e222a;
+        --sk-color-warm: #242830;
+
+        --sk-color-success: #5aad5a;
+        --sk-color-warning: #d4a24a;
+        --sk-color-error: #e05545;
+        --sk-color-info: #4da3dc;
+
+        --sk-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+        --sk-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+        --sk-shadow-lg: 0 4px 24px rgba(0, 0, 0, 0.5);
+    }
+
+    .sk-flash-success {
+        background-color: rgba(90, 173, 90, 0.15);
+    }
+
+    .sk-flash-error {
+        background-color: rgba(224, 85, 69, 0.15);
+    }
+
+    .sk-flash-warning {
+        background-color: rgba(212, 162, 74, 0.15);
+    }
+
+    .sk-flash-info {
+        background-color: rgba(77, 163, 220, 0.15);
+    }
+
+    .sk-status-published {
+        background-color: rgba(90, 173, 90, 0.15);
+    }
+
+    .sk-status-scheduled {
+        background-color: rgba(212, 162, 74, 0.15);
+    }
+}

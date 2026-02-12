@@ -482,3 +482,33 @@
     font-size: 1rem;
     margin: 0;
 }
+
+/* ========================================
+   Dark Theme (System Preference)
+   ======================================== */
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --sk-admin-sidebar-bg: #12151a;
+    }
+
+    .sk-stat-card:hover {
+        box-shadow: 0 0.125rem 0.75rem rgba(0, 0, 0, 0.2);
+    }
+
+    .sk-pill-published {
+        background: rgba(90, 173, 90, 0.15);
+    }
+
+    .sk-pill-review {
+        background: rgba(212, 162, 74, 0.15);
+    }
+
+    .sk-mini-row {
+        border-bottom-color: rgba(255, 255, 255, 0.06);
+    }
+
+    .sk-activity-item {
+        border-bottom-color: rgba(255, 255, 255, 0.06);
+    }
+}
