@@ -23,7 +23,7 @@ from advanced_alchemy.extensions.litestar import (
     SQLAlchemyPlugin,
 )
 
-from skrift.db.session import SafeSQLAlchemyAsyncConfig
+from skrift.db.session import SessionCleanupMiddleware
 from litestar import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.config.csrf import CSRFConfig as LitestarCSRFConfig
@@ -433,7 +433,7 @@ def create_app() -> Litestar:
             echo=settings.db.echo,
         )
 
-    db_config = SafeSQLAlchemyAsyncConfig(
+    db_config = SQLAlchemyAsyncConfig(
         connection_string=settings.db.url,
         metadata=Base.metadata,
         create_all=False,
@@ -540,7 +540,7 @@ def create_app() -> Litestar:
         on_startup=[on_startup],
         route_handlers=[*controllers, static_files_router],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[*security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
+        middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip"),
         csrf_config=csrf_config,
@@ -647,7 +647,7 @@ def create_setup_app() -> Litestar:
                 echo=False,
             )
 
-        db_config = SafeSQLAlchemyAsyncConfig(
+        db_config = SQLAlchemyAsyncConfig(
             connection_string=db_url,
             metadata=Base.metadata,
             create_all=False,
@@ -670,7 +670,7 @@ def create_setup_app() -> Litestar:
         on_startup=[on_startup],
         route_handlers=route_handlers,
         plugins=plugins,
-        middleware=[session_config.middleware],
+        middleware=[DefineMiddleware(SessionCleanupMiddleware), session_config.middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip"),
         exception_handlers={
