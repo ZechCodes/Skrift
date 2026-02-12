@@ -52,6 +52,27 @@ from skrift.lib.exceptions import http_exception_handler, internal_server_error_
 from skrift.lib.markdown import render_markdown
 
 
+class StaticHasher:
+    """Resolves static file paths and caches content hashes for URL cache busting."""
+
+    def __init__(self, directories: list[Path]) -> None:
+        self._directories = directories
+        self._cache: dict[str, str] = {}
+
+    def __call__(self, path: str) -> str:
+        if path not in self._cache:
+            self._cache[path] = self._compute(path)
+        return self._cache[path]
+
+    def _compute(self, path: str) -> str:
+        for directory in self._directories:
+            full = directory / path
+            if full.is_file():
+                digest = hashlib.sha256(full.read_bytes()).hexdigest()[:8]
+                return f"/static/{path}?h={digest}"
+        return f"/static/{path}"
+
+
 def load_controllers() -> list:
     """Load controllers from app.yaml configuration."""
     config_path = get_config_path()
@@ -508,6 +529,7 @@ def create_app() -> Litestar:
             "Form": Form,
             "csrf_field": _csrf_field,
             "csp_nonce": lambda: csp_nonce_var.get(""),
+            "static_url": static_url,
         })
         engine.engine.filters.update({"markdown": render_markdown})
 
@@ -524,6 +546,9 @@ def create_app() -> Litestar:
         directories=[working_dir_static, Path(__file__).parent / "static"],
     )
 
+    static_url = StaticHasher([working_dir_static, Path(__file__).parent / "static"])
+
+    from skrift.controllers.notifications import NotificationsController
     from skrift.auth import sync_roles_to_database
 
     async def on_startup(_app: Litestar) -> None:
@@ -538,7 +563,7 @@ def create_app() -> Litestar:
 
     return Litestar(
         on_startup=[on_startup],
-        route_handlers=[*controllers, static_files_router],
+        route_handlers=[NotificationsController, *controllers, static_files_router],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
@@ -590,6 +615,7 @@ def create_setup_app() -> Litestar:
             "site_copyright_holder": lambda: "",
             "site_copyright_start_year": lambda: None,
             "csp_nonce": lambda: csp_nonce_var.get(""),
+            "static_url": static_url,
         })
         engine.engine.filters.update({"markdown": render_markdown})
 
@@ -605,6 +631,8 @@ def create_setup_app() -> Litestar:
         path="/static",
         directories=[working_dir_static, Path(__file__).parent / "static"],
     )
+
+    static_url = StaticHasher([working_dir_static, Path(__file__).parent / "static"])
 
     # Import controllers
     from skrift.setup.controller import SetupController, SetupAuthController
