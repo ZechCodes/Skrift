@@ -178,6 +178,21 @@ notify_user(str(user.id), "generic", title="New reply", message="Someone replied
 notify_broadcast("new_tweet", tweet_id="...", content_html="...")
 ```
 
+**Group key — replace-in-place updates:**
+
+All three functions accept an optional `group` keyword argument. When a new notification arrives with the same group key, the previous one is automatically dismissed first:
+
+```python
+# Each call replaces the previous "deploy-progress" notification
+notify_session(nid, "generic", group="deploy-progress", title="Deploying…", message="Step 1/3")
+notify_session(nid, "generic", group="deploy-progress", title="Deploying…", message="Step 2/3")
+notify_session(nid, "generic", group="deploy-progress", title="Deployed!", message="Step 3/3")
+
+# Works with all scopes
+notify_user(str(user.id), "generic", group="upload-status", title="Uploading…", message="50%")
+notify_broadcast("generic", group="maintenance", title="Maintenance", message="Starting soon…")
+```
+
 **Built-in notification types:**
 - `"generic"` — rendered as a toast with `title` + `message` (built-in UI)
 - `"dismissed"` — internal, triggers client-side removal
@@ -193,6 +208,18 @@ document.addEventListener('sk:notification', (e) => {
         e.preventDefault();  // Prevents default generic toast
     }
 });
+```
+
+**Dismissing by group key (backend):**
+
+```python
+from skrift.lib.notifications import dismiss_session_group, dismiss_user_group
+
+# Dismiss the current "deploy-progress" notification for a session
+dismiss_session_group(nid, "deploy-progress")
+
+# Dismiss the current "upload-status" notification for a user (all sessions)
+dismiss_user_group(str(user.id), "upload-status")
 ```
 
 **Key details:**

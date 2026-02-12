@@ -24,9 +24,13 @@ class Notification:
     id: UUID = field(default_factory=uuid4)
     created_at: float = field(default_factory=time.monotonic)
     payload: dict[str, Any] = field(default_factory=dict)
+    group: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"type": self.type, "id": str(self.id), **self.payload}
+        d = {"type": self.type, "id": str(self.id), **self.payload}
+        if self.group is not None:
+            d["group"] = self.group
+        return d
 
 
 class NotificationService:
@@ -38,14 +42,46 @@ class NotificationService:
         self._connections: dict[str, list[asyncio.Queue]] = {}
         self._connection_user_ids: dict[str, str | None] = {}
 
+    def _dismiss_by_group(
+        self, queue: dict[UUID, Notification], group: str
+    ) -> Notification | None:
+        """Find and remove a notification with the given group key from *queue*."""
+        for nid, notif in queue.items():
+            if notif.group == group:
+                del queue[nid]
+                return notif
+        return None
+
     def send_to_session(self, nid: str, notification: Notification) -> None:
         """Store a notification in the session queue and push to active connections."""
+        if notification.group:
+            session_q = self._session_queues.get(nid, {})
+            old = self._dismiss_by_group(session_q, notification.group)
+            if old is not None:
+                dismissed = Notification(
+                    type="dismissed", id=old.id, payload={}
+                )
+                for q in self._connections.get(nid, []):
+                    q.put_nowait(dismissed)
+
         self._session_queues.setdefault(nid, {})[notification.id] = notification
         for q in self._connections.get(nid, []):
             q.put_nowait(notification)
 
     def send_to_user(self, user_id: str, notification: Notification) -> None:
         """Store a notification in the user queue and push to all connections for this user."""
+        if notification.group:
+            user_q = self._user_queues.get(user_id, {})
+            old = self._dismiss_by_group(user_q, notification.group)
+            if old is not None:
+                dismissed = Notification(
+                    type="dismissed", id=old.id, payload={}
+                )
+                for sid, uid in self._connection_user_ids.items():
+                    if uid == user_id:
+                        for q in self._connections.get(sid, []):
+                            q.put_nowait(dismissed)
+
         self._user_queues.setdefault(user_id, {})[notification.id] = notification
         for nid, uid in self._connection_user_ids.items():
             if uid == user_id:
@@ -59,40 +95,54 @@ class NotificationService:
                 q.put_nowait(notification)
 
     def dismiss(
-        self, nid: str, user_id: str | None, notification_id: UUID
+        self,
+        nid: str,
+        user_id: str | None,
+        notification_id: UUID | None = None,
+        *,
+        group: str | None = None,
     ) -> bool:
-        """Remove a notification from queues and send ephemeral dismissed event.
+        """Remove a notification from queues and push a dismissed event.
 
-        Returns True if the notification was found and removed.
+        Lookup by *notification_id* (UUID) or *group* key — supply one.
+        Returns True if a notification was found and removed.
         """
-        found = False
+        dismissed_id: UUID | None = None
 
         session_q = self._session_queues.get(nid, {})
-        if notification_id in session_q:
-            del session_q[notification_id]
-            found = True
+        if notification_id is not None:
+            if notification_id in session_q:
+                del session_q[notification_id]
+                dismissed_id = notification_id
+        elif group is not None:
+            old = self._dismiss_by_group(session_q, group)
+            if old is not None:
+                dismissed_id = old.id
 
         if user_id:
             user_q = self._user_queues.get(user_id, {})
-            if notification_id in user_q:
-                del user_q[notification_id]
-                found = True
+            if notification_id is not None:
+                if notification_id in user_q:
+                    del user_q[notification_id]
+                    dismissed_id = notification_id
+            elif group is not None:
+                old = self._dismiss_by_group(user_q, group)
+                if old is not None:
+                    dismissed_id = old.id
 
-        if found:
+        if dismissed_id is not None:
             dismissed = Notification(
-                type="dismissed", id=notification_id, payload={}
+                type="dismissed", id=dismissed_id, payload={}
             )
-            # Push to this session's connections
             for q in self._connections.get(nid, []):
                 q.put_nowait(dismissed)
-            # Push to other sessions of the same user
             if user_id:
                 for other_nid, uid in self._connection_user_ids.items():
                     if uid == user_id and other_nid != nid:
                         for q in self._connections.get(other_nid, []):
                             q.put_nowait(dismissed)
 
-        return found
+        return dismissed_id is not None
 
     def get_queued(
         self, nid: str, user_id: str | None
@@ -129,25 +179,41 @@ class NotificationService:
 notifications = NotificationService()
 
 
-def notify_session(nid: str, type: str, **payload) -> Notification:
+def notify_session(nid: str, type: str, *, group: str | None = None, **payload) -> Notification:
     """Convenience: send a notification to a session."""
-    n = Notification(type=type, payload=payload)
+    n = Notification(type=type, payload=payload, group=group)
     notifications.send_to_session(nid, n)
     return n
 
 
-def notify_user(user_id: str, type: str, **payload) -> Notification:
+def notify_user(user_id: str, type: str, *, group: str | None = None, **payload) -> Notification:
     """Convenience: send a notification to a user (all their sessions)."""
-    n = Notification(type=type, payload=payload)
+    n = Notification(type=type, payload=payload, group=group)
     notifications.send_to_user(user_id, n)
     return n
 
 
-def notify_broadcast(type: str, **payload) -> Notification:
+def notify_broadcast(type: str, *, group: str | None = None, **payload) -> Notification:
     """Convenience: broadcast an ephemeral notification to all active connections."""
-    n = Notification(type=type, payload=payload)
+    n = Notification(type=type, payload=payload, group=group)
     notifications.broadcast(n)
     return n
+
+
+def dismiss_session_group(nid: str, group: str) -> bool:
+    """Dismiss the notification with *group* from the session queue."""
+    return notifications.dismiss(nid, None, group=group)
+
+
+def dismiss_user_group(user_id: str, group: str) -> bool:
+    """Dismiss the notification with *group* from the user queue (all sessions)."""
+    # Find any session belonging to this user to anchor the dismiss event push.
+    anchor_nid: str | None = None
+    for sid, uid in notifications._connection_user_ids.items():
+        if uid == user_id:
+            anchor_nid = sid
+            break
+    return notifications.dismiss(anchor_nid or "", user_id, group=group)
 
 
 def _ensure_nid(request) -> str:

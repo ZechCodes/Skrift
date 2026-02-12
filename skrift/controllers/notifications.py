@@ -62,3 +62,19 @@ class NotificationsController(Controller):
         return Response(
             content={"error": "not found"}, status_code=404
         )
+
+    @delete("/group/{group:str}", status_code=200)
+    async def dismiss_group(
+        self, request: Request, group: str
+    ) -> Response:
+        """Dismiss a notification by group key."""
+        nid = _ensure_nid(request)
+        user_id = request.session.get("user_id")
+        found = notifications.dismiss(nid, user_id, group=group)
+        if found:
+            return Response(
+                content={"dismissed_group": group}, status_code=200
+            )
+        return Response(
+            content={"error": "not found"}, status_code=404
+        )

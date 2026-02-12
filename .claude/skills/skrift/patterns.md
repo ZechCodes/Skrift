@@ -373,6 +373,34 @@ notify_broadcast(
 )
 ```
 
+### Replace-in-Place with Group Key
+
+```python
+from skrift.lib.notifications import notify_session, notify_user, _ensure_nid
+
+# Progress updates — each replaces the previous toast
+nid = _ensure_nid(request)
+notify_session(nid, "generic", group="deploy", title="Deploying…", message="Step 1/3")
+notify_session(nid, "generic", group="deploy", title="Deploying…", message="Step 2/3")
+notify_session(nid, "generic", group="deploy", title="Deployed!", message="Done")
+
+# User-scoped status update — replaces across all their sessions
+notify_user(str(user.id), "generic", group="upload-status", title="Uploading…", message="50%")
+notify_user(str(user.id), "generic", group="upload-status", title="Upload complete", message="100%")
+```
+
+### Dismiss by Group Key (Backend)
+
+```python
+from skrift.lib.notifications import dismiss_session_group, dismiss_user_group
+
+# Dismiss the active "deploy" notification without knowing its UUID
+dismiss_session_group(nid, "deploy")
+
+# Dismiss from a user's queue (pushes dismissed event to all their sessions)
+dismiss_user_group(str(user.id), "upload-status")
+```
+
 ### Handle Custom Notification Types (Client-Side)
 
 ```javascript

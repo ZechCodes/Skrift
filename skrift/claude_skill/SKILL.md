@@ -151,8 +151,8 @@ result = await hooks.apply_filters("my_filter", initial_value, arg1)
 ```
 
 Built-in hooks:
-- Actions: `before_page_save`, `after_page_save`, `before_page_delete`, `after_page_delete`
-- Filters: `page_seo_meta`, `page_og_meta`, `sitemap_urls`, `sitemap_page`, `robots_txt`, `template_context`
+- Actions: `before_page_save`, `after_page_save`, `before_page_delete`, `after_page_delete`, `notification_sent`, `notification_dismissed`
+- Filters: `page_seo_meta`, `page_og_meta`, `sitemap_urls`, `sitemap_page`, `robots_txt`, `template_context`, `form_{name}_validated`, `form_validated`
 
 ### Using Guards (Authorization)
 
