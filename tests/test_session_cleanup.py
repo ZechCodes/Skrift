@@ -1,11 +1,12 @@
 """Tests for SQLAlchemy session cleanup on request cancellation."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from skrift.config import DatabaseConfig
+from skrift.db.session import SessionCleanupMiddleware
 
 
 class TestDatabaseConfig:
@@ -27,8 +28,8 @@ class TestDatabaseConfig:
         assert config.pool_pre_ping is True
 
 
-class TestSafeSQLAlchemyAsyncConfig:
-    """Tests for SafeSQLAlchemyAsyncConfig session cleanup."""
+class TestSessionCleanupMiddleware:
+    """Tests for SessionCleanupMiddleware."""
 
     @pytest.fixture
     def mock_session(self):
@@ -37,117 +38,46 @@ class TestSafeSQLAlchemyAsyncConfig:
         session.close = AsyncMock()
         return session
 
-    @pytest.fixture
-    def mock_state(self):
-        """Create a mock application state."""
-        state = MagicMock()
-        return state
-
-    @pytest.fixture
-    def mock_scope(self):
-        """Create a mock ASGI scope."""
-        return {"state": {}, "type": "http"}
-
     @pytest.mark.asyncio
-    async def test_session_closed_on_cancelled_error(
-        self, mock_session, mock_state, mock_scope
-    ):
+    async def test_session_closed_on_cancelled_error(self, mock_session):
         """Session should be closed when CancelledError is raised."""
-        from skrift.db.session import SafeSQLAlchemyAsyncConfig
+        # advanced-alchemy stores session under _aa_connection_state namespace
+        scope = {"type": "http", "_aa_connection_state": {"advanced_alchemy_async_session": mock_session}}
 
-        config = SafeSQLAlchemyAsyncConfig(
-            connection_string="sqlite+aiosqlite:///./test.db"
-        )
+        async def cancelling_app(scope, receive, send):
+            raise asyncio.CancelledError()
 
-        # Mock the session maker to return our mock session
-        mock_session_maker = MagicMock(return_value=mock_session)
-        mock_state.__getitem__ = MagicMock(return_value=mock_session_maker)
+        middleware = SessionCleanupMiddleware(cancelling_app)
 
-        # Mock the advanced_alchemy utilities
-        with (
-            patch("skrift.db.session.get_aa_scope_state", return_value=None),
-            patch("skrift.db.session.delete_aa_scope_state") as mock_delete,
-            patch("skrift.db.session.set_aa_scope_state"),
-            patch("skrift.db.session.set_async_context"),
-        ):
-            # Get the async generator
-            gen = config.provide_session(mock_state, mock_scope)
+        with pytest.raises(asyncio.CancelledError):
+            await middleware(scope, AsyncMock(), AsyncMock())
 
-            # Start the generator and get the session
-            session = await gen.__anext__()
-            assert session is mock_session
-
-            # Simulate a CancelledError
-            with pytest.raises(asyncio.CancelledError):
-                await gen.athrow(asyncio.CancelledError())
-
-            # Verify session was closed
-            mock_session.close.assert_called_once()
-            # Verify session was removed from scope state
-            mock_delete.assert_called_once()
+        mock_session.close.assert_called_once()
+        assert "advanced_alchemy_async_session" not in scope["_aa_connection_state"]
 
     @pytest.mark.asyncio
-    async def test_normal_operation_not_affected(
-        self, mock_session, mock_state, mock_scope
-    ):
-        """Normal session operations should work correctly."""
-        from skrift.db.session import SafeSQLAlchemyAsyncConfig
+    async def test_normal_operation_not_affected(self, mock_session):
+        """Session should NOT be closed during normal operation."""
+        scope = {"type": "http", "_aa_connection_state": {"advanced_alchemy_async_session": mock_session}}
 
-        config = SafeSQLAlchemyAsyncConfig(
-            connection_string="sqlite+aiosqlite:///./test.db"
-        )
+        async def normal_app(scope, receive, send):
+            pass
 
-        # Mock the session maker to return our mock session
-        mock_session_maker = MagicMock(return_value=mock_session)
-        mock_state.__getitem__ = MagicMock(return_value=mock_session_maker)
+        middleware = SessionCleanupMiddleware(normal_app)
+        await middleware(scope, AsyncMock(), AsyncMock())
 
-        # Mock the advanced_alchemy utilities
-        with (
-            patch("skrift.db.session.get_aa_scope_state", return_value=None),
-            patch("skrift.db.session.delete_aa_scope_state") as mock_delete,
-            patch("skrift.db.session.set_aa_scope_state"),
-            patch("skrift.db.session.set_async_context"),
-        ):
-            # Get the async generator
-            gen = config.provide_session(mock_state, mock_scope)
-
-            # Start the generator and get the session
-            session = await gen.__anext__()
-            assert session is mock_session
-
-            # Complete normally (no exception)
-            try:
-                await gen.__anext__()
-            except StopAsyncIteration:
-                pass  # Expected - generator is exhausted
-
-            # Session should NOT be closed by the generator in normal operation
-            # (that's the job of before_send_handler)
-            mock_session.close.assert_not_called()
-            mock_delete.assert_not_called()
+        mock_session.close.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_session_reused_from_scope(self, mock_session, mock_state, mock_scope):
-        """Existing session in scope should be reused."""
-        from skrift.db.session import SafeSQLAlchemyAsyncConfig
+    async def test_non_http_scope_passthrough(self):
+        """Non-HTTP scopes should be passed through without wrapping."""
+        inner_app = AsyncMock()
+        scope = {"type": "websocket", "state": {}}
 
-        config = SafeSQLAlchemyAsyncConfig(
-            connection_string="sqlite+aiosqlite:///./test.db"
-        )
+        middleware = SessionCleanupMiddleware(inner_app)
+        await middleware(scope, AsyncMock(), AsyncMock())
 
-        # Mock the advanced_alchemy utilities to return existing session
-        with (
-            patch("skrift.db.session.get_aa_scope_state", return_value=mock_session),
-            patch("skrift.db.session.set_async_context"),
-        ):
-            # Get the async generator
-            gen = config.provide_session(mock_state, mock_scope)
-
-            # Start the generator and get the session
-            session = await gen.__anext__()
-
-            # Should return the existing session
-            assert session is mock_session
+        inner_app.assert_called_once()
 
 
 class TestPoolPrePingConfiguration:
