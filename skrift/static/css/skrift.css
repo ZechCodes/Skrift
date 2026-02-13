@@ -663,6 +663,47 @@ a[role="button"] {
 }
 
 /* ========================================
+   Connection Status Indicator
+   ======================================== */
+
+.sk-status-indicator {
+    position: fixed;
+    top: var(--sk-space-md);
+    right: var(--sk-space-md);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: var(--sk-space-xs);
+    padding: var(--sk-space-xs) var(--sk-space-sm);
+    background-color: var(--sk-color-surface);
+    border-radius: var(--sk-radius-pill);
+    box-shadow: var(--sk-shadow-sm);
+    font-size: 0.75rem;
+    color: var(--sk-color-muted);
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+.sk-status-indicator-hidden {
+    opacity: 0;
+}
+
+.sk-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background-color var(--sk-transition-fast);
+}
+
+@media (max-width: 767px) {
+    .sk-status-indicator {
+        top: calc(var(--sk-space-md) + env(safe-area-inset-top, 0px));
+    }
+}
+
+/* ========================================
    Tables
    ======================================== */
 
