@@ -10,9 +10,9 @@ The application uses a dispatcher architecture:
 import asyncio
 import hashlib
 import importlib
+import logging
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -27,17 +27,19 @@ from skrift.db.session import SessionCleanupMiddleware
 from litestar import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.config.csrf import CSRFConfig as LitestarCSRFConfig
-from litestar.contrib.jinja import JinjaTemplateEngine
-from litestar.exceptions import HTTPException
 from litestar.middleware import DefineMiddleware
-from litestar.middleware.session.client_side import CookieBackendConfig
-from litestar.static_files import create_static_files_router
-from litestar.template import TemplateConfig
 from litestar.types import ASGIApp, Receive, Scope, Send
 
+from skrift.app_factory import (
+    EXCEPTION_HANDLERS,
+    build_template_engine_callback,
+    create_session_config,
+    create_static_router_and_hasher,
+    create_template_config,
+)
 from skrift.config import get_config_path, get_settings, is_config_valid
 from skrift.middleware.rate_limit import RateLimitMiddleware
-from skrift.middleware.security import SecurityHeadersMiddleware, csp_nonce_var
+from skrift.middleware.security import SecurityHeadersMiddleware
 from skrift.db.base import Base
 from skrift.db.services.setting_service import (
     load_site_settings_cache,
@@ -48,8 +50,8 @@ from skrift.db.services.setting_service import (
     get_setting,
     SETUP_COMPLETED_AT_KEY,
 )
-from skrift.lib.exceptions import http_exception_handler, internal_server_error_handler
-from skrift.lib.markdown import render_markdown
+
+logger = logging.getLogger(__name__)
 
 
 class StaticHasher:
@@ -97,6 +99,13 @@ def load_controllers() -> list:
         module = importlib.import_module(module_path)
         controller_class = getattr(module, class_name)
         controllers.append(controller_class)
+
+        # Auto-expand AdminController to include split sub-controllers
+        if class_name == "AdminController" and module_path == "skrift.admin.controller":
+            for sub_name in ("PageAdminController", "UserAdminController", "SettingsAdminController"):
+                sub_class = getattr(module, sub_name, None)
+                if sub_class and sub_class not in controllers:
+                    controllers.append(sub_class)
 
     return controllers
 
@@ -211,6 +220,7 @@ async def check_setup_complete(db_config: SQLAlchemyAsyncConfig) -> bool:
             value = await get_setting(session, SETUP_COMPLETED_AT_KEY)
             return value is not None
     except Exception:
+        logger.debug("Setup completion check failed", exc_info=True)
         return False
 
 
@@ -262,6 +272,7 @@ class AppDispatcher:
                 # Run lifespan startup for the newly created app
                 await self._start_main_app_lifespan()
             except Exception as e:
+                logger.error("Failed to create main app", exc_info=True)
                 self._main_app_error = str(e)
                 self._main_app = None
         return self._main_app
@@ -298,7 +309,7 @@ class AppDispatcher:
             try:
                 await self._main_app(scope, receive, send)
             except Exception:
-                pass
+                logger.warning("Lifespan handler error", exc_info=True)
 
         # Start lifespan handler in background
         self._lifespan_task = asyncio.create_task(run_lifespan())
@@ -365,7 +376,7 @@ class AppDispatcher:
                 if db_url:
                     self._db_url = db_url  # Cache for future requests
             except Exception:
-                pass
+                logger.debug("Could not get database URL from config", exc_info=True)
 
         if not db_url:
             return False
@@ -373,6 +384,7 @@ class AppDispatcher:
         try:
             return await check_setup_in_db(db_url)
         except Exception:
+            logger.debug("DB setup check failed", exc_info=True)
             return False
 
     async def _redirect(self, send: Send, location: str) -> None:
@@ -410,7 +422,7 @@ class AppDispatcher:
                 hint=hint,
             ).encode()
         except Exception:
-            # Fallback if template rendering fails
+            logger.warning("Error template failed to render", exc_info=True)
             body = f"<h1>Configuration Error</h1><p>{message}</p>".encode()
 
         await send({
@@ -463,14 +475,11 @@ def create_app() -> Litestar:
     )
 
     # Session configuration (client-side encrypted cookies)
-    session_secret = hashlib.sha256(settings.secret_key.encode()).digest()
-    session_config = CookieBackendConfig(
-        secret=session_secret,
+    session_config = create_session_config(
+        secret_key=settings.secret_key,
         max_age=settings.session.max_age,
-        httponly=True,
         secure=not settings.debug,
-        samesite="lax",
-        domain=settings.session.cookie_domain,
+        cookie_domain=settings.session.cookie_domain,
     )
 
     # Security headers middleware
@@ -513,40 +522,24 @@ def create_app() -> Litestar:
             exclude=settings.csrf.exclude or None,
         )
 
+    # Static files
+    static_files_router, static_url = create_static_router_and_hasher()
+
     # Template configuration
-    # Search working directory first for user overrides, then package directory
-    working_dir_templates = Path(os.getcwd()) / "templates"
-    template_dir = Path(__file__).parent / "templates"
     from skrift.forms import Form, csrf_field as _csrf_field
 
-    def configure_template_engine(engine):
-        engine.engine.globals.update({
-            "now": datetime.now,
+    engine_callback = build_template_engine_callback(
+        extra_globals={
             "site_name": get_cached_site_name,
             "site_tagline": get_cached_site_tagline,
             "site_copyright_holder": get_cached_site_copyright_holder,
             "site_copyright_start_year": get_cached_site_copyright_start_year,
             "Form": Form,
             "csrf_field": _csrf_field,
-            "csp_nonce": lambda: csp_nonce_var.get(""),
             "static_url": static_url,
-        })
-        engine.engine.filters.update({"markdown": render_markdown})
-
-    template_config = TemplateConfig(
-        directory=[working_dir_templates, template_dir],
-        engine=JinjaTemplateEngine,
-        engine_callback=configure_template_engine,
+        },
     )
-
-    # Static files - working directory first for user overrides, then package directory
-    working_dir_static = Path(os.getcwd()) / "static"
-    static_files_router = create_static_files_router(
-        path="/static",
-        directories=[working_dir_static, Path(__file__).parent / "static"],
-    )
-
-    static_url = StaticHasher([working_dir_static, Path(__file__).parent / "static"])
+    template_config = create_template_config(engine_callback)
 
     from skrift.controllers.notifications import NotificationsController
     from skrift.auth import sync_roles_to_database
@@ -558,8 +551,7 @@ def create_app() -> Litestar:
                 await sync_roles_to_database(session)
                 await load_site_settings_cache(session)
         except Exception:
-            # Database might not exist yet during setup
-            pass
+            logger.info("Startup cache init skipped (DB may not exist)", exc_info=True)
 
     return Litestar(
         on_startup=[on_startup],
@@ -569,10 +561,7 @@ def create_app() -> Litestar:
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream"),
         csrf_config=csrf_config,
-        exception_handlers={
-            HTTPException: http_exception_handler,
-            Exception: internal_server_error_handler,
-        },
+        exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
 
@@ -593,46 +582,22 @@ def create_setup_app() -> Litestar:
     settings = MinimalSettings()
 
     # Session configuration
-    session_secret = hashlib.sha256(settings.secret_key.encode()).digest()
-    session_config = CookieBackendConfig(
-        secret=session_secret,
-        max_age=60 * 60 * 24,  # 1 day
-        httponly=True,
-        secure=False,
-        samesite="lax",
-    )
+    session_config = create_session_config(settings.secret_key)
+
+    # Static files
+    static_files_router, static_url = create_static_router_and_hasher()
 
     # Template configuration
-    # Search working directory first for user overrides, then package directory
-    working_dir_templates = Path(os.getcwd()) / "templates"
-    template_dir = Path(__file__).parent / "templates"
-
-    def configure_setup_template_engine(engine):
-        engine.engine.globals.update({
-            "now": datetime.now,
+    engine_callback = build_template_engine_callback(
+        extra_globals={
             "site_name": lambda: "Skrift",
             "site_tagline": lambda: "Setup",
             "site_copyright_holder": lambda: "",
             "site_copyright_start_year": lambda: None,
-            "csp_nonce": lambda: csp_nonce_var.get(""),
             "static_url": static_url,
-        })
-        engine.engine.filters.update({"markdown": render_markdown})
-
-    template_config = TemplateConfig(
-        directory=[working_dir_templates, template_dir],
-        engine=JinjaTemplateEngine,
-        engine_callback=configure_setup_template_engine,
+        },
     )
-
-    # Static files - working directory first for user overrides, then package directory
-    working_dir_static = Path(os.getcwd()) / "static"
-    static_files_router = create_static_files_router(
-        path="/static",
-        directories=[working_dir_static, Path(__file__).parent / "static"],
-    )
-
-    static_url = StaticHasher([working_dir_static, Path(__file__).parent / "static"])
+    template_config = create_template_config(engine_callback)
 
     # Import controllers
     from skrift.setup.controller import SetupController, SetupAuthController
@@ -656,7 +621,7 @@ def create_setup_app() -> Litestar:
                             db_url = f"sqlite+aiosqlite:///{db_file}"
                             break
             except Exception:
-                pass
+                logger.debug("Could not resolve raw DB URL", exc_info=True)
 
     plugins = []
     route_handlers = [SetupController, SetupAuthController, static_files_router]
@@ -692,7 +657,7 @@ def create_setup_app() -> Litestar:
                 async with db_config.get_session() as session:
                     await sync_roles_to_database(session)
             except Exception:
-                pass
+                logger.info("Setup startup: role sync skipped", exc_info=True)
 
     return Litestar(
         on_startup=[on_startup],
@@ -701,10 +666,7 @@ def create_setup_app() -> Litestar:
         middleware=[DefineMiddleware(SessionCleanupMiddleware), session_config.middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip"),
-        exception_handlers={
-            HTTPException: http_exception_handler,
-            Exception: internal_server_error_handler,
-        },
+        exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
 
@@ -721,6 +683,7 @@ async def check_setup_in_db(db_url: str) -> bool:
             value = await get_setting(session, SETUP_COMPLETED_AT_KEY)
             return value is not None
     except Exception:
+        logger.debug("DB setup check query failed", exc_info=True)
         return False
     finally:
         await engine.dispose()
@@ -744,7 +707,7 @@ def create_dispatcher() -> ASGIApp:
     try:
         db_url = get_database_url_from_yaml()
     except Exception:
-        pass
+        logger.debug("Could not get database URL at startup", exc_info=True)
 
     # Check if setup is already complete
     initial_setup_complete = False
@@ -758,9 +721,9 @@ def create_dispatcher() -> ASGIApp:
             try:
                 initial_setup_complete = asyncio.run(check_setup_in_db(db_url))
             except Exception:
-                pass
+                logger.debug("Async setup check failed", exc_info=True)
         except Exception:
-            pass
+            logger.debug("Event loop setup check failed", exc_info=True)
 
     # Also check if config is valid
     config_valid, _ = is_config_valid()
@@ -775,7 +738,7 @@ def create_dispatcher() -> ASGIApp:
         try:
             main_app = create_app()
         except Exception:
-            pass
+            logger.debug("Could not pre-create main app", exc_info=True)
 
     # Always use dispatcher - it handles lazy main app creation
     setup_app = create_setup_app()

@@ -186,6 +186,33 @@ class TestRenderMarkdownLists:
         assert "<li>" in result
 
 
+class TestRenderMarkdownXSSPrevention:
+    """Tests for XSS prevention — raw HTML must be escaped."""
+
+    def test_script_tag_escaped(self):
+        """Script tags are escaped, not rendered as HTML."""
+        result = render_markdown("<script>alert('xss')</script>")
+        assert "<script>" not in result
+        assert "&lt;script&gt;" in result
+
+    def test_img_onerror_escaped(self):
+        """Image tags with onerror handlers are escaped."""
+        result = render_markdown('<img src=x onerror="alert(1)">')
+        assert "<img" not in result
+        assert "&lt;img" in result
+
+    def test_inline_bold_html_escaped(self):
+        """Inline HTML like <b> is escaped."""
+        result = render_markdown("<b>bold</b>")
+        assert "&lt;b&gt;" in result
+
+    def test_normal_markdown_still_renders(self):
+        """Normal markdown formatting still works with html disabled."""
+        result = render_markdown("**bold** and *italic*")
+        assert "<strong>bold</strong>" in result
+        assert "<em>italic</em>" in result
+
+
 class TestRenderMarkdownBlockquotes:
     """Tests for blockquote rendering."""
 

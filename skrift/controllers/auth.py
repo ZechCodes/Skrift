@@ -8,7 +8,6 @@ import base64
 import fnmatch
 import hashlib
 import secrets
-from datetime import UTC, datetime
 from typing import Annotated
 from urllib.parse import urlencode, urlparse
 
@@ -17,12 +16,11 @@ from litestar import Controller, Request, get, post
 from litestar.exceptions import HTTPException, NotFoundException
 from litestar.params import Parameter
 from litestar.response import Redirect, Template as TemplateResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
+from skrift.auth.oauth_account_service import find_or_create_oauth_user
+from skrift.auth.providers import NormalizedUserData, get_oauth_provider
 from skrift.config import get_settings
-from skrift.db.models.oauth_account import OAuthAccount
 from skrift.db.models.user import User
 from skrift.forms import verify_csrf
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
@@ -78,200 +76,73 @@ def _get_safe_redirect_url(request: Request, allowed_domains: list[str], default
     return default
 
 
-def get_auth_url(provider: str, settings, state: str, code_challenge: str | None = None) -> str:
-    """Build the OAuth authorization URL for a provider."""
-    provider_info = get_provider_info(provider)
-    if not provider_info:
-        raise ValueError(f"Unknown provider: {provider}")
+async def _exchange_and_fetch(
+    provider_key: str,
+    settings,
+    code: str,
+    redirect_uri: str,
+    code_verifier: str | None = None,
+    *,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    tenant: str | None = None,
+) -> tuple[NormalizedUserData, dict]:
+    """Exchange authorization code for token, fetch user info, and extract normalized data.
 
-    provider_config = settings.auth.providers.get(provider)
-    if not provider_config:
-        raise ValueError(f"Provider {provider} not configured")
+    Args:
+        provider_key: The OAuth provider identifier.
+        settings: App settings (used to look up provider config if client_id/client_secret not given).
+        code: The authorization code from the callback.
+        redirect_uri: The redirect URI used in the auth request.
+        code_verifier: PKCE code verifier (for Twitter).
+        client_id: Override client_id (used during setup when settings aren't available).
+        client_secret: Override client_secret (used during setup).
+        tenant: Override tenant ID (used during setup for Microsoft).
 
-    # Build auth URL (handle Microsoft tenant placeholder)
-    auth_url = provider_info.auth_url
-    if "{tenant}" in auth_url:
-        tenant = getattr(provider_config, "tenant_id", None) or "common"
-        auth_url = auth_url.replace("{tenant}", tenant)
+    Returns:
+        Tuple of (NormalizedUserData, raw_user_info_dict).
+    """
+    provider = get_oauth_provider(provider_key)
 
-    params = {
-        "client_id": provider_config.client_id,
-        "redirect_uri": settings.auth.get_redirect_uri(provider),
-        "response_type": "code",
-        "scope": " ".join(provider_config.scopes),
-        "state": state,
-    }
+    # Resolve credentials
+    if client_id is None or client_secret is None:
+        provider_config = settings.auth.providers.get(provider_key)
+        if not provider_config:
+            raise ValueError(f"Provider {provider_key} not configured")
+        client_id = provider_config.client_id
+        client_secret = provider_config.client_secret
+        tenant = getattr(provider_config, "tenant_id", None)
 
-    # Provider-specific parameters
-    if provider == "google":
-        params["access_type"] = "offline"
-        params["prompt"] = "select_account"
-    elif provider == "twitter":
-        # Twitter requires PKCE
-        if code_challenge:
-            params["code_challenge"] = code_challenge
-            params["code_challenge_method"] = "S256"
-    elif provider == "discord":
-        params["prompt"] = "consent"
+    # Build token request
+    token_url = provider.resolve_url(provider.provider_info.token_url, tenant)
+    token_data = provider.build_token_data(client_id, client_secret, code, redirect_uri, code_verifier)
+    token_headers = provider.build_token_headers(client_id, client_secret)
 
-    return f"{auth_url}?{urlencode(params)}"
-
-
-async def exchange_code_for_token(
-    provider: str, settings, code: str, code_verifier: str | None = None
-) -> dict:
-    """Exchange authorization code for access token."""
-    provider_info = get_provider_info(provider)
-    if not provider_info:
-        raise ValueError(f"Unknown provider: {provider}")
-
-    provider_config = settings.auth.providers.get(provider)
-    if not provider_config:
-        raise ValueError(f"Provider {provider} not configured")
-
-    # Build token URL (handle Microsoft tenant placeholder)
-    token_url = provider_info.token_url
-    if "{tenant}" in token_url:
-        tenant = getattr(provider_config, "tenant_id", None) or "common"
-        token_url = token_url.replace("{tenant}", tenant)
-
-    data = {
-        "client_id": provider_config.client_id,
-        "client_secret": provider_config.client_secret,
-        "code": code,
-        "grant_type": "authorization_code",
-        "redirect_uri": settings.auth.get_redirect_uri(provider),
-    }
-
-    # Twitter requires PKCE code_verifier
-    if provider == "twitter" and code_verifier:
-        data["code_verifier"] = code_verifier
-
-    headers = {"Accept": "application/json"}
-
-    # GitHub needs special Accept header
-    if provider == "github":
-        headers["Accept"] = "application/json"
-
-    # Twitter uses Basic auth for token exchange
-    if provider == "twitter":
-        credentials = base64.b64encode(
-            f"{provider_config.client_id}:{provider_config.client_secret}".encode()
-        ).decode()
-        headers["Authorization"] = f"Basic {credentials}"
-        del data["client_secret"]
+    # Twitter uses Basic auth — remove client_secret from POST data
+    if provider_key == "twitter":
+        token_data.pop("client_secret", None)
 
     async with httpx.AsyncClient() as client:
-        response = await client.post(token_url, data=data, headers=headers)
-
+        response = await client.post(token_url, data=token_data, headers=token_headers)
         if response.status_code != 200:
             raise HTTPException(
                 status_code=400,
                 detail=f"Failed to exchange code for tokens: {response.text}",
             )
+        tokens = response.json()
 
-        return response.json()
+    access_token = tokens.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="No access token received")
 
+    # Fetch and normalize user info
+    user_info = await provider.fetch_user_info(access_token)
+    user_data = provider.extract_user_data(user_info)
 
-async def fetch_user_info(provider: str, access_token: str) -> dict:
-    """Fetch user information from the OAuth provider."""
-    provider_info = get_provider_info(provider)
-    if not provider_info:
-        raise ValueError(f"Unknown provider: {provider}")
+    if not user_data.oauth_id:
+        raise HTTPException(status_code=400, detail="Could not determine user ID")
 
-    headers = {"Authorization": f"Bearer {access_token}"}
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(provider_info.userinfo_url, headers=headers)
-
-        if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to fetch user info")
-
-        user_info = response.json()
-
-        # GitHub requires separate email fetch if email is private
-        if provider == "github" and not user_info.get("email"):
-            email_response = await client.get(
-                "https://api.github.com/user/emails", headers=headers
-            )
-            if email_response.status_code == 200:
-                emails = email_response.json()
-                primary_email = next(
-                    (e["email"] for e in emails if e.get("primary")), None
-                )
-                if primary_email:
-                    user_info["email"] = primary_email
-
-        # Twitter has different structure
-        if provider == "twitter":
-            data = user_info.get("data", {})
-            user_info = {
-                "id": data.get("id"),
-                "name": data.get("name"),
-                "username": data.get("username"),
-                "email": None,  # Twitter OAuth 2.0 doesn't provide email by default
-            }
-
-        return user_info
-
-
-def extract_user_data(provider: str, user_info: dict) -> dict:
-    """Extract normalized user data from provider-specific response."""
-    if provider == "google":
-        return {
-            "oauth_id": user_info.get("id"),
-            "email": user_info.get("email"),
-            "name": user_info.get("name"),
-            "picture_url": user_info.get("picture"),
-        }
-    elif provider == "github":
-        return {
-            "oauth_id": str(user_info.get("id")),
-            "email": user_info.get("email"),
-            "name": user_info.get("name") or user_info.get("login"),
-            "picture_url": user_info.get("avatar_url"),
-        }
-    elif provider == "microsoft":
-        return {
-            "oauth_id": user_info.get("id"),
-            "email": user_info.get("mail") or user_info.get("userPrincipalName"),
-            "name": user_info.get("displayName"),
-            "picture_url": None,  # Microsoft Graph requires separate call for photo
-        }
-    elif provider == "discord":
-        avatar = user_info.get("avatar")
-        user_id = user_info.get("id")
-        avatar_url = None
-        if avatar and user_id:
-            avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar}.png"
-        return {
-            "oauth_id": user_id,
-            "email": user_info.get("email"),
-            "name": user_info.get("global_name") or user_info.get("username"),
-            "picture_url": avatar_url,
-        }
-    elif provider == "facebook":
-        picture = user_info.get("picture", {}).get("data", {})
-        return {
-            "oauth_id": user_info.get("id"),
-            "email": user_info.get("email"),
-            "name": user_info.get("name"),
-            "picture_url": picture.get("url") if not picture.get("is_silhouette") else None,
-        }
-    elif provider == "twitter":
-        return {
-            "oauth_id": user_info.get("id"),
-            "email": user_info.get("email"),
-            "name": user_info.get("name") or user_info.get("username"),
-            "picture_url": None,
-        }
-    else:
-        return {
-            "oauth_id": str(user_info.get("id", user_info.get("sub"))),
-            "email": user_info.get("email"),
-            "name": user_info.get("name"),
-            "picture_url": user_info.get("picture"),
-        }
+    return user_data, user_info
 
 
 def _set_login_session(request: Request, user: "User") -> None:
@@ -340,18 +211,31 @@ class AuthController(Controller):
         request.session["oauth_state"] = state
         request.session["oauth_provider"] = provider
 
-        # Generate PKCE for Twitter
+        # Get the provider strategy for PKCE + auth params
+        oauth_provider = get_oauth_provider(provider)
+
+        # Generate PKCE for providers that require it (Twitter)
         code_challenge = None
-        if provider == "twitter":
+        if oauth_provider.requires_pkce:
             code_verifier = secrets.token_urlsafe(64)[:128]
             request.session["oauth_code_verifier"] = code_verifier
-            # S256 challenge
             code_challenge = base64.urlsafe_b64encode(
                 hashlib.sha256(code_verifier.encode()).digest()
             ).decode().rstrip("=")
 
-        auth_url = get_auth_url(provider, settings, state, code_challenge)
-        return Redirect(path=auth_url)
+        # Build auth URL
+        provider_config = settings.auth.providers[provider]
+        tenant = getattr(provider_config, "tenant_id", None)
+        auth_url = oauth_provider.resolve_url(provider_info.auth_url, tenant)
+        params = oauth_provider.build_auth_params(
+            client_id=provider_config.client_id,
+            redirect_uri=settings.auth.get_redirect_uri(provider),
+            scopes=provider_config.scopes,
+            state=state,
+            code_challenge=code_challenge,
+        )
+
+        return Redirect(path=f"{auth_url}?{urlencode(params)}")
 
     @get("/{provider:str}/callback")
     async def oauth_callback(
@@ -365,12 +249,10 @@ class AuthController(Controller):
     ) -> Redirect:
         """Handle OAuth callback from provider."""
         settings = get_settings()
-        provider_info = get_provider_info(provider)
 
-        if not provider_info:
+        if not get_provider_info(provider):
             raise NotFoundException(f"Unknown provider: {provider}")
 
-        # Check for OAuth errors
         if error:
             request.session["flash"] = f"OAuth error: {error}"
             return Redirect(path="/auth/login")
@@ -383,97 +265,21 @@ class AuthController(Controller):
         if not code:
             raise HTTPException(status_code=400, detail="Missing authorization code")
 
-        # Get PKCE verifier if present (for Twitter)
         code_verifier = request.session.pop("oauth_code_verifier", None)
 
-        # Exchange code for tokens
-        tokens = await exchange_code_for_token(
-            provider, settings, code, code_verifier
+        user_data, user_info = await _exchange_and_fetch(
+            provider, settings, code,
+            settings.auth.get_redirect_uri(provider),
+            code_verifier,
         )
-        access_token = tokens.get("access_token")
 
-        if not access_token:
-            raise HTTPException(status_code=400, detail="No access token received")
-
-        # Fetch user info
-        user_info = await fetch_user_info(provider, access_token)
-        user_data = extract_user_data(provider, user_info)
-
-        oauth_id = user_data["oauth_id"]
-        if not oauth_id:
-            raise HTTPException(status_code=400, detail="Could not determine user ID")
-
-        email = user_data["email"]
-
-        # Step 1: Check if OAuth account already exists
-        result = await db_session.execute(
-            select(OAuthAccount)
-            .options(selectinload(OAuthAccount.user))
-            .where(OAuthAccount.provider == provider, OAuthAccount.provider_account_id == oauth_id)
+        login_result = await find_or_create_oauth_user(
+            db_session, provider, user_data, user_info
         )
-        oauth_account = result.scalar_one_or_none()
-
-        if oauth_account:
-            # Existing OAuth account - update user profile
-            user = oauth_account.user
-            user.name = user_data["name"]
-            if user_data["picture_url"]:
-                user.picture_url = user_data["picture_url"]
-            user.last_login_at = datetime.now(UTC)
-            # Update provider email if changed
-            if email:
-                oauth_account.provider_email = email
-            # Update provider metadata
-            oauth_account.provider_metadata = user_info
-        else:
-            # Step 2: Check if a user with this email already exists
-            user = None
-            if email:
-                result = await db_session.execute(
-                    select(User).where(User.email == email)
-                )
-                user = result.scalar_one_or_none()
-
-            if user:
-                # Link new OAuth account to existing user
-                oauth_account = OAuthAccount(
-                    provider=provider,
-                    provider_account_id=oauth_id,
-                    provider_email=email,
-                    provider_metadata=user_info,
-                    user_id=user.id,
-                )
-                db_session.add(oauth_account)
-                # Update user profile
-                user.name = user_data["name"]
-                if user_data["picture_url"]:
-                    user.picture_url = user_data["picture_url"]
-                user.last_login_at = datetime.now(UTC)
-            else:
-                # Step 3: Create new user + OAuth account
-                user = User(
-                    email=email,
-                    name=user_data["name"],
-                    picture_url=user_data["picture_url"],
-                    last_login_at=datetime.now(UTC),
-                )
-                db_session.add(user)
-                await db_session.flush()
-
-                oauth_account = OAuthAccount(
-                    provider=provider,
-                    provider_account_id=oauth_id,
-                    provider_email=email,
-                    provider_metadata=user_info,
-                    user_id=user.id,
-                )
-                db_session.add(oauth_account)
-
         await db_session.commit()
 
-        # Set flash before rotation so it's preserved
         request.session["flash"] = "Successfully logged in!"
-        _set_login_session(request, user)
+        _set_login_session(request, login_result.user)
 
         return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
 
@@ -523,12 +329,10 @@ class AuthController(Controller):
         if DUMMY_PROVIDER_KEY not in settings.auth.providers:
             raise NotFoundException("Dummy provider not configured")
 
-        # Verify CSRF token
         if not await verify_csrf(request):
             request.session["flash"] = "Invalid request. Please try again."
             return Redirect(path="/auth/dummy/login")
 
-        # Parse form data from request
         form_data = await request.form()
         email = form_data.get("email", "").strip()
         name = form_data.get("name", "").strip()
@@ -537,83 +341,23 @@ class AuthController(Controller):
             request.session["flash"] = "Email is required"
             return Redirect(path="/auth/dummy/login")
 
-        # Default name to email username if not provided
         if not name:
             name = email.split("@")[0]
 
-        # Generate deterministic oauth_id from email
         oauth_id = f"dummy_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
+        dummy_metadata = {"id": oauth_id, "email": email, "name": name}
 
-        # Create synthetic metadata for dummy provider
-        dummy_metadata = {
-            "id": oauth_id,
-            "email": email,
-            "name": name,
-        }
-
-        # Step 1: Check if OAuth account already exists
-        result = await db_session.execute(
-            select(OAuthAccount)
-            .options(selectinload(OAuthAccount.user))
-            .where(
-                OAuthAccount.provider == DUMMY_PROVIDER_KEY,
-                OAuthAccount.provider_account_id == oauth_id,
-            )
+        user_data = NormalizedUserData(
+            oauth_id=oauth_id, email=email, name=name, picture_url=None
         )
-        oauth_account = result.scalar_one_or_none()
 
-        if oauth_account:
-            # Existing OAuth account - update user profile
-            user = oauth_account.user
-            user.name = name
-            user.email = email
-            user.last_login_at = datetime.now(UTC)
-            oauth_account.provider_email = email
-            oauth_account.provider_metadata = dummy_metadata
-        else:
-            # Step 2: Check if a user with this email already exists
-            result = await db_session.execute(
-                select(User).where(User.email == email)
-            )
-            user = result.scalar_one_or_none()
-
-            if user:
-                # Link new OAuth account to existing user
-                oauth_account = OAuthAccount(
-                    provider=DUMMY_PROVIDER_KEY,
-                    provider_account_id=oauth_id,
-                    provider_email=email,
-                    provider_metadata=dummy_metadata,
-                    user_id=user.id,
-                )
-                db_session.add(oauth_account)
-                # Update user profile
-                user.name = name
-                user.last_login_at = datetime.now(UTC)
-            else:
-                # Step 3: Create new user + OAuth account
-                user = User(
-                    email=email,
-                    name=name,
-                    last_login_at=datetime.now(UTC),
-                )
-                db_session.add(user)
-                await db_session.flush()
-
-                oauth_account = OAuthAccount(
-                    provider=DUMMY_PROVIDER_KEY,
-                    provider_account_id=oauth_id,
-                    provider_email=email,
-                    provider_metadata=dummy_metadata,
-                    user_id=user.id,
-                )
-                db_session.add(oauth_account)
-
+        login_result = await find_or_create_oauth_user(
+            db_session, DUMMY_PROVIDER_KEY, user_data, dummy_metadata
+        )
         await db_session.commit()
 
-        # Set flash before rotation so it's preserved
         request.session["flash"] = "Successfully logged in!"
-        _set_login_session(request, user)
+        _set_login_session(request, login_result.user)
 
         return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
 

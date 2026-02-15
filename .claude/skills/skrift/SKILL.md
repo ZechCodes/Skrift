@@ -222,9 +222,19 @@ dismiss_session_group(nid, "deploy-progress")
 dismiss_user_group(str(user.id), "upload-status")
 ```
 
+**Connection status events:**
+
+The client dispatches `sk:notification-status` on `document` when the SSE connection state changes. Statuses: `"connecting"`, `"connected"`, `"disconnected"`, `"reconnecting"`. Also available via `window.__skriftNotifications.status`.
+
+```javascript
+document.addEventListener('sk:notification-status', (e) => {
+    console.log(e.detail.status); // "connecting" | "connected" | "disconnected" | "reconnecting"
+});
+```
+
 **Key details:**
 - SSE endpoint: `GET /notifications/stream` (auto-connected by `notifications.js`)
-- Dismiss endpoint: `DELETE /notifications/{id}`
+- Dismiss endpoint: `DELETE /notifications/{id}` or `DELETE /notifications/group/{group}`
 - SSE excluded from gzip compression in `skrift/asgi.py`
 - Hook constants: `NOTIFICATION_SENT`, `NOTIFICATION_DISMISSED` (in `skrift/lib/hooks.py`)
 

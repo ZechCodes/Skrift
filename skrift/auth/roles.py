@@ -56,23 +56,29 @@ ADMIN = create_role(
 AUTHOR = create_role(
     "author",
     "view-drafts",
+    "edit-own-pages",
+    "delete-own-pages",
+    "create-pages",
     display_name="Author",
-    description="Can view draft content",
+    description="Can create and manage own pages",
 )
 
 EDITOR = create_role(
     "editor",
     "view-drafts",
     "manage-pages",
+    "create-pages",
     display_name="Editor",
-    description="Can manage pages and view drafts",
+    description="Can manage all pages and view drafts",
 )
 
 MODERATOR = create_role(
     "moderator",
     "view-drafts",
+    "manage-pages",
+    "create-pages",
     display_name="Moderator",
-    description="Can moderate content",
+    description="Can moderate content and manage pages",
 )
 
 # Registry of all role definitions

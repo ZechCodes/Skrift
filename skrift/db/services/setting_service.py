@@ -185,24 +185,29 @@ def invalidate_site_settings_cache() -> None:
     _site_settings_cache.clear()
 
 
+def _get_cached_setting(key: str) -> str:
+    """Get a cached setting value, falling back to its default."""
+    return _site_settings_cache.get(key, SITE_DEFAULTS.get(key, ""))
+
+
 def get_cached_site_name() -> str:
     """Get the cached site name for use in templates."""
-    return _site_settings_cache.get(SITE_NAME_KEY, SITE_DEFAULTS[SITE_NAME_KEY])
+    return _get_cached_setting(SITE_NAME_KEY)
 
 
 def get_cached_site_tagline() -> str:
     """Get the cached site tagline for use in templates."""
-    return _site_settings_cache.get(SITE_TAGLINE_KEY, SITE_DEFAULTS[SITE_TAGLINE_KEY])
+    return _get_cached_setting(SITE_TAGLINE_KEY)
 
 
 def get_cached_site_copyright_holder() -> str:
     """Get the cached site copyright holder for use in templates."""
-    return _site_settings_cache.get(SITE_COPYRIGHT_HOLDER_KEY, SITE_DEFAULTS[SITE_COPYRIGHT_HOLDER_KEY])
+    return _get_cached_setting(SITE_COPYRIGHT_HOLDER_KEY)
 
 
 def get_cached_site_copyright_start_year() -> str | int | None:
     """Get the cached site copyright start year for use in templates."""
-    value = _site_settings_cache.get(SITE_COPYRIGHT_START_YEAR_KEY, SITE_DEFAULTS[SITE_COPYRIGHT_START_YEAR_KEY])
+    value = _get_cached_setting(SITE_COPYRIGHT_START_YEAR_KEY)
     if value and value.isdigit():
         return int(value)
     return None
@@ -210,4 +215,4 @@ def get_cached_site_copyright_start_year() -> str | int | None:
 
 def get_cached_site_base_url() -> str:
     """Get the cached site base URL for use in SEO/sitemap."""
-    return _site_settings_cache.get(SITE_BASE_URL_KEY, SITE_DEFAULTS[SITE_BASE_URL_KEY])
+    return _get_cached_setting(SITE_BASE_URL_KEY)

@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from pathlib import Path
 
 from litestar import Request, Response
@@ -7,6 +8,8 @@ from litestar.status_codes import HTTP_500_INTERNAL_SERVER_ERROR
 
 from skrift.config import get_settings
 from skrift.db.services.setting_service import get_cached_site_name
+
+logger = logging.getLogger(__name__)
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
 
@@ -74,6 +77,7 @@ def _get_session_from_cookie(request: Request) -> dict | None:
         session_data = decode_json(decrypted)
         return session_data
     except Exception:
+        logger.debug("Session decryption failed", exc_info=True)
         return None
 
 
@@ -92,6 +96,7 @@ def _get_user_context_from_session(session: dict | None) -> dict | None:
             "picture_url": session.get("user_picture_url"),
         }
     except Exception:
+        logger.debug("Failed to extract user from session", exc_info=True)
         return None
 
 

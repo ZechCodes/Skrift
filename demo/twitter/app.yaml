@@ -21,7 +21,7 @@ db:
   pool_timeout: 30
   echo: false
 auth:
-  redirect_base_url: http://localhost:8080
+  redirect_base_url: http://localhost:8000
   providers:
     google:
       client_id: $GOOGLE_CLIENT_ID

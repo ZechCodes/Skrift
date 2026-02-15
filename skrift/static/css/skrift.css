@@ -668,8 +668,8 @@ a[role="button"] {
 
 .sk-status-indicator {
     position: fixed;
-    top: var(--sk-space-md);
-    right: var(--sk-space-md);
+    bottom: var(--sk-space-md);
+    left: var(--sk-space-md);
     z-index: 1000;
     display: flex;
     align-items: center;
@@ -699,7 +699,7 @@ a[role="button"] {
 
 @media (max-width: 767px) {
     .sk-status-indicator {
-        top: calc(var(--sk-space-md) + env(safe-area-inset-top, 0px));
+        bottom: calc(var(--sk-space-md) + env(safe-area-inset-bottom, 0px));
     }
 }
 

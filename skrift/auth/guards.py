@@ -80,6 +80,23 @@ class Permission(AuthRequirement):
         return self.permission in permissions.permissions
 
 
+class OwnerOrPermission(AuthRequirement):
+    """Gate that passes if user has either the 'own' permission or the 'any' permission.
+
+    Actual ownership verification happens in the handler — this guard only checks
+    that the user has at least one of the required permission levels.
+    """
+
+    def __init__(self, own_permission: str, any_permission: str):
+        self.own_permission = own_permission
+        self.any_permission = any_permission
+
+    async def check(self, permissions: "UserPermissions") -> bool:
+        if ADMINISTRATOR_PERMISSION in permissions.permissions:
+            return True
+        return self.any_permission in permissions.permissions or self.own_permission in permissions.permissions
+
+
 class Role(AuthRequirement):
     """Role requirement for route guards."""
 
