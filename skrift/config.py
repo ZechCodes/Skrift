@@ -103,6 +103,14 @@ def load_raw_app_config() -> dict | None:
         return yaml.safe_load(f)
 
 
+def load_model_modules() -> list[str]:
+    """Load model module paths from app.yaml `models` key."""
+    config = load_raw_app_config()
+    if config is None:
+        return []
+    return config.get("models", [])
+
+
 class DatabaseConfig(BaseModel):
     """Database connection configuration."""
 

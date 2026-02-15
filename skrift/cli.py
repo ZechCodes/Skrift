@@ -98,6 +98,75 @@ def secret(write, fmt, length):
         click.echo(key)
 
 
+def _db_init(project_root: Path) -> None:
+    """Initialize a user migrations directory with versions/ and script.py.mako."""
+    import shutil
+
+    migrations_dir = project_root / "migrations" / "versions"
+    migrations_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy the Mako template from the Skrift package
+    skrift_dir = Path(__file__).parent
+    src_mako = skrift_dir / "alembic" / "script.py.mako"
+    dst_mako = project_root / "migrations" / "script.py.mako"
+
+    if not dst_mako.exists() and src_mako.exists():
+        shutil.copy2(src_mako, dst_mako)
+
+    click.echo(f"Initialized migrations directory at {migrations_dir}")
+    click.echo(f"Template at {dst_mako}")
+
+
+def _run_alembic(project_root: Path, args: list[str]) -> None:
+    """Build an Alembic Config programmatically and run the given command."""
+    from alembic.config import Config, CommandLine
+
+    skrift_dir = Path(__file__).parent
+
+    # Find alembic.ini
+    alembic_ini = project_root / "alembic.ini"
+    if not alembic_ini.exists():
+        alembic_ini = skrift_dir / "alembic.ini"
+        if not alembic_ini.exists():
+            click.echo("Error: Could not find alembic.ini", err=True)
+            sys.exit(1)
+
+    # Build version_locations: user dir first (if it exists), then Skrift's
+    skrift_versions = str(skrift_dir / "alembic" / "versions")
+    user_versions = project_root / "migrations" / "versions"
+    if user_versions.is_dir():
+        version_locations = f"{user_versions} {skrift_versions}"
+    else:
+        version_locations = skrift_versions
+
+    # Rewrite "upgrade head" → "upgrade heads" when multiple locations exist
+    if user_versions.is_dir() and len(args) >= 2:
+        if args[0] == "upgrade" and args[1] == "head":
+            args = list(args)
+            args[1] = "heads"
+        elif args[0] == "downgrade" and args[1] == "base":
+            args = list(args)
+            args[1] = "base"
+
+    # Build Config and inject version_locations
+    cfg = Config(str(alembic_ini))
+    cfg.set_main_option("version_locations", version_locations)
+
+    # Parse and run through CommandLine for proper subcommand dispatch
+    cmd = CommandLine()
+    options = cmd.parser.parse_args(args)
+    if not hasattr(options, "cmd"):
+        cmd.parser.error("too few arguments")
+    else:
+        cfg.cmd_opts = options
+        fn, positional, kwarg = options.cmd
+        fn(
+            cfg,
+            *[getattr(options, k, None) for k in positional],
+            **{k: getattr(options, k, None) for k in kwarg},
+        )
+
+
 @cli.command(
     context_settings=dict(
         ignore_unknown_options=True,
@@ -110,37 +179,31 @@ def db(ctx):
 
     \b
     Examples:
-        skrift db upgrade head     # Apply all migrations
+        skrift db init             # Initialize user migrations directory
+        skrift db upgrade heads    # Apply all migrations
         skrift db downgrade -1     # Rollback one migration
         skrift db current          # Show current revision
         skrift db history          # Show migration history
         skrift db revision -m "description" --autogenerate  # Create new migration
     """
-    from alembic.config import main as alembic_main
-
     # Always run from the project root (where app.yaml and .env are)
-    # This ensures database paths like ./app.db resolve correctly
     project_root = Path.cwd()
     if not (project_root / "app.yaml").exists():
-        # If not in project root, try parent directory
         project_root = Path(__file__).parent.parent
     os.chdir(project_root)
 
-    # Find alembic.ini - check project root first, then skrift package directory
-    alembic_ini = project_root / "alembic.ini"
-    if not alembic_ini.exists():
-        skrift_dir = Path(__file__).parent
-        alembic_ini = skrift_dir / "alembic.ini"
+    args = ctx.args
 
-        if not alembic_ini.exists():
-            click.echo("Error: Could not find alembic.ini", err=True)
-            click.echo("Make sure you're running from the project root directory.", err=True)
-            sys.exit(1)
+    # Intercept "init" as a custom subcommand
+    if args and args[0] == "init":
+        _db_init(project_root)
+        return
 
-    # Build argv for alembic: ['-c', '/path/to/alembic.ini', ...extra_args]
-    alembic_argv = ["-c", str(alembic_ini)] + ctx.args
+    if not args:
+        click.echo(ctx.get_help())
+        return
 
-    sys.exit(alembic_main(alembic_argv))
+    _run_alembic(project_root, args)
 
 
 @cli.command("init-claude")

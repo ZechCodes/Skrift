@@ -1,7 +1,7 @@
 """add twitter demo tables
 
 Revision ID: 41fcc492d07a
-Revises: 6f7g8h9i0j1k
+Revises:
 Create Date: 2026-02-10 18:35:41.677475
 
 """
@@ -14,9 +14,9 @@ import advanced_alchemy.types
 
 # revision identifiers, used by Alembic.
 revision: str = '41fcc492d07a'
-down_revision: Union[str, None] = '6f7g8h9i0j1k'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: Union[str, None] = None
+branch_labels: Union[str, Sequence[str], None] = ("twitter",)
+depends_on: Union[str, Sequence[str], None] = ("skrift",)
 
 
 def upgrade() -> None:

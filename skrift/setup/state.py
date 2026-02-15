@@ -174,7 +174,7 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
     try:
         # Try skrift db first (the correct command)
         result = subprocess.run(
-            ["skrift", "db", "upgrade", "head"],
+            ["skrift", "db", "upgrade", "heads"],
             capture_output=True,
             text=True,
             cwd=Path.cwd(),
@@ -189,7 +189,7 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
 
     try:
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            ["alembic", "upgrade", "heads"],
             capture_output=True,
             text=True,
             cwd=Path.cwd(),

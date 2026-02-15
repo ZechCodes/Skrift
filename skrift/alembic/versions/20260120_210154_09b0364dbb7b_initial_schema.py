@@ -15,7 +15,7 @@ from advanced_alchemy.types import GUID, DateTimeUTC
 # revision identifiers, used by Alembic.
 revision: str = '09b0364dbb7b'
 down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
+branch_labels: Union[str, Sequence[str], None] = ("skrift",)
 depends_on: Union[str, Sequence[str], None] = None
 
 

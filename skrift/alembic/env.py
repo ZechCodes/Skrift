@@ -17,6 +17,24 @@ from skrift.db.models.user import User  # noqa: F401
 from skrift.db.models.page import Page  # noqa: F401
 from skrift.db.models.role import Role, RolePermission  # noqa: F401
 
+# Dynamically import user model modules from app.yaml
+import importlib
+import os
+import sys
+
+from skrift.config import load_model_modules
+
+# Ensure project cwd is on sys.path for user module imports
+_cwd = os.getcwd()
+if _cwd not in sys.path:
+    sys.path.insert(0, _cwd)
+
+for _module_path in load_model_modules():
+    try:
+        importlib.import_module(_module_path)
+    except ImportError:
+        pass  # Graceful fallback if models can't be loaded
+
 # Alembic Config object
 config = context.config
 
