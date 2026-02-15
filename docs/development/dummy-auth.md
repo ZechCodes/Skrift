@@ -68,7 +68,7 @@ viewer@test.local   -> Keep as basic user
 
     1. Print a security error message
     2. Terminate the worker process
-    3. Kill the parent uvicorn process to prevent respawning
+    3. Kill the parent server process to prevent respawning
     4. Exit with code 1
 
 This isn't a warning you can ignore—the server physically cannot start.

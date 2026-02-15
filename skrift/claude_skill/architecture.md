@@ -323,7 +323,7 @@ Lower numbers execute first. Default is 10.
 - Pre-encodes headers at creation time (not per-request)
 - Does not overwrite headers already set by route handlers
 - HSTS excluded in debug mode
-- Server header suppressed via `server_header=False` in `skrift/cli.py`
+- Server header suppressed via `include_server_header=False` in `skrift/cli.py`
 
 ## Static Files
 

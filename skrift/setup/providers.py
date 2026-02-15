@@ -206,7 +206,7 @@ def validate_no_dummy_auth_in_production() -> None:
             )
             sys.stderr.flush()
 
-        # Kill parent process (uvicorn reloader) to stop respawning
+        # Kill parent process (server reloader) to stop respawning
         try:
             os.kill(os.getppid(), signal.SIGTERM)
         except (ProcessLookupError, PermissionError):

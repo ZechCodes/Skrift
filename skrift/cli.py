@@ -30,17 +30,20 @@ def cli():
 )
 def serve(host, port, reload, workers, log_level):
     """Run the Skrift server."""
-    import uvicorn
+    from hypercorn.config import Config
+    from hypercorn.run import run
 
-    uvicorn.run(
-        "skrift.asgi:app",
-        host=host,
-        port=port,
-        reload=reload,
-        workers=workers if not reload else 1,
-        log_level=log_level,
-        server_header=False,
-    )
+    config = Config()
+    config.application_path = "skrift.asgi:app"
+    config.bind = [f"{host}:{port}"]
+    config.workers = 1 if reload else workers
+    config.loglevel = log_level.upper()
+    config.include_server_header = False
+
+    if reload:
+        config.use_reloader = True
+
+    run(config)
 
 
 @cli.command()

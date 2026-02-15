@@ -397,7 +397,7 @@ The `Form` class is registered as a Jinja2 global, making it accessible in templ
 - Pre-encodes headers at creation time (not per-request)
 - Does not overwrite headers already set by route handlers
 - HSTS excluded in debug mode
-- Server header suppressed via `server_header=False` in `skrift/cli.py`
+- Server header suppressed via `include_server_header=False` in `skrift/cli.py`
 
 ## Static Files
 
@@ -452,8 +452,9 @@ During the Live phase, group-based replacement sends a `"dismissed"` event for t
 - Deduplicates via `_displayedIds` Set
 - Max visible toasts: 3 (desktop) / 2 (mobile); excess queued
 - Dispatches `sk:notification` CustomEvent (cancelable) for every notification
+- Dispatches `sk:notification-status` CustomEvent on connection state changes (`connecting`, `connected`, `disconnected`, `reconnecting`)
 - Only renders `"generic"` type as toast; custom types handled via event listeners
-- Global instance: `window.__skriftNotifications`
+- Global instance: `window.__skriftNotifications` (exposes `.status` getter)
 
 ### Dismiss Flow
 

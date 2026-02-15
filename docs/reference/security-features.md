@@ -114,7 +114,7 @@ The nonce is also stored in `scope["state"]["csp_nonce"]` for access in middlewa
 
 ### Server Header Suppression
 
-The `Server: uvicorn` header is suppressed via `server_header=False` in `skrift/cli.py`.
+The `Server` header is suppressed via `include_server_header=False` in `skrift/cli.py`.
 
 ### Example app.yaml Configuration
 
@@ -273,7 +273,7 @@ Key aspects:
 1. Checks `SKRIFT_ENV` - only blocks in production
 2. Reads raw config before interpolation to catch `dummy: {}`
 3. Uses `os._exit(1)` for immediate termination
-4. Sends `SIGTERM` to parent (uvicorn) to prevent respawn
+4. Sends `SIGTERM` to parent server process to prevent respawn
 
 ## Auth Guards
 

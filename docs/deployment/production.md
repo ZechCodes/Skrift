@@ -122,10 +122,9 @@ Environment="SECRET_KEY=your-secure-secret-key"
 Environment="DATABASE_URL=postgresql+asyncpg://skrift:your-secure-password@localhost:5432/skrift"
 Environment="GOOGLE_CLIENT_ID=your-production-client-id"
 Environment="GOOGLE_CLIENT_SECRET=your-production-client-secret"
-ExecStart=/home/skrift/app/venv/bin/gunicorn skrift.asgi:app \
-    -w 4 \
-    -k uvicorn.workers.UvicornWorker \
-    -b 127.0.0.1:8000 \
+ExecStart=/home/skrift/app/venv/bin/hypercorn skrift.asgi:app \
+    --workers 4 \
+    --bind 127.0.0.1:8000 \
     --access-logfile /var/log/skrift/access.log \
     --error-logfile /var/log/skrift/error.log
 Restart=always

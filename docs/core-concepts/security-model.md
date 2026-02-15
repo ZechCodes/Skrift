@@ -36,7 +36,7 @@ Skrift automatically injects security headers on every HTTP response. These prot
 
 - HSTS is only added when `debug=False` to avoid poisoning browsers during local HTTP development
 - Headers already set by a route handler are **not overwritten**, allowing per-route CSP overrides
-- The `Server` header is suppressed (no `Server: uvicorn` leak)
+- The `Server` header is suppressed (no server version leak)
 
 Customize via `app.yaml`:
 
@@ -131,7 +131,7 @@ Server will NOT start.
 ======================================================================
 ```
 
-This isn't just a warning that can be ignored. The server process terminates immediately, killing both the worker and the parent uvicorn process to prevent respawning.
+This isn't just a warning that can be ignored. The server process terminates immediately, killing both the worker and the parent server process to prevent respawning.
 
 !!! info "Implementation"
     The production kill switch is in `skrift/setup/providers.py:179-214`. It uses `os._exit(1)` and signals the parent process to ensure complete shutdown.

@@ -182,11 +182,10 @@ EOF
 skrift
 ```
 
-### Production with Gunicorn
+### Production with Hypercorn
 
 ```bash
-pip install gunicorn
-gunicorn skrift.asgi:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8080
+hypercorn skrift.asgi:app --workers 4 --bind 0.0.0.0:8080
 ```
 
 See the [Deployment Guide](docs/deployment.md) for detailed instructions including Docker, Docker Compose, and Kubernetes deployments.
