@@ -543,9 +543,18 @@ def create_app() -> Litestar:
 
     from skrift.controllers.notifications import NotificationsController
     from skrift.auth import sync_roles_to_database
+    from skrift.lib.notification_backends import InMemoryBackend, load_backend
+    from skrift.lib.notifications import notifications as notification_service
+
+    # Notification backend setup
+    if settings.notifications.backend:
+        backend_cls = load_backend(settings.notifications.backend)
+        backend = backend_cls(settings=settings, session_maker=db_config.get_session)
+    else:
+        backend = InMemoryBackend()
 
     async def on_startup(_app: Litestar) -> None:
-        """Sync roles and load site settings on startup."""
+        """Sync roles, load site settings, and start notification backend on startup."""
         try:
             async with db_config.get_session() as session:
                 await sync_roles_to_database(session)
@@ -553,8 +562,16 @@ def create_app() -> Litestar:
         except Exception:
             logger.info("Startup cache init skipped (DB may not exist)", exc_info=True)
 
+        notification_service.set_backend(backend)
+        await backend.start()
+
+    async def on_shutdown(_app: Litestar) -> None:
+        """Stop notification backend on shutdown."""
+        await notification_service._get_backend().stop()
+
     return Litestar(
         on_startup=[on_startup],
+        on_shutdown=[on_shutdown],
         route_handlers=[NotificationsController, *controllers, static_files_router],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
