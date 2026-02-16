@@ -41,7 +41,7 @@ class TweetController(Controller):
             tweet = await tweet_service.create_tweet(db_session, user.id, form.data.content)
             flash_success(request, "Tweet posted!")
             rendered = await tweet_service.render_tweet_content(tweet.content)
-            notify_broadcast(
+            await notify_broadcast(
                 "new_tweet",
                 tweet_id=str(tweet.id),
                 user_id=str(tweet.user_id),
@@ -141,7 +141,7 @@ class TweetController(Controller):
             )
             flash_success(request, "Reply posted!")
             if reply_tweet.parent and str(reply_tweet.parent.user_id) != str(user.id):
-                notify_user(
+                await notify_user(
                     str(reply_tweet.parent.user_id),
                     "generic",
                     title=f"{user.name} replied to your tweet",
@@ -165,7 +165,7 @@ class TweetController(Controller):
         if liked:
             tweet = await tweet_service.get_tweet_by_id(db_session, tweet_id)
             if tweet and str(tweet.user_id) != str(user.id):
-                notify_user(
+                await notify_user(
                     str(tweet.user_id),
                     "generic",
                     title=f"{user.name} liked your tweet",
@@ -184,7 +184,7 @@ class TweetController(Controller):
         if result:
             flash_success(request, "Retweeted!")
             if result.retweet_of and str(result.retweet_of.user_id) != str(user.id):
-                notify_user(
+                await notify_user(
                     str(result.retweet_of.user_id),
                     "generic",
                     title=f"{user.name} retweeted your tweet",
