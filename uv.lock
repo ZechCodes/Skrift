@@ -908,6 +908,15 @@ wheels = [
 ]
 
 [[package]]
+name = "redis"
+version = "7.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f7/80/2971931d27651affa88a44c0ad7b8c4a19dc29c998abb20b23868d319b59/redis-7.1.1.tar.gz", hash = "sha256:a2814b2bda15b39dad11391cc48edac4697214a8a5a4bd10abe936ab4892eb43", size = 4800064 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/29/55/1de1d812ba1481fa4b37fb03b4eec0fcb71b6a0d44c04ea3482eb017600f/redis-7.1.1-py3-none-any.whl", hash = "sha256:f77817f16071c2950492c67d40b771fa493eb3fccc630a424a10976dbb794b7a", size = 356057 },
+]
+
+[[package]]
 name = "rich"
 version = "14.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -969,11 +978,15 @@ dependencies = [
 docs = [
     { name = "zensical" },
 ]
+redis = [
+    { name = "redis" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "redis" },
 ]
 docs = [
     { name = "zensical" },
@@ -994,16 +1007,18 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.7.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
+    { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
     { name = "ruamel-yaml", specifier = ">=0.18.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
     { name = "zensical", marker = "extra == 'docs'", specifier = ">=0.0.19" },
 ]
-provides-extras = ["docs"]
+provides-extras = ["docs", "redis"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "redis", specifier = ">=5.0.0" },
 ]
 docs = [{ name = "zensical", specifier = ">=0.0.19" }]
 
