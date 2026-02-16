@@ -28,6 +28,8 @@ async def find_or_create_oauth_user(
     provider: str,
     user_data: NormalizedUserData,
     raw_user_info: dict,
+    *,
+    tokens: dict | None = None,
 ) -> LoginResult:
     """Find an existing user by OAuth account or email, or create a new one.
 
@@ -56,6 +58,9 @@ async def find_or_create_oauth_user(
         if user_data.email:
             oauth_account.provider_email = user_data.email
         oauth_account.provider_metadata = raw_user_info
+        if tokens:
+            oauth_account.access_token = tokens.get("access_token")
+            oauth_account.refresh_token = tokens.get("refresh_token")
         return LoginResult(user=user, oauth_account=oauth_account, is_new_user=False)
 
     # Step 2: Check if a user with this email already exists
@@ -72,6 +77,8 @@ async def find_or_create_oauth_user(
             provider_account_id=user_data.oauth_id,
             provider_email=user_data.email,
             provider_metadata=raw_user_info,
+            access_token=tokens.get("access_token") if tokens else None,
+            refresh_token=tokens.get("refresh_token") if tokens else None,
             user_id=user.id,
         )
         db_session.add(oauth_account)
@@ -96,6 +103,8 @@ async def find_or_create_oauth_user(
         provider_account_id=user_data.oauth_id,
         provider_email=user_data.email,
         provider_metadata=raw_user_info,
+        access_token=tokens.get("access_token") if tokens else None,
+        refresh_token=tokens.get("refresh_token") if tokens else None,
         user_id=user.id,
     )
     db_session.add(oauth_account)
