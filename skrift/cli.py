@@ -206,51 +206,125 @@ def db(ctx):
     _run_alembic(project_root, args)
 
 
-@cli.command("init-claude")
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Overwrite existing skill files",
-)
-def init_claude(force):
-    """Set up Claude Code skill for Skrift development.
+@cli.group()
+def claude():
+    """Manage Claude Code skills for Skrift development."""
+    pass
 
-    Copies the Skrift skill files to .claude/skills/skrift/ in the current
-    directory, enabling Claude Code to understand Skrift conventions.
 
-    \b
-    Creates:
-        .claude/skills/skrift/SKILL.md      - Main skill with dynamic context
-        .claude/skills/skrift/architecture.md - System architecture docs
-        .claude/skills/skrift/patterns.md   - Code patterns and examples
-    """
+cli.add_command(claude)
+
+
+def _get_skill_names():
+    """Discover skill subdirectories from the package."""
     import importlib.resources
 
-    skill_dir = Path.cwd() / ".claude" / "skills" / "skrift"
-
-    # Check if skill already exists
-    if skill_dir.exists() and not force:
-        click.echo(f"Skill directory already exists: {skill_dir}", err=True)
-        click.echo("Use --force to overwrite existing files.", err=True)
-        sys.exit(1)
-
-    # Create directory
-    skill_dir.mkdir(parents=True, exist_ok=True)
-
-    # Copy skill files from package
-    skill_files = ["SKILL.md", "architecture.md", "patterns.md"]
     package_files = importlib.resources.files("skrift.claude_skill")
+    names = []
+    for item in package_files.iterdir():
+        if item.is_dir() and item.joinpath("SKILL.md").is_file():
+            names.append(item.name)
+    names.sort()
+    return names
 
-    for filename in skill_files:
-        source = package_files.joinpath(filename)
-        dest = skill_dir / filename
+
+def _find_installed_skills(skills_base: Path, skill_names: list[str]) -> list[str]:
+    """Return skill names that already exist on disk."""
+    return [n for n in skill_names if (skills_base / n).exists()]
+
+
+def _install_skills(skills_base: Path, skill_names: list[str]) -> list[str]:
+    """Copy skill files from the package to disk. Returns installed names."""
+    import importlib.resources
+
+    package_files = importlib.resources.files("skrift.claude_skill")
+    installed = []
+    for skill_name in skill_names:
+        skill_dir = skills_base / skill_name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+
+        source = package_files.joinpath(skill_name, "SKILL.md")
+        dest = skill_dir / "SKILL.md"
 
         content = source.read_text()
         dest.write_text(content)
-        click.echo(f"Created {dest.relative_to(Path.cwd())}")
+        click.echo(f"  {dest.relative_to(Path.cwd())}")
+        installed.append(skill_name)
+    return installed
 
-    click.echo()
-    click.echo("Claude Code skill installed. Use /skrift to activate.")
+
+def _remove_skills(skills_base: Path, skill_names: list[str]) -> list[str]:
+    """Remove installed skill directories. Returns removed names."""
+    import shutil
+
+    removed = []
+    for skill_name in skill_names:
+        skill_dir = skills_base / skill_name
+        if skill_dir.exists():
+            shutil.rmtree(skill_dir)
+            click.echo(f"  Removed {skill_dir.relative_to(Path.cwd())}")
+            removed.append(skill_name)
+    return removed
+
+
+@claude.command()
+def install():
+    """Install Skrift skills for Claude Code.
+
+    Fails if any Skrift skills are already installed.
+    Use `skrift claude update` to replace existing skills.
+    """
+    skills_base = Path.cwd() / ".claude" / "skills"
+    skill_names = _get_skill_names()
+
+    if not skill_names:
+        click.echo("Error: No skill directories found in package.", err=True)
+        sys.exit(1)
+
+    existing = _find_installed_skills(skills_base, skill_names)
+    if existing:
+        click.echo(f"Skrift skills already installed: {', '.join(existing)}", err=True)
+        click.echo("Use `skrift claude update` to replace them.", err=True)
+        sys.exit(1)
+
+    installed = _install_skills(skills_base, skill_names)
+    click.echo(f"\nInstalled {len(installed)} skills. Use /skrift to activate.")
+
+
+@claude.command()
+def remove():
+    """Remove all installed Skrift skills."""
+    skills_base = Path.cwd() / ".claude" / "skills"
+    skill_names = _get_skill_names()
+
+    existing = _find_installed_skills(skills_base, skill_names)
+    if not existing:
+        click.echo("No Skrift skills found to remove.")
+        return
+
+    removed = _remove_skills(skills_base, existing)
+    click.echo(f"\nRemoved {len(removed)} skills.")
+
+
+@claude.command()
+def update():
+    """Update Skrift skills to the latest version.
+
+    Removes existing Skrift skills and installs fresh copies.
+    """
+    skills_base = Path.cwd() / ".claude" / "skills"
+    skill_names = _get_skill_names()
+
+    if not skill_names:
+        click.echo("Error: No skill directories found in package.", err=True)
+        sys.exit(1)
+
+    existing = _find_installed_skills(skills_base, skill_names)
+    if existing:
+        _remove_skills(skills_base, existing)
+
+    installed = _install_skills(skills_base, skill_names)
+    click.echo(f"\nUpdated {len(installed)} skills. Use /skrift to activate.")
 
 
 if __name__ == "__main__":
