@@ -7,17 +7,12 @@ from unittest.mock import MagicMock, patch
 class TestPageOrdering:
     """Test page ordering in page_service."""
 
-    @pytest.mark.asyncio
-    async def test_page_default_order_is_zero(self):
-        """Test that pages have default order of 0."""
+    def test_page_default_order_is_zero(self):
+        """Test that the Page.order column has a default of 0."""
         from skrift.db.models import Page
 
-        page = Page(
-            slug="test",
-            title="Test",
-            content="",
-        )
-        assert page.order == 0
+        col = Page.__table__.columns["order"]
+        assert col.default.arg == 0
 
     @pytest.mark.asyncio
     async def test_create_page_with_order(self):

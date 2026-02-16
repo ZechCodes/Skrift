@@ -6,30 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 class TestSetupIndex:
     @pytest.mark.asyncio
-    async def test_redirect_to_configuring_if_db_connected(self):
-        """When DB is connected, redirect to configuring page."""
+    async def test_redirect_to_welcome(self):
+        """Index always redirects to the welcome page."""
         from skrift.setup.controller import SetupController
 
         controller = SetupController(owner=MagicMock())
         request = MagicMock()
         request.session = {}
 
-        with patch("skrift.setup.controller.can_connect_to_database", return_value=(True, None)):
-            result = await SetupController.index.fn(controller, request)
-            assert result.url == "/setup/configuring"
-
-    @pytest.mark.asyncio
-    async def test_redirect_to_database_if_no_db(self):
-        """When no DB, redirect to database step."""
-        from skrift.setup.controller import SetupController
-
-        controller = SetupController(owner=MagicMock())
-        request = MagicMock()
-        request.session = {}
-
-        with patch("skrift.setup.controller.can_connect_to_database", return_value=(False, "no db")):
-            result = await SetupController.index.fn(controller, request)
-            assert result.url == "/setup/database"
+        result = await SetupController.index.fn(controller, request)
+        assert result.url == "/setup/welcome"
 
 
 class TestDatabaseStep:

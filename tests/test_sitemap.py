@@ -57,7 +57,7 @@ class TestSitemapController:
 
     def test_build_sitemap_xml_empty(self):
         """Test building sitemap XML with no entries."""
-        controller = SitemapController()
+        controller = SitemapController(owner=MagicMock())
         xml = controller._build_sitemap_xml([])
 
         assert b'<?xml version="1.0" encoding="UTF-8"?>' in xml
@@ -65,7 +65,7 @@ class TestSitemapController:
 
     def test_build_sitemap_xml_with_entries(self):
         """Test building sitemap XML with entries."""
-        controller = SitemapController()
+        controller = SitemapController(owner=MagicMock())
         entries = [
             SitemapEntry(
                 loc="https://example.com/",
@@ -91,7 +91,7 @@ class TestSitemapController:
 
     def test_build_sitemap_xml_optional_fields(self):
         """Test that optional fields are omitted when None."""
-        controller = SitemapController()
+        controller = SitemapController(owner=MagicMock())
         entries = [
             SitemapEntry(loc="https://example.com/page"),
         ]
