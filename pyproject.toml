@@ -60,6 +60,7 @@ exclude = [
 
 [project.optional-dependencies]
 docs = ["zensical>=0.0.19"]
+redis = ["redis>=5.0.0"]
 
 [tool.ruff]
 line-length = 100

@@ -207,6 +207,28 @@ class RateLimitConfig(BaseModel):
     paths: dict[str, int] = {}  # per-path-prefix overrides, e.g. {"/api": 120}
 
 
+class RedisConfig(BaseModel):
+    """Redis connection configuration (shared across features)."""
+
+    url: str = ""
+    prefix: str = ""  # e.g. "myapp" → keys like "myapp:skrift:notifications"
+
+    def make_key(self, *parts: str) -> str:
+        """Build a namespaced key.
+
+        Example: redis.make_key("skrift", "notifications") → "myapp:skrift:notifications"
+        """
+        segments = [self.prefix] if self.prefix else []
+        segments.extend(parts)
+        return ":".join(segments)
+
+
+class NotificationsConfig(BaseModel):
+    """Notification backend configuration."""
+
+    backend: str = ""  # empty = InMemoryBackend; or "module:ClassName" import string
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration."""
 
@@ -262,6 +284,12 @@ class Settings(BaseSettings):
 
     # Rate limit config (loaded from app.yaml)
     rate_limit: RateLimitConfig = RateLimitConfig()
+
+    # Redis config (loaded from app.yaml)
+    redis: RedisConfig = RedisConfig()
+
+    # Notifications config (loaded from app.yaml)
+    notifications: NotificationsConfig = NotificationsConfig()
 
 
 def clear_settings_cache() -> None:
@@ -336,6 +364,12 @@ def get_settings() -> Settings:
 
     if "rate_limit" in app_config:
         kwargs["rate_limit"] = RateLimitConfig(**app_config["rate_limit"])
+
+    if "redis" in app_config:
+        kwargs["redis"] = RedisConfig(**app_config["redis"])
+
+    if "notifications" in app_config:
+        kwargs["notifications"] = NotificationsConfig(**app_config["notifications"])
 
     # Create Settings with YAML nested configs
     # BaseSettings will still load debug/secret_key from env, but kwargs take precedence
