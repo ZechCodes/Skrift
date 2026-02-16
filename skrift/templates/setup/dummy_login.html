@@ -1,0 +1,30 @@
+{% extends "setup/base.html" %}
+
+{% block title %}Dummy Login - Setup - Skrift{% endblock %}
+
+{% block content %}
+<h2>Dummy Login</h2>
+<p class="description">Create the admin account using the development-only dummy provider.</p>
+
+<div style="background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem; text-align: center; font-weight: 600;">
+    DEVELOPMENT ONLY - Not for production use
+</div>
+
+<form method="post" action="/setup/dummy-login">
+    <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required placeholder="admin@example.com">
+    </div>
+
+    <div class="form-group">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" placeholder="Admin User">
+        <small>Optional. Defaults to email username if not provided.</small>
+    </div>
+
+    <div class="form-actions">
+        <a href="/setup/admin" class="btn-secondary" role="button">Back</a>
+        <button type="submit">Create Admin Account</button>
+    </div>
+</form>
+{% endblock %}

@@ -31,7 +31,7 @@ from skrift.setup.config_writer import (
     update_auth_config,
     update_database_config,
 )
-from skrift.setup.providers import get_all_providers, get_provider_info
+from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_all_providers, get_provider_info
 from skrift.setup.state import (
     can_connect_to_database,
     get_database_url_from_yaml,
@@ -91,20 +91,13 @@ class SetupController(Controller):
 
     @get("/")
     async def index(self, request: Request) -> Redirect:
-        """Redirect to the first incomplete setup step.
+        """Redirect to welcome page to begin setup."""
+        return Redirect(path="/setup/welcome")
 
-        Uses smart detection to skip already-configured steps, allowing users
-        to resume setup without re-entering existing configuration.
-        """
-        # Check if database is configured and connectable
-        can_connect, _ = await can_connect_to_database()
-        if can_connect:
-            # Database is configured - go through configuring page to run migrations
-            return Redirect(path="/setup/configuring")
-
-        # Database not configured - go to database step
-        request.session["setup_wizard_step"] = "database"
-        return Redirect(path="/setup/database")
+    @get("/welcome")
+    async def welcome_step(self, request: Request) -> TemplateResponse:
+        """Welcome page shown before setup begins."""
+        return TemplateResponse("setup/welcome.html")
 
     @get("/database")
     async def database_step(self, request: Request) -> TemplateResponse | Redirect:
@@ -479,10 +472,9 @@ class SetupController(Controller):
         auth_config = config.get("auth", {})
         configured_providers = list(auth_config.get("providers", {}).keys())
 
-        # Get provider display info
-        all_providers = get_all_providers()
+        # Get provider display info (include dummy — get_all_providers() excludes it)
         provider_info = {
-            key: all_providers[key] for key in configured_providers if key in all_providers
+            key: OAUTH_PROVIDERS[key] for key in configured_providers if key in OAUTH_PROVIDERS
         }
 
         return TemplateResponse(
@@ -498,7 +490,7 @@ class SetupController(Controller):
         )
 
     @get("/oauth/{provider:str}/login")
-    async def setup_oauth_login(self, request: Request, provider: str) -> Redirect:
+    async def setup_oauth_login(self, request: Request, provider: str) -> Redirect | TemplateResponse:
         """Redirect to OAuth provider for setup admin creation."""
         config = load_config()
         auth_config = config.get("auth", {})
@@ -510,6 +502,18 @@ class SetupController(Controller):
         provider_info = get_provider_info(provider)
         if not provider_info:
             raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
+
+        # Dummy provider uses a local form instead of OAuth redirect
+        if provider == DUMMY_PROVIDER_KEY:
+            flash = request.session.pop("flash", None)
+            return TemplateResponse(
+                "setup/dummy_login.html",
+                context={
+                    "flash": flash,
+                    "step": 4,
+                    "total_steps": 4,
+                },
+            )
 
         provider_config = providers_config[provider]
         client_id = _resolve_env_var(provider_config.get("client_id", ""))
@@ -555,6 +559,74 @@ class SetupController(Controller):
         )
 
         return Redirect(path=f"{auth_url}?{urlencode(params)}")
+
+    @post("/dummy-login")
+    async def setup_dummy_login(self, request: Request) -> Redirect:
+        """Process dummy login form during setup to create admin account."""
+        config = load_config()
+        auth_config = config.get("auth", {})
+        providers_config = auth_config.get("providers", {})
+
+        if DUMMY_PROVIDER_KEY not in providers_config:
+            raise HTTPException(status_code=404, detail="Dummy provider not configured")
+
+        form_data = await request.form()
+        email = form_data.get("email", "").strip()
+        name = form_data.get("name", "").strip()
+
+        if not email:
+            request.session["flash"] = "Email is required"
+            return Redirect(path=f"/setup/oauth/{DUMMY_PROVIDER_KEY}/login")
+
+        if not name:
+            name = email.split("@")[0]
+
+        oauth_id = f"dummy_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
+        dummy_metadata = {"id": oauth_id, "email": email, "name": name}
+
+        from skrift.auth.providers import NormalizedUserData
+        user_data = NormalizedUserData(
+            oauth_id=oauth_id, email=email, name=name, picture_url=None
+        )
+
+        async with get_setup_db_session() as db_session:
+            from skrift.auth.oauth_account_service import find_or_create_oauth_user
+            login_result = await find_or_create_oauth_user(
+                db_session, DUMMY_PROVIDER_KEY, user_data, dummy_metadata
+            )
+            user = login_result.user
+
+            # Ensure roles are synced
+            from skrift.auth import sync_roles_to_database
+            await sync_roles_to_database(db_session)
+
+            # Always assign admin role during setup
+            admin_role = await db_session.scalar(select(Role).where(Role.name == "admin"))
+            if admin_role:
+                existing = await db_session.execute(
+                    select(user_roles).where(
+                        user_roles.c.user_id == user.id,
+                        user_roles.c.role_id == admin_role.id
+                    )
+                )
+                if not existing.first():
+                    await db_session.execute(
+                        user_roles.insert().values(user_id=user.id, role_id=admin_role.id)
+                    )
+
+            # Mark setup complete
+            timestamp = datetime.now(UTC).isoformat()
+            await setting_service.set_setting(db_session, SETUP_COMPLETED_AT_KEY, timestamp)
+
+        # Set session
+        request.session["user_id"] = str(user.id)
+        request.session["user_name"] = user.name
+        request.session["user_email"] = user.email
+        request.session["user_picture_url"] = user.picture_url
+        request.session["flash"] = "Admin account created successfully!"
+        request.session["setup_just_completed"] = True
+
+        return Redirect(path="/setup/complete")
 
     @get("/complete")
     async def complete(self, request: Request) -> TemplateResponse | Redirect:

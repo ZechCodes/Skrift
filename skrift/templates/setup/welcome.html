@@ -1,0 +1,107 @@
+{% extends "setup/base.html" %}
+
+{% block title %}Welcome - Skrift{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .welcome-content {
+        text-align: center;
+        padding: 1.5rem 0;
+    }
+
+    .welcome-ornament {
+        display: block;
+        margin: 0 auto 1.5rem;
+        color: var(--sk-color-accent);
+        opacity: 0.7;
+    }
+
+    .welcome-content h2 {
+        font-family: 'Cinzel', serif;
+        font-size: 1.75rem;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+        margin: 0 0 0.75rem;
+    }
+
+    .welcome-content p {
+        color: var(--sk-color-muted);
+        font-size: 1.05rem;
+        line-height: 1.7;
+        max-width: 26em;
+        margin: 0 auto 2rem;
+    }
+
+    .welcome-divider {
+        width: 3rem;
+        height: 1px;
+        background: var(--sk-color-border);
+        margin: 0 auto 2rem;
+    }
+
+    .welcome-start {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.875rem 2.5rem;
+        background: var(--sk-color-accent);
+        color: var(--sk-color-accent-text);
+        border: none;
+        border-radius: var(--sk-radius-pill, 2rem);
+        font-family: 'Lora', serif;
+        font-size: 1.05rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: opacity 0.2s, transform 0.15s;
+    }
+
+    .welcome-start:hover {
+        opacity: 0.9;
+        transform: translateY(-1px);
+    }
+
+    .welcome-start:active {
+        transform: translateY(0);
+    }
+
+    .welcome-start::after {
+        display: none;
+    }
+
+    .welcome-start svg {
+        width: 1em;
+        height: 1em;
+        transition: transform 0.2s;
+    }
+
+    .welcome-start:hover svg {
+        transform: translateX(2px);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="welcome-content">
+    <svg class="welcome-ornament" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+        <path d="m15 5 4 4"/>
+    </svg>
+
+    <h2>Welcome to Skrift</h2>
+
+    <p>
+        You're a few short steps away from a fully configured site.
+        Let's get everything set up.
+    </p>
+
+    <div class="welcome-divider"></div>
+
+    <a href="/setup/database" class="welcome-start">
+        Get Started
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14"/>
+            <path d="m12 5 7 7-7 7"/>
+        </svg>
+    </a>
+</div>
+{% endblock %}

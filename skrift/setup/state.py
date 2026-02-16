@@ -123,13 +123,16 @@ async def is_setup_complete(db_session: AsyncSession) -> bool:
 
 
 def is_auth_configured() -> bool:
-    """Check if at least one OAuth provider is fully configured in app.yaml.
+    """Check if at least one auth provider is configured in app.yaml.
 
-    A provider is considered configured if it has both client_id and client_secret.
+    The dummy provider is considered configured without credentials.
+    OAuth providers require both client_id and client_secret.
 
     Returns:
         True if at least one provider is configured, False otherwise.
     """
+    from skrift.setup.providers import DUMMY_PROVIDER_KEY
+
     config_path = get_config_path()
     if not config_path.exists():
         return False
@@ -144,7 +147,10 @@ def is_auth_configured() -> bool:
         auth = config.get("auth", {})
         providers = auth.get("providers", {})
 
-        for _, provider_config in providers.items():
+        for provider_name, provider_config in providers.items():
+            if provider_name == DUMMY_PROVIDER_KEY:
+                return True
+
             if not isinstance(provider_config, dict):
                 continue
             # Check if provider has both client_id and client_secret (even as env var refs)
