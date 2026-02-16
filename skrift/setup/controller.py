@@ -719,7 +719,7 @@ class SetupAuthController(Controller):
             tenant = _resolve_env_var(tenant) or "common"
 
         from skrift.controllers.auth import _exchange_and_fetch
-        user_data, user_info = await _exchange_and_fetch(
+        user_data, user_info, tokens = await _exchange_and_fetch(
             provider, None, code, redirect_uri, code_verifier,
             client_id=client_id, client_secret=client_secret, tenant=tenant,
         )
@@ -728,7 +728,7 @@ class SetupAuthController(Controller):
         async with get_setup_db_session() as db_session:
             from skrift.auth.oauth_account_service import find_or_create_oauth_user
             login_result = await find_or_create_oauth_user(
-                db_session, provider, user_data, user_info
+                db_session, provider, user_data, user_info, tokens=tokens
             )
             user = login_result.user
 

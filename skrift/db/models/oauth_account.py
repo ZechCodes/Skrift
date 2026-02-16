@@ -37,6 +37,8 @@ class OAuthAccount(Base):
     provider_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True, default=None
     )
+    access_token: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    refresh_token: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )

@@ -127,12 +127,13 @@ class TestExchangeAndFetch:
             MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            user_data, user_info = await _exchange_and_fetch(
+            user_data, user_info, tokens = await _exchange_and_fetch(
                 "google", mock_settings, "code123", "https://redirect"
             )
 
             assert user_data.oauth_id == "123"
             assert user_info == {"id": "123"}
+            assert tokens == {"access_token": "token123"}
 
     @pytest.mark.asyncio
     async def test_exchange_with_explicit_credentials(self):
@@ -160,12 +161,13 @@ class TestExchangeAndFetch:
             MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            user_data, user_info = await _exchange_and_fetch(
+            user_data, user_info, tokens = await _exchange_and_fetch(
                 "github", None, "code456", "https://redirect",
                 client_id="explicit-id", client_secret="explicit-secret",
             )
 
             assert user_data.oauth_id == "456"
+            assert tokens == {"access_token": "token456"}
 
 
 class TestOAuthLogin:

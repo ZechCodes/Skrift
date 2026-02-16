@@ -86,7 +86,7 @@ async def _exchange_and_fetch(
     client_id: str | None = None,
     client_secret: str | None = None,
     tenant: str | None = None,
-) -> tuple[NormalizedUserData, dict]:
+) -> tuple[NormalizedUserData, dict, dict]:
     """Exchange authorization code for token, fetch user info, and extract normalized data.
 
     Args:
@@ -100,7 +100,7 @@ async def _exchange_and_fetch(
         tenant: Override tenant ID (used during setup for Microsoft).
 
     Returns:
-        Tuple of (NormalizedUserData, raw_user_info_dict).
+        Tuple of (NormalizedUserData, raw_user_info_dict, tokens_dict).
     """
     provider = get_oauth_provider(provider_key)
 
@@ -142,7 +142,7 @@ async def _exchange_and_fetch(
     if not user_data.oauth_id:
         raise HTTPException(status_code=400, detail="Could not determine user ID")
 
-    return user_data, user_info
+    return user_data, user_info, tokens
 
 
 def _set_login_session(request: Request, user: "User") -> None:
@@ -267,14 +267,14 @@ class AuthController(Controller):
 
         code_verifier = request.session.pop("oauth_code_verifier", None)
 
-        user_data, user_info = await _exchange_and_fetch(
+        user_data, user_info, tokens = await _exchange_and_fetch(
             provider, settings, code,
             settings.auth.get_redirect_uri(provider),
             code_verifier,
         )
 
         login_result = await find_or_create_oauth_user(
-            db_session, provider, user_data, user_info
+            db_session, provider, user_data, user_info, tokens=tokens
         )
         await db_session.commit()
 
