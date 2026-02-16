@@ -12,6 +12,7 @@ from skrift.config import get_settings
 from skrift.db.base import Base
 
 # Import all models to ensure they're registered with Base.metadata
+from skrift.db.models.notification import StoredNotification  # noqa: F401
 from skrift.db.models.oauth_account import OAuthAccount  # noqa: F401
 from skrift.db.models.user import User  # noqa: F401
 from skrift.db.models.page import Page  # noqa: F401
