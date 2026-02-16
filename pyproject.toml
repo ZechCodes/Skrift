@@ -49,7 +49,7 @@ include = [
     "skrift/static/**/*",
     "skrift/alembic/**/*",
     "skrift/alembic.ini",
-    "skrift/claude_skill/*.md",
+    "skrift/claude_skill/**/*.md",
 ]
 exclude = [
     "**/__pycache__",
