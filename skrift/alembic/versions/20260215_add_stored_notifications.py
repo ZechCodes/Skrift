@@ -1,7 +1,7 @@
 """add stored_notifications table
 
-Revision ID: 4d5e6f7g8h9i
-Revises: 3c4d5e6f7g8h
+Revision ID: 7g8h9i0j1k2l
+Revises: 6f7g8h9i0j1k
 Create Date: 2026-02-15 10:00:00.000000
 """
 from typing import Sequence, Union
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '4d5e6f7g8h9i'
-down_revision: Union[str, None] = '3c4d5e6f7g8h'
+revision: str = '7g8h9i0j1k2l'
+down_revision: Union[str, None] = '6f7g8h9i0j1k'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
