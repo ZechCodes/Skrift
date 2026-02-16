@@ -25,7 +25,7 @@ class NotificationsController(Controller):
             q = notifications.register_connection(nid, user_id)
             try:
                 # Flush phase: yield all queued notifications
-                for n in notifications.get_queued(nid, user_id):
+                for n in await notifications.get_queued(nid, user_id):
                     yield ServerSentEventMessage(
                         data=json.dumps(n.to_dict()), event="notification"
                     )
@@ -54,7 +54,7 @@ class NotificationsController(Controller):
         """Dismiss a notification by ID."""
         nid = _ensure_nid(request)
         user_id = request.session.get("user_id")
-        found = notifications.dismiss(nid, user_id, notification_id)
+        found = await notifications.dismiss(nid, user_id, notification_id)
         if found:
             return Response(
                 content={"dismissed": str(notification_id)}, status_code=200
@@ -70,7 +70,7 @@ class NotificationsController(Controller):
         """Dismiss a notification by group key."""
         nid = _ensure_nid(request)
         user_id = request.session.get("user_id")
-        found = notifications.dismiss(nid, user_id, group=group)
+        found = await notifications.dismiss(nid, user_id, group=group)
         if found:
             return Response(
                 content={"dismissed_group": group}, status_code=200
