@@ -51,28 +51,30 @@ class TestNotificationGroupField:
 class TestSendToSessionGroup:
     """Test group replacement in send_to_session."""
 
-    def test_replaces_same_group_in_queue(self, svc):
+    @pytest.mark.asyncio
+    async def test_replaces_same_group_in_queue(self, svc):
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
         n2 = Notification(type="generic", group="deploy", payload={"step": "2"})
 
-        svc.send_to_session("s1", n1)
-        svc.send_to_session("s1", n2)
+        await svc.send_to_session("s1", n1)
+        await svc.send_to_session("s1", n2)
 
-        queued = svc.get_queued("s1", None)
+        queued = await svc.get_queued("s1", None)
         assert len(queued) == 1
         assert queued[0].id == n2.id
 
-    def test_pushes_dismissed_event_for_old(self, svc):
+    @pytest.mark.asyncio
+    async def test_pushes_dismissed_event_for_old(self, svc):
         q = svc.register_connection("s1", None)
 
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
-        svc.send_to_session("s1", n1)
+        await svc.send_to_session("s1", n1)
 
         # Drain n1 from queue
         q.get_nowait()
 
         n2 = Notification(type="generic", group="deploy", payload={"step": "2"})
-        svc.send_to_session("s1", n2)
+        await svc.send_to_session("s1", n2)
 
         # Should get: dismissed(n1), then n2
         dismissed = q.get_nowait()
@@ -82,31 +84,34 @@ class TestSendToSessionGroup:
         new_notif = q.get_nowait()
         assert new_notif.id == n2.id
 
-    def test_different_groups_coexist(self, svc):
+    @pytest.mark.asyncio
+    async def test_different_groups_coexist(self, svc):
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
         n2 = Notification(type="generic", group="build", payload={"step": "1"})
 
-        svc.send_to_session("s1", n1)
-        svc.send_to_session("s1", n2)
+        await svc.send_to_session("s1", n1)
+        await svc.send_to_session("s1", n2)
 
-        queued = svc.get_queued("s1", None)
+        queued = await svc.get_queued("s1", None)
         assert len(queued) == 2
 
-    def test_no_group_notifications_unaffected(self, svc):
+    @pytest.mark.asyncio
+    async def test_no_group_notifications_unaffected(self, svc):
         n1 = Notification(type="generic", payload={"msg": "a"})
         n2 = Notification(type="generic", payload={"msg": "b"})
 
-        svc.send_to_session("s1", n1)
-        svc.send_to_session("s1", n2)
+        await svc.send_to_session("s1", n1)
+        await svc.send_to_session("s1", n2)
 
-        queued = svc.get_queued("s1", None)
+        queued = await svc.get_queued("s1", None)
         assert len(queued) == 2
 
-    def test_no_dismissed_when_no_previous_group(self, svc):
+    @pytest.mark.asyncio
+    async def test_no_dismissed_when_no_previous_group(self, svc):
         q = svc.register_connection("s1", None)
 
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
-        svc.send_to_session("s1", n1)
+        await svc.send_to_session("s1", n1)
 
         # Only the notification itself, no dismissed event
         msg = q.get_nowait()
@@ -117,30 +122,32 @@ class TestSendToSessionGroup:
 class TestSendToUserGroup:
     """Test group replacement in send_to_user."""
 
-    def test_replaces_same_group_in_user_queue(self, svc):
+    @pytest.mark.asyncio
+    async def test_replaces_same_group_in_user_queue(self, svc):
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
         n2 = Notification(type="generic", group="deploy", payload={"step": "2"})
 
-        svc.send_to_user("u1", n1)
-        svc.send_to_user("u1", n2)
+        await svc.send_to_user("u1", n1)
+        await svc.send_to_user("u1", n2)
 
-        queued = svc.get_queued("_none_", "u1")
+        queued = await svc.get_queued("_none_", "u1")
         assert len(queued) == 1
         assert queued[0].id == n2.id
 
-    def test_pushes_dismissed_to_all_user_sessions(self, svc):
+    @pytest.mark.asyncio
+    async def test_pushes_dismissed_to_all_user_sessions(self, svc):
         q1 = svc.register_connection("s1", "u1")
         q2 = svc.register_connection("s2", "u1")
 
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
-        svc.send_to_user("u1", n1)
+        await svc.send_to_user("u1", n1)
 
         # Drain n1
         q1.get_nowait()
         q2.get_nowait()
 
         n2 = Notification(type="generic", group="deploy", payload={"step": "2"})
-        svc.send_to_user("u1", n2)
+        await svc.send_to_user("u1", n2)
 
         # Both sessions should get dismissed then new
         for q in (q1, q2):
@@ -151,70 +158,75 @@ class TestSendToUserGroup:
             new_notif = q.get_nowait()
             assert new_notif.id == n2.id
 
-    def test_different_groups_coexist_user(self, svc):
+    @pytest.mark.asyncio
+    async def test_different_groups_coexist_user(self, svc):
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
         n2 = Notification(type="generic", group="build", payload={"step": "1"})
 
-        svc.send_to_user("u1", n1)
-        svc.send_to_user("u1", n2)
+        await svc.send_to_user("u1", n1)
+        await svc.send_to_user("u1", n2)
 
-        queued = svc.get_queued("_none_", "u1")
+        queued = await svc.get_queued("_none_", "u1")
         assert len(queued) == 2
 
 
 class TestConvenienceFunctions:
     """Test that convenience functions pass group through."""
 
-    def test_notify_session_passes_group(self):
+    @pytest.mark.asyncio
+    async def test_notify_session_passes_group(self):
         svc = NotificationService()
 
         from skrift.lib import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
-            n = notify_session("s1", "generic", group="deploy", title="Hi")
+            n = await notify_session("s1", "generic", group="deploy", title="Hi")
             assert n.group == "deploy"
             assert n.payload == {"title": "Hi"}
 
-            queued = svc.get_queued("s1", None)
+            queued = await svc.get_queued("s1", None)
             assert len(queued) == 1
             assert queued[0].group == "deploy"
         finally:
             mod.notifications = original
 
-    def test_notify_user_passes_group(self):
+    @pytest.mark.asyncio
+    async def test_notify_user_passes_group(self):
         svc = NotificationService()
 
         from skrift.lib import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
-            n = notify_user("u1", "generic", group="build", title="Done")
+            n = await notify_user("u1", "generic", group="build", title="Done")
             assert n.group == "build"
         finally:
             mod.notifications = original
 
-    def test_notify_broadcast_passes_group(self):
+    @pytest.mark.asyncio
+    async def test_notify_broadcast_passes_group(self):
         svc = NotificationService()
 
         from skrift.lib import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
-            n = notify_broadcast("generic", group="live", title="Update")
+            n = await notify_broadcast("generic", group="live", title="Update")
             assert n.group == "live"
             assert n.payload == {"title": "Update"}
         finally:
             mod.notifications = original
 
-    def test_notify_session_no_group(self):
+    @pytest.mark.asyncio
+    async def test_notify_session_no_group(self):
         svc = NotificationService()
 
         from skrift.lib import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
-            n = notify_session("s1", "generic", title="Hi")
+            n = await notify_session("s1", "generic", title="Hi")
             assert n.group is None
         finally:
             mod.notifications = original
@@ -223,96 +235,106 @@ class TestConvenienceFunctions:
 class TestDismissByGroup:
     """Test dismiss(group=...) on NotificationService."""
 
-    def test_dismiss_by_group_removes_from_session_queue(self, svc):
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_removes_from_session_queue(self, svc):
         n = Notification(type="generic", group="deploy", payload={"step": "1"})
-        svc.send_to_session("s1", n)
+        await svc.send_to_session("s1", n)
 
-        assert svc.dismiss("s1", None, group="deploy") is True
-        assert svc.get_queued("s1", None) == []
+        assert await svc.dismiss("s1", None, group="deploy") is True
+        assert await svc.get_queued("s1", None) == []
 
-    def test_dismiss_by_group_removes_from_user_queue(self, svc):
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_removes_from_user_queue(self, svc):
         n = Notification(type="generic", group="deploy", payload={"step": "1"})
-        svc.send_to_user("u1", n)
+        await svc.send_to_user("u1", n)
 
-        assert svc.dismiss("s1", "u1", group="deploy") is True
-        assert svc.get_queued("_none_", "u1") == []
+        assert await svc.dismiss("s1", "u1", group="deploy") is True
+        assert await svc.get_queued("_none_", "u1") == []
 
-    def test_dismiss_by_group_returns_false_when_not_found(self, svc):
-        assert svc.dismiss("s1", None, group="nonexistent") is False
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_returns_false_when_not_found(self, svc):
+        assert await svc.dismiss("s1", None, group="nonexistent") is False
 
-    def test_dismiss_by_group_pushes_dismissed_event(self, svc):
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_pushes_dismissed_event(self, svc):
         q = svc.register_connection("s1", None)
 
         n = Notification(type="generic", group="deploy", payload={"step": "1"})
-        svc.send_to_session("s1", n)
+        await svc.send_to_session("s1", n)
         q.get_nowait()  # drain the notification
 
-        svc.dismiss("s1", None, group="deploy")
+        await svc.dismiss("s1", None, group="deploy")
 
         dismissed = q.get_nowait()
         assert dismissed.type == "dismissed"
         assert dismissed.id == n.id
 
-    def test_dismiss_by_group_pushes_to_other_user_sessions(self, svc):
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_pushes_to_other_user_sessions(self, svc):
         q1 = svc.register_connection("s1", "u1")
         q2 = svc.register_connection("s2", "u1")
 
         n = Notification(type="generic", group="deploy", payload={"step": "1"})
-        svc.send_to_user("u1", n)
+        await svc.send_to_user("u1", n)
         q1.get_nowait()
         q2.get_nowait()
 
-        svc.dismiss("s1", "u1", group="deploy")
+        await svc.dismiss("s1", "u1", group="deploy")
 
         for q in (q1, q2):
             dismissed = q.get_nowait()
             assert dismissed.type == "dismissed"
             assert dismissed.id == n.id
 
-    def test_dismiss_by_group_does_not_affect_other_groups(self, svc):
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_does_not_affect_other_groups(self, svc):
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
         n2 = Notification(type="generic", group="build", payload={"step": "1"})
-        svc.send_to_session("s1", n1)
-        svc.send_to_session("s1", n2)
+        await svc.send_to_session("s1", n1)
+        await svc.send_to_session("s1", n2)
 
-        svc.dismiss("s1", None, group="deploy")
+        await svc.dismiss("s1", None, group="deploy")
 
-        queued = svc.get_queued("s1", None)
+        queued = await svc.get_queued("s1", None)
         assert len(queued) == 1
         assert queued[0].group == "build"
 
-    def test_dismiss_by_group_does_not_affect_ungrouped(self, svc):
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_does_not_affect_ungrouped(self, svc):
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
         n2 = Notification(type="generic", payload={"msg": "hello"})
-        svc.send_to_session("s1", n1)
-        svc.send_to_session("s1", n2)
+        await svc.send_to_session("s1", n1)
+        await svc.send_to_session("s1", n2)
 
-        svc.dismiss("s1", None, group="deploy")
+        await svc.dismiss("s1", None, group="deploy")
 
-        queued = svc.get_queued("s1", None)
+        queued = await svc.get_queued("s1", None)
         assert len(queued) == 1
         assert queued[0].id == n2.id
 
-    def test_dismiss_by_id_still_works(self, svc):
+    @pytest.mark.asyncio
+    async def test_dismiss_by_id_still_works(self, svc):
         """Existing dismiss-by-UUID behavior is preserved."""
         n = Notification(type="generic", payload={"msg": "hi"})
-        svc.send_to_session("s1", n)
+        await svc.send_to_session("s1", n)
 
-        assert svc.dismiss("s1", None, n.id) is True
-        assert svc.get_queued("s1", None) == []
+        assert await svc.dismiss("s1", None, n.id) is True
+        assert await svc.get_queued("s1", None) == []
 
-    def test_dismiss_no_id_no_group_returns_false(self, svc):
+    @pytest.mark.asyncio
+    async def test_dismiss_no_id_no_group_returns_false(self, svc):
         """Calling dismiss with neither id nor group finds nothing."""
         n = Notification(type="generic", payload={"msg": "hi"})
-        svc.send_to_session("s1", n)
+        await svc.send_to_session("s1", n)
 
-        assert svc.dismiss("s1", None) is False
+        assert await svc.dismiss("s1", None) is False
 
 
 class TestDismissGroupConvenience:
     """Test dismiss_session_group and dismiss_user_group convenience functions."""
 
-    def test_dismiss_session_group(self):
+    @pytest.mark.asyncio
+    async def test_dismiss_session_group(self):
         svc = NotificationService()
 
         from skrift.lib import notifications as mod
@@ -320,25 +342,27 @@ class TestDismissGroupConvenience:
         mod.notifications = svc
         try:
             n = Notification(type="generic", group="deploy", payload={"step": "1"})
-            svc.send_to_session("s1", n)
+            await svc.send_to_session("s1", n)
 
-            assert dismiss_session_group("s1", "deploy") is True
-            assert svc.get_queued("s1", None) == []
+            assert await dismiss_session_group("s1", "deploy") is True
+            assert await svc.get_queued("s1", None) == []
         finally:
             mod.notifications = original
 
-    def test_dismiss_session_group_not_found(self):
+    @pytest.mark.asyncio
+    async def test_dismiss_session_group_not_found(self):
         svc = NotificationService()
 
         from skrift.lib import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
-            assert dismiss_session_group("s1", "nope") is False
+            assert await dismiss_session_group("s1", "nope") is False
         finally:
             mod.notifications = original
 
-    def test_dismiss_user_group(self):
+    @pytest.mark.asyncio
+    async def test_dismiss_user_group(self):
         svc = NotificationService()
 
         from skrift.lib import notifications as mod
@@ -348,11 +372,11 @@ class TestDismissGroupConvenience:
             q = svc.register_connection("s1", "u1")
 
             n = Notification(type="generic", group="deploy", payload={"step": "1"})
-            svc.send_to_user("u1", n)
+            await svc.send_to_user("u1", n)
             q.get_nowait()  # drain
 
-            assert dismiss_user_group("u1", "deploy") is True
-            assert svc.get_queued("_none_", "u1") == []
+            assert await dismiss_user_group("u1", "deploy") is True
+            assert await svc.get_queued("_none_", "u1") == []
 
             dismissed = q.get_nowait()
             assert dismissed.type == "dismissed"
@@ -360,13 +384,14 @@ class TestDismissGroupConvenience:
         finally:
             mod.notifications = original
 
-    def test_dismiss_user_group_not_found(self):
+    @pytest.mark.asyncio
+    async def test_dismiss_user_group_not_found(self):
         svc = NotificationService()
 
         from skrift.lib import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
-            assert dismiss_user_group("u1", "nope") is False
+            assert await dismiss_user_group("u1", "nope") is False
         finally:
             mod.notifications = original
