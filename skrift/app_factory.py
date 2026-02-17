@@ -29,8 +29,6 @@ EXCEPTION_HANDLERS: dict[type[Exception], Any] = {
 
 # Module-level references for runtime updates
 _jinja_env = None
-_static_dirs: list[Path] | None = None
-_static_hasher = None
 
 
 def create_session_config(
@@ -70,31 +68,10 @@ def get_template_directories_for_theme(theme_name: str) -> list[Path]:
     return dirs
 
 
-def get_static_directories_for_theme(theme_name: str) -> list[Path]:
-    """Compute static directory list for a specific theme."""
-    from skrift.lib.theme import get_themes_dir
-
-    dirs: list[Path] = []
-    if theme_name:
-        theme_static = get_themes_dir() / theme_name / "static"
-        if theme_static.is_dir():
-            dirs.append(theme_static)
-
-    dirs.append(Path(os.getcwd()) / "static")
-    dirs.append(Path(__file__).parent / "static")
-    return dirs
-
-
 def get_template_directories() -> list[Path]:
     """Get template directories with the currently active theme applied."""
     from skrift.db.services.setting_service import get_cached_site_theme
     return get_template_directories_for_theme(get_cached_site_theme())
-
-
-def get_static_directories() -> list[Path]:
-    """Get static directories with the currently active theme applied."""
-    from skrift.db.services.setting_service import get_cached_site_theme
-    return get_static_directories_for_theme(get_cached_site_theme())
 
 
 def update_template_directories() -> None:
@@ -112,19 +89,6 @@ def update_template_directories() -> None:
     # Flushing the cache forces a fresh lookup from the new searchpath.
     if hasattr(_jinja_env, "cache") and _jinja_env.cache is not None:
         _jinja_env.cache.clear()
-
-
-def update_static_directories() -> None:
-    """Update the static file directories for instant theme switching."""
-    if _static_dirs is None:
-        return
-
-    new_dirs = get_static_directories()
-    _static_dirs.clear()
-    _static_dirs.extend(new_dirs)
-
-    if _static_hasher is not None:
-        _static_hasher._cache.clear()
 
 
 def build_template_engine_callback(
@@ -158,26 +122,17 @@ def create_template_config(directories: list[Path], engine_callback: Callable) -
     )
 
 
-def create_static_hasher(directories: list[Path] | None = None):
-    """Create static files middleware and hasher using the given directories.
+def create_static_hasher(
+    themes_dir: Path,
+    site_static_dir: Path,
+    package_static_dir: Path,
+):
+    """Create a static URL hasher using fixed paths.
 
     Returns:
-        A ``(middleware, hasher)`` tuple.  *middleware* is a
-        :class:`~skrift.middleware.static.StaticFilesMiddleware` partial
-        (wrapped in ``DefineMiddleware``), and *hasher* is a
-        :class:`~skrift.asgi.StaticHasher` instance.
+        A :class:`~skrift.asgi.StaticHasher` instance for generating
+        cache-busted ``/static/...`` URLs in templates.
     """
-    global _static_dirs, _static_hasher
-    from litestar.middleware import DefineMiddleware
     from skrift.asgi import StaticHasher
-    from skrift.middleware.static import StaticFilesMiddleware
 
-    if directories is None:
-        directories = get_static_directories()
-
-    _static_dirs = directories
-
-    middleware = DefineMiddleware(StaticFilesMiddleware, directories=_static_dirs)
-    hasher = StaticHasher(_static_dirs)
-    _static_hasher = hasher
-    return middleware, hasher
+    return StaticHasher(themes_dir, site_static_dir, package_static_dir)

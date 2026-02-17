@@ -13,7 +13,7 @@
     {{ og_meta }}
     {% endif %}
 
-    <link rel="stylesheet" href="{{ static_url('css/theme.css') }}">
+    <link rel="stylesheet" href="{{ theme_url('css/theme.css') }}">
     {% block head %}{% endblock %}
 </head>
 <body>
@@ -44,7 +44,7 @@
         <p>&copy; {{ site_copyright_start_year() }}&ndash;{{ now().year }} {{ site_copyright_holder() }}. {{ site_name() }}.</p>
     </footer>
 
-    <script src="{{ static_url('js/notifications.js') }}"></script>
-    <script src="{{ static_url('js/blog.js') }}"></script>
+    <script src="{{ static_url('skrift/js/notifications.js') }}"></script>
+    <script src="{{ static_url('site/js/blog.js') }}"></script>
 </body>
 </html>

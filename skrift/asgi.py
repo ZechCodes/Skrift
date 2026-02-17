@@ -13,6 +13,7 @@ import importlib
 import logging
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -37,7 +38,6 @@ from skrift.app_factory import (
     create_static_hasher,
     create_template_config,
     get_template_directories,
-    get_static_directories,
 )
 from skrift.config import get_config_path, get_settings, is_config_valid
 from skrift.middleware.rate_limit import RateLimitMiddleware
@@ -57,11 +57,36 @@ from skrift.db.services.setting_service import (
 logger = logging.getLogger(__name__)
 
 
-class StaticHasher:
-    """Resolves static file paths and caches content hashes for URL cache busting."""
+class ThemeStaticURL:
+    """Resolves theme-relative static paths by prepending the active theme name.
 
-    def __init__(self, directories: list[Path]) -> None:
-        self._directories = directories
+    Delegates to ``StaticHasher`` for hash computation and caching.
+    """
+
+    def __init__(self, static_hasher: "StaticHasher", theme_getter: "Callable[[], str]") -> None:
+        self._static_hasher = static_hasher
+        self._theme_getter = theme_getter
+
+    def __call__(self, path: str) -> str:
+        return self._static_hasher(f"{self._theme_getter()}/{path}")
+
+
+class StaticHasher:
+    """Resolves static file paths and caches content hashes for URL cache busting.
+
+    Input path includes the source prefix, e.g. ``skrift/css/skrift.css``.
+    Output URL is ``/static/skrift/css/skrift.css?h=abc123``.
+    """
+
+    def __init__(
+        self,
+        themes_dir: Path,
+        site_static_dir: Path,
+        package_static_dir: Path,
+    ) -> None:
+        self._themes_dir = themes_dir
+        self._site_static_dir = site_static_dir
+        self._package_static_dir = package_static_dir
         self._cache: dict[str, str] = {}
 
     def __call__(self, path: str) -> str:
@@ -70,11 +95,22 @@ class StaticHasher:
         return self._cache[path]
 
     def _compute(self, path: str) -> str:
-        for directory in self._directories:
-            full = directory / path
-            if full.is_file():
-                digest = hashlib.sha256(full.read_bytes()).hexdigest()[:8]
-                return f"/static/{path}?h={digest}"
+        from skrift.middleware.static import resolve_static_file
+
+        slash_idx = path.find("/")
+        if slash_idx == -1:
+            return f"/static/{path}"
+
+        source = path[:slash_idx]
+        filepath = path[slash_idx + 1:]
+
+        resolved = resolve_static_file(
+            source, filepath,
+            self._themes_dir, self._site_static_dir, self._package_static_dir,
+        )
+        if resolved is not None:
+            digest = hashlib.sha256(resolved.read_bytes()).hexdigest()[:8]
+            return f"/static/{path}?h={digest}"
         return f"/static/{path}"
 
 
@@ -336,9 +372,17 @@ class AppDispatcher:
 
         path = scope.get("path", "")
 
-        # If setup is locked and we have main app, it handles EVERYTHING
-        if self.setup_locked and self._main_app:
-            await self._main_app(scope, receive, send)
+        # If setup is locked, main app handles EVERYTHING
+        if self.setup_locked:
+            main_app = self._main_app or await self._get_or_create_main_app()
+            if main_app:
+                await main_app(scope, receive, send)
+                return
+            # Can't create main app — show error page
+            await self._error_response(
+                send,
+                f"Setup complete but cannot start application: {self._main_app_error}",
+            )
             return
 
         # Setup not locked - /setup/* always goes to setup app
@@ -564,8 +608,15 @@ def create_app() -> Litestar:
         )
 
     # Static files
-    static_dirs = get_static_directories()
-    static_files_middleware, static_url = create_static_hasher(static_dirs)
+    from skrift.lib.theme import get_themes_dir
+    themes_dir = get_themes_dir()
+    site_static_dir = Path(os.getcwd()) / "static"
+    package_static_dir = Path(__file__).parent / "static"
+    static_url = create_static_hasher(
+        themes_dir=themes_dir,
+        site_static_dir=site_static_dir,
+        package_static_dir=package_static_dir,
+    )
 
     # Template configuration
     from skrift.forms import Form, csrf_field as _csrf_field
@@ -583,6 +634,7 @@ def create_app() -> Litestar:
             "Form": Form,
             "csrf_field": _csrf_field,
             "static_url": static_url,
+            "theme_url": ThemeStaticURL(static_url, get_cached_site_theme),
         },
     )
     template_config = create_template_config(template_dirs, engine_callback)
@@ -625,14 +677,20 @@ def create_app() -> Litestar:
         on_shutdown=[on_shutdown],
         route_handlers=[NotificationsController, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[static_files_middleware, DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
+        middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream"),
         csrf_config=csrf_config,
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
-    return observability.instrument_app(app)
+    from skrift.middleware.static import StaticFilesMiddleware
+    return StaticFilesMiddleware(
+        observability.instrument_app(app),
+        themes_dir=themes_dir,
+        site_static_dir=site_static_dir,
+        package_static_dir=package_static_dir,
+    )
 
 
 def create_setup_app() -> Litestar:
@@ -653,12 +711,19 @@ def create_setup_app() -> Litestar:
     # Session configuration
     session_config = create_session_config(settings.secret_key)
 
-    # Static files (setup app never uses themes)
-    from skrift.app_factory import get_template_directories_for_theme, get_static_directories_for_theme
-    setup_static_dirs = get_static_directories_for_theme("")
-    static_files_middleware, static_url = create_static_hasher(setup_static_dirs)
+    # Static files
+    from skrift.lib.theme import get_themes_dir
+    themes_dir = get_themes_dir()
+    site_static_dir = Path(os.getcwd()) / "static"
+    package_static_dir = Path(__file__).parent / "static"
+    static_url = create_static_hasher(
+        themes_dir=themes_dir,
+        site_static_dir=site_static_dir,
+        package_static_dir=package_static_dir,
+    )
 
     # Template configuration (setup app never uses themes)
+    from skrift.app_factory import get_template_directories_for_theme
     setup_template_dirs = get_template_directories_for_theme("")
     engine_callback = build_template_engine_callback(
         extra_globals={
@@ -731,15 +796,22 @@ def create_setup_app() -> Litestar:
             except Exception:
                 logger.info("Setup startup: role sync skipped", exc_info=True)
 
-    return Litestar(
+    from skrift.middleware.static import StaticFilesMiddleware
+    litestar_app = Litestar(
         on_startup=[on_startup],
         route_handlers=route_handlers,
         plugins=plugins,
-        middleware=[static_files_middleware, DefineMiddleware(SessionCleanupMiddleware), session_config.middleware],
+        middleware=[DefineMiddleware(SessionCleanupMiddleware), session_config.middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip"),
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
+    )
+    return StaticFilesMiddleware(
+        litestar_app,
+        themes_dir=themes_dir,
+        site_static_dir=site_static_dir,
+        package_static_dir=package_static_dir,
     )
 
 
@@ -812,9 +884,6 @@ def create_dispatcher() -> ASGIApp:
         # Setup already done - just return the main app directly
         return create_app()
 
-    # Create setup app first so that create_app() (if called) overwrites
-    # the module-level _static_dirs with the theme-aware list.  This
-    # ensures update_static_directories() mutates the main app's list.
     setup_app = create_setup_app()
 
     # Try to create main app if config is valid
