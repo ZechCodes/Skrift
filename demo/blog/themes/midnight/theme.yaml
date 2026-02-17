@@ -1,0 +1,8 @@
+name: Midnight
+description: Dark developer blog with code-editor aesthetic
+version: "1.0"
+author: Skrift Demo
+colors:
+  - "#0d1117"
+  - "#c9d1d9"
+  - "#58a6ff"

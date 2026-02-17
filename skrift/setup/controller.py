@@ -15,7 +15,7 @@ from typing import Annotated
 from litestar import Controller, Request, get, post
 from litestar.exceptions import HTTPException
 from litestar.params import Parameter
-from litestar.response import Redirect, Template as TemplateResponse
+from litestar.response import File, Redirect, Template as TemplateResponse
 from litestar.response.sse import ServerSentEvent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
@@ -38,6 +38,7 @@ from skrift.setup.state import (
     get_first_incomplete_step,
     is_auth_configured,
     is_site_configured,
+    is_theme_configured,
     run_migrations_if_needed,
     reset_migrations_flag,
 )
@@ -73,6 +74,27 @@ def _resolve_env_var(value: str) -> str:
     if value.startswith("$"):
         return os.environ.get(value[1:], "")
     return value
+
+
+def _has_themes() -> bool:
+    """Check if themes are available for the setup wizard."""
+    from skrift.lib.theme import themes_available
+    return themes_available()
+
+
+def _total_steps() -> int:
+    """Return total number of setup steps (5 with themes, 4 without)."""
+    return 5 if _has_themes() else 4
+
+
+def _admin_step_number() -> int:
+    """Return the step number for the admin step."""
+    return 5 if _has_themes() else 4
+
+
+def _theme_step_number() -> int:
+    """Return the step number for the theme step (only valid when themes exist)."""
+    return 4
 
 
 class SetupController(Controller):
@@ -126,7 +148,7 @@ class SetupController(Controller):
                 "flash": flash,
                 "error": error,
                 "step": 1,
-                "total_steps": 4,
+                "total_steps": _total_steps(),
                 "db_type": db_type,
                 "current_url": current_url,
             },
@@ -219,7 +241,7 @@ class SetupController(Controller):
                 "flash": flash,
                 "error": error,
                 "step": 1,
-                "total_steps": 4,
+                "total_steps": _total_steps(),
             },
         )
 
@@ -275,13 +297,8 @@ class SetupController(Controller):
             await asyncio.sleep(0.3)
 
             # Determine next step
-            if is_auth_configured():
-                if await is_site_configured():
-                    next_step = "admin"
-                else:
-                    next_step = "site"
-            else:
-                next_step = "auth"
+            next_setup_step = await get_first_incomplete_step()
+            next_step = next_setup_step.value
 
             # All done - include next step
             yield json.dumps({
@@ -324,7 +341,7 @@ class SetupController(Controller):
                 "flash": flash,
                 "error": error,
                 "step": 2,
-                "total_steps": 4,
+                "total_steps": _total_steps(),
                 "redirect_base_url": redirect_base_url,
                 "providers": all_providers,
                 "configured_providers": configured_providers,
@@ -406,7 +423,7 @@ class SetupController(Controller):
                 "flash": flash,
                 "error": error,
                 "step": 3,
-                "total_steps": 4,
+                "total_steps": _total_steps(),
                 "settings": {
                     "site_name": "",
                     "site_tagline": "",
@@ -461,9 +478,80 @@ class SetupController(Controller):
             request.session["setup_error"] = str(e)
             return Redirect(path="/setup/site")
 
+    @get("/theme")
+    async def theme_step(self, request: Request) -> TemplateResponse | Redirect:
+        """Step 4: Theme selection (only when themes are available)."""
+        from skrift.lib.theme import themes_available, discover_themes
+
+        if not themes_available():
+            return Redirect(path="/setup/admin")
+
+        # If theme is already configured and no errors, skip
+        if await is_theme_configured() and not request.session.get("setup_error"):
+            next_step = await get_first_incomplete_step()
+            if next_step.value != "theme":
+                request.session["setup_wizard_step"] = next_step.value
+                return Redirect(path=f"/setup/{next_step.value}")
+
+        flash = request.session.pop("flash", None)
+        error = request.session.pop("setup_error", None)
+        themes = discover_themes()
+
+        return TemplateResponse(
+            "setup/theme.html",
+            context={
+                "flash": flash,
+                "error": error,
+                "step": _theme_step_number(),
+                "total_steps": _total_steps(),
+                "themes": themes,
+            },
+        )
+
+    @post("/theme")
+    async def save_theme(self, request: Request) -> Redirect:
+        """Save theme selection."""
+        from skrift.lib.theme import get_theme_info
+
+        form_data = await request.form()
+        site_theme = form_data.get("site_theme", "").strip()
+
+        # Validate: if non-empty, must be a valid theme
+        if site_theme and not get_theme_info(site_theme):
+            request.session["setup_error"] = f"Unknown theme: {site_theme}"
+            return Redirect(path="/setup/theme")
+
+        try:
+            async with get_setup_db_session() as db_session:
+                await setting_service.set_setting(
+                    db_session, setting_service.SITE_THEME_KEY, site_theme
+                )
+                await setting_service.load_site_settings_cache(db_session)
+
+            next_step = await get_first_incomplete_step()
+            request.session["setup_wizard_step"] = next_step.value
+            request.session["flash"] = "Theme saved!"
+            return Redirect(path=f"/setup/{next_step.value}")
+
+        except Exception as e:
+            request.session["setup_error"] = str(e)
+            return Redirect(path="/setup/theme")
+
+    @get("/theme-screenshot/{name:str}")
+    async def theme_screenshot(self, request: Request, name: str) -> "File":
+        """Serve a theme's screenshot image."""
+        from litestar.response import File
+        from skrift.lib.theme import get_theme_info
+
+        info = get_theme_info(name)
+        if not info or not info.screenshot:
+            raise HTTPException(status_code=404, detail="Screenshot not found")
+
+        return File(path=info.screenshot, media_type="image/png")
+
     @get("/admin")
     async def admin_step(self, request: Request) -> TemplateResponse:
-        """Step 4: Create admin account."""
+        """Admin account creation step."""
         flash = request.session.pop("flash", None)
         error = request.session.pop("setup_error", None)
 
@@ -482,8 +570,8 @@ class SetupController(Controller):
             context={
                 "flash": flash,
                 "error": error,
-                "step": 4,
-                "total_steps": 4,
+                "step": _admin_step_number(),
+                "total_steps": _total_steps(),
                 "providers": provider_info,
                 "configured_providers": configured_providers,
             },
@@ -641,8 +729,8 @@ class SetupController(Controller):
         return TemplateResponse(
             "setup/complete.html",
             context={
-                "step": 4,
-                "total_steps": 4,
+                "step": _admin_step_number(),
+                "total_steps": _total_steps(),
             },
         )
 

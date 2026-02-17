@@ -125,6 +125,7 @@ class PageAdminController(Controller):
                 og_image=form.og_image,
                 meta_robots=form.meta_robots,
                 user_id=user_id,
+                page_type=form.page_type,
             )
             flash_success(request, f"Page '{form.title}' created successfully!")
             return Redirect(path="/admin/pages")
@@ -204,6 +205,7 @@ class PageAdminController(Controller):
                 og_description=form.og_description,
                 og_image=form.og_image,
                 meta_robots=form.meta_robots,
+                page_type=form.page_type,
             )
             flash_success(request, f"Page '{form.title}' updated successfully!")
             return Redirect(path="/admin/pages")

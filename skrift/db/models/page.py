@@ -24,6 +24,7 @@ class Page(Base):
     slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    type: Mapped[str] = mapped_column(String(50), nullable=False, default="page", server_default="page", index=True)
 
     # Publication fields
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

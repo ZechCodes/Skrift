@@ -26,6 +26,7 @@ class PageFormData:
     content: str
     is_published: bool
     order: int
+    page_type: str
     publish_at: datetime | None
     meta_description: str | None
     og_title: str | None
@@ -60,6 +61,7 @@ def extract_page_form_data(data: dict) -> PageFormData:
         content=content,
         is_published=is_published,
         order=order,
+        page_type=data.get("type", "page"),
         publish_at=publish_at,
         meta_description=data.get("meta_description", "").strip() or None,
         og_title=data.get("og_title", "").strip() or None,

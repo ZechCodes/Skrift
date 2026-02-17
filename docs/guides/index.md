@@ -22,6 +22,14 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Custom Templates](custom-templates.md)
 
+-   :material-theme-light-dark:{ .lg .middle } **Theming**
+
+    ---
+
+    Bundle template and static overrides into distributable themes with per-request switching.
+
+    [:octicons-arrow-right-24: Theming](theming.md)
+
 </div>
 
 ## SEO & Discovery
@@ -106,6 +114,7 @@ Step-by-step guides for building and customizing your Skrift site.
 |-------|-------|---------------|
 | [Creating Pages](creating-pages.md) | Content management | None |
 | [Custom Templates](custom-templates.md) | Appearance | HTML basics |
+| [Theming](theming.md) | Theme packages | HTML basics |
 | [SEO Metadata](seo-metadata.md) | Search & social | None |
 | [Hooks and Filters](hooks-and-filters.md) | Extensibility | Python basics |
 | [Custom Controllers](custom-controllers.md) | New routes | Python, async |

@@ -1,0 +1,8 @@
+name: Minimal
+description: Clean, whitespace-heavy design with system fonts
+version: "1.0"
+author: Skrift Demo
+colors:
+  - "#ffffff"
+  - "#1a1a1a"
+  - "#555555"
