@@ -38,6 +38,7 @@ from skrift.app_factory import (
     create_static_hasher,
     create_template_config,
     get_template_directories,
+    update_template_directories,
 )
 from skrift.config import get_config_path, get_settings, is_config_valid
 from skrift.middleware.rate_limit import RateLimitMiddleware
@@ -318,8 +319,6 @@ class AppDispatcher:
         """Get the main app, creating it lazily if needed."""
         if self._main_app is None and self._main_app_error is None:
             try:
-                if self._db_url:
-                    _preload_settings_cache_sync(self._db_url)
                 self._main_app = create_app()
                 # Run lifespan startup for the newly created app
                 await self._start_main_app_lifespan()
@@ -496,38 +495,6 @@ class AppDispatcher:
         await send({"type": "http.response.body", "body": body})
 
 
-def _preload_settings_cache_sync(db_url: str) -> None:
-    """Synchronously load settings cache before app creation."""
-    from sqlalchemy import create_engine, text
-
-    # Convert async URL to sync for a quick settings read
-    sync_url = db_url
-    for async_driver, sync_driver in [
-        ("+aiosqlite", ""),
-        ("+asyncpg", "+psycopg2"),
-    ]:
-        if async_driver in sync_url:
-            sync_url = sync_url.replace(async_driver, sync_driver)
-            break
-
-    engine = create_engine(sync_url)
-    try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text("SELECT key, value FROM settings")
-            ).fetchall()
-        from skrift.db.services.setting_service import SITE_DEFAULTS, _site_settings_cache
-        cache = SITE_DEFAULTS.copy()
-        for key, value in rows:
-            if key in cache:
-                cache[key] = value
-        # Populate the module-level cache directly
-        import skrift.db.services.setting_service as _ss
-        _ss._site_settings_cache = cache
-    finally:
-        engine.dispose()
-
-
 def create_app() -> Litestar:
     """Create and configure the main Litestar application.
 
@@ -668,6 +635,7 @@ def create_app() -> Litestar:
             async with db_config.get_session() as session:
                 await sync_roles_to_database(session)
                 await load_site_settings_cache(session)
+            update_template_directories()
         except Exception:
             logger.info("Startup cache init skipped (DB may not exist)", exc_info=True)
 
@@ -882,14 +850,6 @@ def create_dispatcher() -> ASGIApp:
 
     # Also check if config is valid
     config_valid, _ = is_config_valid()
-
-    # Pre-load settings cache so template/static directories include the
-    # active theme when the app is constructed
-    if db_url:
-        try:
-            _preload_settings_cache_sync(db_url)
-        except Exception:
-            logger.debug("Could not pre-load settings cache", exc_info=True)
 
     if initial_setup_complete and config_valid:
         # Setup already done - just return the main app directly
