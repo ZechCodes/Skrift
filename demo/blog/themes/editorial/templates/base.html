@@ -14,7 +14,7 @@
     {% endif %}
 
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ static_url('css/theme.css') }}">
+    <link rel="stylesheet" href="{{ theme_url('css/theme.css') }}">
     {% block head %}{% endblock %}
 </head>
 <body>
@@ -49,7 +49,7 @@
         </div>
     </footer>
 
-    <script src="{{ static_url('js/notifications.js') }}"></script>
-    <script src="{{ static_url('js/blog.js') }}"></script>
+    <script src="{{ static_url('skrift/js/notifications.js') }}"></script>
+    <script src="{{ static_url('site/js/blog.js') }}"></script>
 </body>
 </html>

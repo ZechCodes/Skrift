@@ -69,7 +69,7 @@ class SettingsAdminController(Controller):
         data: Annotated[dict, Body(media_type=RequestEncodingType.URL_ENCODED)],
     ) -> Redirect:
         """Save site settings."""
-        from skrift.app_factory import update_template_directories, update_static_directories
+        from skrift.app_factory import update_template_directories
         from skrift.lib.theme import themes_available
 
         site_name = data.get("site_name", "").strip()
@@ -99,9 +99,8 @@ class SettingsAdminController(Controller):
 
         await setting_service.load_site_settings_cache(db_session)
 
-        # Update template and static directories for instant theme switching
+        # Update template directories for instant theme switching
         update_template_directories()
-        update_static_directories()
 
         flash_success(request, "Site settings saved successfully")
         return Redirect(path="/admin/settings")

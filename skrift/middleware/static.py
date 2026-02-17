@@ -4,33 +4,100 @@ from pathlib import Path
 from litestar.types import ASGIApp, Receive, Scope, Send
 
 
+def resolve_static_file(
+    source: str,
+    filepath: str,
+    themes_dir: Path,
+    site_static_dir: Path,
+    package_static_dir: Path,
+) -> Path | None:
+    """Resolve a static file path from a source namespace and relative filepath.
+
+    Used by both StaticFilesMiddleware and StaticHasher to avoid duplication.
+
+    Returns the resolved Path if the file exists, or None if not found.
+    """
+    # Reject path traversal in source or filepath
+    if ".." in source.split("/") or ".." in filepath.split("/"):
+        return None
+    if "\x00" in source or "\x00" in filepath:
+        return None
+
+    if source == "skrift":
+        root = package_static_dir
+        candidate = root / filepath
+    elif source == "site":
+        root = site_static_dir
+        candidate = root / filepath
+    else:
+        root = themes_dir / source / "static"
+        candidate = root / filepath
+
+    try:
+        resolved = candidate.resolve()
+    except (OSError, ValueError):
+        return None
+
+    if not resolved.is_relative_to(root.resolve()):
+        return None
+
+    if resolved.is_file():
+        return resolved
+
+    return None
+
+
 class StaticFilesMiddleware:
     """ASGI middleware that serves static files before Litestar's router.
 
-    Intercepts ``/static/*`` requests and resolves files from a mutable list
-    of directories. This avoids route conflicts with catch-all page handlers
-    and ensures non-HTML 404s are returned as plain text (not JSON).
+    Intercepts ``/static/{source}/*`` requests and resolves files from a
+    fixed set of directories based on the source namespace:
+
+    - ``/static/skrift/...`` — package assets (skrift/static/)
+    - ``/static/site/...`` — site-level assets (./static/)
+    - ``/static/{theme}/...`` — theme assets (./themes/{theme}/static/)
+
+    This avoids route conflicts with catch-all page handlers and ensures
+    non-HTML 404s are returned as plain text (not JSON).
     """
 
-    def __init__(self, app: ASGIApp, directories: list[Path]) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        themes_dir: Path,
+        site_static_dir: Path,
+        package_static_dir: Path,
+    ) -> None:
         self.app = app
-        self.directories = directories  # mutable reference — theme switches take effect immediately
+        self.themes_dir = themes_dir
+        self.site_static_dir = site_static_dir
+        self.package_static_dir = package_static_dir
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not scope["path"].startswith("/static/"):
             await self.app(scope, receive, send)
             return
 
-        filepath = scope["path"][len("/static/"):]
-        resolved = self._find_file(filepath)
+        # Strip "/static/" prefix, split into source + filepath
+        rest = scope["path"][len("/static/"):]
+        slash_idx = rest.find("/")
+        if slash_idx == -1 or not rest[:slash_idx]:
+            await self._not_found(send)
+            return
+
+        source = rest[:slash_idx]
+        filepath = rest[slash_idx + 1:]
+
+        if not filepath:
+            await self._not_found(send)
+            return
+
+        resolved = resolve_static_file(
+            source, filepath, self.themes_dir, self.site_static_dir, self.package_static_dir
+        )
 
         if resolved is None:
-            await send({
-                "type": "http.response.start",
-                "status": 404,
-                "headers": [(b"content-type", b"text/plain")],
-            })
-            await send({"type": "http.response.body", "body": b"Not Found"})
+            await self._not_found(send)
             return
 
         media_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
@@ -45,9 +112,11 @@ class StaticFilesMiddleware:
         })
         await send({"type": "http.response.body", "body": content})
 
-    def _find_file(self, filepath: str) -> Path | None:
-        for directory in self.directories:
-            full = directory / filepath
-            if full.is_file():
-                return full
-        return None
+    @staticmethod
+    async def _not_found(send: Send) -> None:
+        await send({
+            "type": "http.response.start",
+            "status": 404,
+            "headers": [(b"content-type", b"text/plain")],
+        })
+        await send({"type": "http.response.body", "body": b"Not Found"})

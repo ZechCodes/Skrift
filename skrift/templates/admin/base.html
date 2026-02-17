@@ -7,8 +7,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Lora:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ static_url('css/skrift.css') }}">
-    <link rel="stylesheet" href="{{ static_url('css/admin.css') }}">
+    <link rel="stylesheet" href="{{ static_url('skrift/css/skrift.css') }}">
+    <link rel="stylesheet" href="{{ static_url('skrift/css/admin.css') }}">
     {% block head %}{% endblock %}
 </head>
 <body>
@@ -67,7 +67,7 @@
     </div>
 </div>
 
-<script src="{{ static_url('js/notifications.js') }}"></script>
+<script src="{{ static_url('skrift/js/notifications.js') }}"></script>
 <script nonce="{{ csp_nonce() }}">
 document.querySelectorAll('.sk-flash-dismiss').forEach(btn => {
     btn.addEventListener('click', () => {
