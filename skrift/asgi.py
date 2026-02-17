@@ -336,9 +336,17 @@ class AppDispatcher:
 
         path = scope.get("path", "")
 
-        # If setup is locked and we have main app, it handles EVERYTHING
-        if self.setup_locked and self._main_app:
-            await self._main_app(scope, receive, send)
+        # If setup is locked, main app handles EVERYTHING
+        if self.setup_locked:
+            main_app = self._main_app or await self._get_or_create_main_app()
+            if main_app:
+                await main_app(scope, receive, send)
+                return
+            # Can't create main app — show error page
+            await self._error_response(
+                send,
+                f"Setup complete but cannot start application: {self._main_app_error}",
+            )
             return
 
         # Setup not locked - /setup/* always goes to setup app
