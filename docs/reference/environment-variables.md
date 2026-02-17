@@ -70,6 +70,7 @@ These are commonly referenced from `app.yaml`:
 | `GOOGLE_CLIENT_SECRET` | `auth.providers.google.client_secret` | Google OAuth secret |
 | `GITHUB_CLIENT_ID` | `auth.providers.github.client_id` | GitHub OAuth client ID |
 | `GITHUB_CLIENT_SECRET` | `auth.providers.github.client_secret` | GitHub OAuth secret |
+| `LOGFIRE_TOKEN` | Logfire SDK | Pydantic Logfire API token (optional) |
 
 ## SKRIFT_ENV
 

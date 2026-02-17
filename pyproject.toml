@@ -1,6 +1,6 @@
 [project]
 name = "skrift"
-version = "0.1.0a28"
+version = "0.1.0a29"
 description = "A lightweight async Python CMS for crafting modern websites"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -61,6 +61,7 @@ exclude = [
 [project.optional-dependencies]
 docs = ["zensical>=0.0.19"]
 redis = ["redis>=5.0.0"]
+logfire = ["logfire[asgi,sqlalchemy,httpx]>=3.0.0"]
 
 [tool.ruff]
 line-length = 100

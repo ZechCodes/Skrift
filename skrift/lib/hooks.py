@@ -156,9 +156,12 @@ class HookRegistry:
             *args: Positional arguments to pass to callbacks
             **kwargs: Keyword arguments to pass to callbacks
         """
-        handlers = self._actions.get(hook_name, [])
-        for handler in handlers:
-            await handler.call(*args, **kwargs)
+        from skrift.lib.observability import span
+
+        with span(f"hook.action:{hook_name}", hook_name=hook_name):
+            handlers = self._actions.get(hook_name, [])
+            for handler in handlers:
+                await handler.call(*args, **kwargs)
 
     async def apply_filters(
         self,
@@ -178,10 +181,13 @@ class HookRegistry:
         Returns:
             The filtered value after all callbacks have been applied
         """
-        handlers = self._filters.get(hook_name, [])
-        for handler in handlers:
-            value = await handler.call(value, *args, **kwargs)
-        return value
+        from skrift.lib.observability import span
+
+        with span(f"hook.filter:{hook_name}", hook_name=hook_name):
+            handlers = self._filters.get(hook_name, [])
+            for handler in handlers:
+                value = await handler.call(value, *args, **kwargs)
+            return value
 
     def clear(self) -> None:
         """Clear all registered hooks. Useful for testing."""
@@ -293,6 +299,9 @@ SITEMAP_URLS = "sitemap_urls"
 SITEMAP_PAGE = "sitemap_page"
 ROBOTS_TXT = "robots_txt"
 TEMPLATE_CONTEXT = "template_context"
+
+# Observability hooks
+LOGFIRE_CONFIGURED = "logfire_configured"
 
 # Notification hooks
 NOTIFICATION_SENT = "notification_sent"

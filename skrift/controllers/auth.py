@@ -122,22 +122,25 @@ async def _exchange_and_fetch(
     if provider_key == "twitter":
         token_data.pop("client_secret", None)
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(token_url, data=token_data, headers=token_headers)
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to exchange code for tokens: {response.text}",
-            )
-        tokens = response.json()
+    from skrift.lib.observability import span
 
-    access_token = tokens.get("access_token")
-    if not access_token:
-        raise HTTPException(status_code=400, detail="No access token received")
+    with span("oauth.exchange:{provider_key}", provider_key=provider_key):
+        async with httpx.AsyncClient() as client:
+            response = await client.post(token_url, data=token_data, headers=token_headers)
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to exchange code for tokens: {response.text}",
+                )
+            tokens = response.json()
 
-    # Fetch and normalize user info
-    user_info = await provider.fetch_user_info(access_token)
-    user_data = provider.extract_user_data(user_info)
+        access_token = tokens.get("access_token")
+        if not access_token:
+            raise HTTPException(status_code=400, detail="No access token received")
+
+        # Fetch and normalize user info
+        user_info = await provider.fetch_user_info(access_token)
+        user_data = provider.extract_user_data(user_info)
 
     if not user_data.oauth_id:
         raise HTTPException(status_code=400, detail="Could not determine user ID")

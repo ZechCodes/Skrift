@@ -36,6 +36,7 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 - **Forms**: Pydantic-backed with CSRF (see `/skrift-forms`)
 - **Hooks**: WordPress-style extensibility (see `/skrift-hooks`)
 - **Notifications**: Real-time SSE with pluggable backends (see `/skrift-notifications`)
+- **Observability**: Optional Logfire tracing and structured logging (see `/skrift-observability`)
 
 ### AppDispatcher Pattern
 
@@ -74,6 +75,7 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 | `skrift/auth/` | Guards, roles, permissions |
 | `skrift/lib/notifications.py` | Real-time notification service (SSE) |
 | `skrift/lib/notification_backends.py` | Pluggable backends (InMemory, Redis, PgNotify) |
+| `skrift/lib/observability.py` | Logfire observability facade (tracing, logging) |
 | `skrift/db/models/notification.py` | StoredNotification model for DB-backed backends |
 
 ### Configuration System
@@ -111,6 +113,11 @@ redis:
 
 notifications:
   backend: ""  # empty = InMemoryBackend; or "module:ClassName"
+
+logfire:
+  enabled: true
+  service_name: my-site
+  console: true  # prints spans to console
 
 security_headers:
   content_security_policy: "default-src 'self'"
@@ -273,3 +280,4 @@ For deep-dive guidance on specific subsystems:
 - **`/skrift-forms`** — Form system, CSRF, field customization, template rendering
 - **`/skrift-auth`** — OAuth flow, guard system, roles, permissions
 - **`/skrift-notifications`** — SSE protocol, pluggable backends, group keys, dismiss patterns
+- **`/skrift-observability`** — Logfire integration, structured tracing, instrumentation
