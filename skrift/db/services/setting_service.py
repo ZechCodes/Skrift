@@ -174,8 +174,9 @@ async def load_site_settings_cache(db_session: AsyncSession) -> None:
     try:
         _site_settings_cache = await get_site_settings(db_session)
     except Exception:
-        # Table might not exist yet (before migration), use defaults
-        _site_settings_cache = SITE_DEFAULTS.copy()
+        # Table might not exist yet (before migration), leave cache empty so
+        # the next access retries instead of being stuck on cached defaults.
+        _site_settings_cache.clear()
 
 
 def invalidate_site_settings_cache() -> None:
@@ -185,6 +186,11 @@ def invalidate_site_settings_cache() -> None:
     """
     global _site_settings_cache
     _site_settings_cache.clear()
+
+
+def site_settings_cache_loaded() -> bool:
+    """Return True if the settings cache was successfully loaded from the DB."""
+    return bool(_site_settings_cache)
 
 
 def _get_cached_setting(key: str) -> str:
