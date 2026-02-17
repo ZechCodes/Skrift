@@ -46,6 +46,7 @@ from skrift.middleware.security import SecurityHeadersMiddleware
 from skrift.db.base import Base
 from skrift.db.services.setting_service import (
     load_site_settings_cache,
+    site_settings_cache_loaded,
     get_cached_site_name,
     get_cached_site_tagline,
     get_cached_site_copyright_holder,
@@ -635,7 +636,8 @@ def create_app() -> Litestar:
             async with db_config.get_session() as session:
                 await sync_roles_to_database(session)
                 await load_site_settings_cache(session)
-            update_template_directories()
+            if site_settings_cache_loaded():
+                update_template_directories()
         except Exception:
             logger.info("Startup cache init skipped (DB may not exist)", exc_info=True)
 
