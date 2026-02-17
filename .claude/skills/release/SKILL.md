@@ -1,7 +1,6 @@
 ---
 name: release
 description: "Bump version, commit, create PR, merge, and publish a GitHub release. Use when the user wants to cut a release."
-disable-model-invocation: true
 argument-hint: "[version-bump-type]"
 allowed-tools: Bash(git *), Bash(gh *)
 ---

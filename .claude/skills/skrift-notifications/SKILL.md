@@ -25,9 +25,9 @@ await notify_broadcast("new_tweet", tweet_id="...", content_html="...")
 
 | Function | Stored? | Target | Use case |
 |----------|---------|--------|----------|
-| `await notify_session(nid, type, *, group=None, **payload)` | Yes | Single session | Transient feedback (saves, errors) |
-| `await notify_user(user_id, type, *, group=None, **payload)` | Yes | All sessions of user | Cross-device (replies, likes) |
-| `await notify_broadcast(type, *, group=None, **payload)` | No | All connections | Feed updates (new posts) |
+| `await notify_session(nid, type, *, group=None, mode=QUEUED, **payload)` | Yes | Single session | Transient feedback (saves, errors) |
+| `await notify_user(user_id, type, *, group=None, mode=QUEUED, **payload)` | Yes | All sessions of user | Cross-device (replies, likes) |
+| `await notify_broadcast(type, *, group=None, **payload)` | No (always ephemeral) | All connections | Feed updates (new posts) |
 
 Stored notifications replay on reconnect. Broadcast notifications are ephemeral.
 
@@ -60,6 +60,63 @@ await dismiss_session_group(nid, "deploy")
 
 # Dismiss from a user's queue (pushes dismissed event to all their sessions)
 await dismiss_user_group(str(user.id), "upload-status")
+```
+
+## Notification Modes
+
+Every notification has a `mode` that controls storage, replay, and dismiss behavior:
+
+```python
+from skrift.lib.notifications import notify_session, NotificationMode, _ensure_nid
+
+nid = _ensure_nid(request)
+
+# Queued (default) — stored, replayed on reconnect, user dismisses manually
+await notify_session(nid, "generic", title="New comment", message="...")
+
+# Timeseries — stored, replayed via ?since=, auto-clears 8s, not dismissible
+await notify_session(nid, "generic", mode=NotificationMode.TIMESERIES, title="CPU: 82%", message="Spike")
+
+# Ephemeral — not stored, auto-clears 5s, not dismissible
+await notify_session(nid, "generic", mode=NotificationMode.EPHEMERAL, title="Ping", message="pong")
+```
+
+| Mode | Stored? | Replay | Auto-Clear | Dismissible |
+|------|---------|--------|------------|-------------|
+| `QUEUED` (default) | Yes | On reconnect | No | Yes |
+| `TIMESERIES` | Yes | Via `?since=` timestamp | 8s client-side | No |
+| `EPHEMERAL` | No | Never | 5s client-side | No |
+
+### `NotDismissibleError`
+
+Raised when attempting to dismiss a timeseries notification. The controller returns HTTP 409.
+
+### `get_since()` and `?since=` Query Param
+
+`NotificationService.get_since(nid, user_id, since)` returns timeseries notifications created after the given Unix timestamp. The SSE stream endpoint accepts `?since=<timestamp>` to trigger this replay on reconnect.
+
+### TTL (DB Backends)
+
+- Queued: 24 hours (`QUEUED_TTL_HOURS`)
+- Timeseries: 7 days (`TIMESERIES_TTL_DAYS`)
+- Cleanup runs every 10 minutes via `_DatabaseStorageMixin._cleanup_loop()`
+
+### Client-Side Mode Defaults
+
+```javascript
+const _modeDefaults = {
+    queued:     { dismiss: "server", autoClear: false },
+    timeseries: { dismiss: false,    autoClear: 8000 },
+    ephemeral:  { dismiss: false,    autoClear: 5000 },
+};
+```
+
+Override via `window.__skriftNotifications.configure({ timeseries: { autoClear: 12000 } })`.
+
+Set `persistConnection: true` to keep the SSE connection alive when the tab loses focus:
+
+```javascript
+window.__skriftNotifications.configure({ persistConnection: true });
 ```
 
 ## Notification Types
@@ -104,6 +161,8 @@ class NotificationBackend(Protocol):
     async def remove(self, notification_id: UUID) -> None: ...
     async def remove_by_group(self, scope: str, scope_id: str, group: str) -> UUID | None: ...
     async def get_queued(self, scope: str, scope_id: str) -> list[Notification]: ...
+    async def get_since(self, scope: str, scope_id: str, since: float) -> list[Notification]: ...
+    async def get_mode(self, notification_id: UUID) -> str | None: ...
     async def publish(self, message: dict) -> None: ...
     def on_remote_message(self, callback: Callable[[dict], Any]) -> None: ...
 ```
@@ -135,8 +194,8 @@ Database storage + PostgreSQL `LISTEN`/`NOTIFY` for cross-replica fanout.
 ### `_DatabaseStorageMixin`
 
 Shared by `RedisBackend` and `PgNotifyBackend`. Provides:
-- DB-backed `store()`, `remove()`, `remove_by_group()`, `get_queued()`
-- Background cleanup task: deletes notifications older than 24 hours (runs every 10 minutes)
+- DB-backed `store()`, `remove()`, `remove_by_group()`, `get_queued()`, `get_since()`, `get_mode()`
+- Background cleanup task: deletes queued notifications older than 24 hours and timeseries notifications older than 7 days (runs every 10 minutes)
 
 ## Backend Configuration
 
@@ -186,12 +245,13 @@ class StoredNotification(Base):
     type: Mapped[str]           # notification type
     payload_json: Mapped[str]   # JSON-encoded payload
     group_key: Mapped[str | None]
+    mode: Mapped[str]           # "queued", "timeseries", or "ephemeral"
     notified_at: Mapped[datetime]
 ```
 
-Indexes: `(scope, scope_id)`, `(scope, scope_id, group_key)`, `(notified_at)`.
+Indexes: `(scope, scope_id)`, `(scope, scope_id, group_key)`, `(notified_at)`, `(scope, scope_id, mode, notified_at)`.
 
-Cleanup: rows older than 24 hours are deleted automatically by the backend's cleanup loop.
+Cleanup: queued rows older than 24 hours and timeseries rows older than 7 days are deleted automatically by the backend's cleanup loop.
 
 ## SSE Protocol (Three-Phase)
 
@@ -203,7 +263,7 @@ During the Live phase, group-based replacement sends a `"dismissed"` event for t
 
 ## Client Behavior
 
-- Auto-connects on page load and `window.focus`, disconnects on `window.blur`
+- Auto-connects on page load and `window.focus`, disconnects on `window.blur` (opt out with `configure({ persistConnection: true })`)
 - Reconnects after 5s on error
 - Deduplicates via `_displayedIds` Set
 - Max visible toasts: 3 (desktop) / 2 (mobile); excess queued

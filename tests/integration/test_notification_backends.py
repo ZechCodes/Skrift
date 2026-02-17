@@ -10,10 +10,11 @@ Requires running PostgreSQL and Redis — see compose.yml.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
-from skrift.lib.notifications import Notification
+from skrift.lib.notifications import NotDismissibleError, Notification, NotificationMode
 
 
 # ---------------------------------------------------------------------------
@@ -166,3 +167,60 @@ class TestNotificationBackends:
         """_delete_old_notifications() is a no-op on fresh data but must not raise."""
         (_, backend_a), _ = backend_pair
         await backend_a._delete_old_notifications()
+
+    async def test_timeseries_db_storage_and_get_since(self, backend_pair):
+        """Timeseries notifications are stored and returned by get_since."""
+        (svc_a, _), (_, backend_b) = backend_pair
+
+        before = time.time() - 1
+        n = Notification(
+            type="generic", mode=NotificationMode.TIMESERIES,
+            payload={"msg": "activity"},
+        )
+        await svc_a.send_to_session("sess-1", n)
+
+        since = await backend_b.get_since("session", "sess-1", before)
+        assert len(since) == 1
+        assert since[0].id == n.id
+        assert since[0].mode == NotificationMode.TIMESERIES
+
+    async def test_get_queued_excludes_timeseries(self, backend_pair):
+        """get_queued should not return timeseries notifications."""
+        (svc_a, _), (_, backend_b) = backend_pair
+
+        n = Notification(
+            type="generic", mode=NotificationMode.TIMESERIES,
+            payload={"msg": "ts"},
+        )
+        await svc_a.send_to_session("sess-1", n)
+
+        queued = await backend_b.get_queued("session", "sess-1")
+        assert len(queued) == 0
+
+    async def test_ephemeral_not_stored_in_db(self, backend_pair):
+        """Ephemeral notifications should not appear in DB storage."""
+        (svc_a, _), (_, backend_b) = backend_pair
+
+        n = Notification(
+            type="generic", mode=NotificationMode.EPHEMERAL,
+            payload={"msg": "gone"},
+        )
+        await svc_a.send_to_session("sess-1", n)
+
+        queued = await backend_b.get_queued("session", "sess-1")
+        since = await backend_b.get_since("session", "sess-1", 0.0)
+        assert len(queued) == 0
+        assert len(since) == 0
+
+    async def test_timeseries_dismiss_raises_in_db(self, backend_pair):
+        """Dismissing a timeseries notification via DB backend raises NotDismissibleError."""
+        (svc_a, _), _ = backend_pair
+
+        n = Notification(
+            type="generic", mode=NotificationMode.TIMESERIES,
+            payload={"msg": "permanent"},
+        )
+        await svc_a.send_to_session("sess-1", n)
+
+        with pytest.raises(NotDismissibleError):
+            await svc_a.dismiss("sess-1", None, n.id)

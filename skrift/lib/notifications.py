@@ -18,11 +18,22 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 if TYPE_CHECKING:
     from skrift.lib.notification_backends import NotificationBackend
+
+
+class NotificationMode(str, Enum):
+    QUEUED = "queued"
+    TIMESERIES = "timeseries"
+    EPHEMERAL = "ephemeral"
+
+
+class NotDismissibleError(Exception):
+    """Raised when attempting to dismiss a non-queued notification."""
 
 
 @dataclass
@@ -32,9 +43,16 @@ class Notification:
     created_at: float = field(default_factory=time.time)
     payload: dict[str, Any] = field(default_factory=dict)
     group: str | None = None
+    mode: NotificationMode = NotificationMode.QUEUED
 
     def to_dict(self) -> dict[str, Any]:
-        d = {"type": self.type, "id": str(self.id), **self.payload}
+        d = {
+            "type": self.type,
+            "id": str(self.id),
+            "mode": self.mode.value,
+            "created_at": self.created_at,
+            **self.payload,
+        }
         if self.group is not None:
             d["group"] = self.group
         return d
@@ -68,21 +86,22 @@ class NotificationService:
         """Store a notification in the session queue and push to active connections."""
         backend = self._get_backend()
 
-        from skrift.lib.notification_backends import InMemoryBackend
-        if isinstance(backend, InMemoryBackend):
-            old = backend.store_sync("session", nid, notification)
-            if old is not None:
-                dismissed = Notification(type="dismissed", id=old.id, payload={})
-                for q in self._connections.get(nid, []):
-                    q.put_nowait(dismissed)
-        else:
-            if notification.group:
-                old_id = await backend.remove_by_group("session", nid, notification.group)
-                if old_id is not None:
-                    dismissed = Notification(type="dismissed", id=old_id, payload={})
+        if notification.mode != NotificationMode.EPHEMERAL:
+            from skrift.lib.notification_backends import InMemoryBackend
+            if isinstance(backend, InMemoryBackend):
+                old = backend.store_sync("session", nid, notification)
+                if old is not None:
+                    dismissed = Notification(type="dismissed", id=old.id, payload={})
                     for q in self._connections.get(nid, []):
                         q.put_nowait(dismissed)
-            await backend.store("session", nid, notification)
+            else:
+                if notification.group:
+                    old_id = await backend.remove_by_group("session", nid, notification.group)
+                    if old_id is not None:
+                        dismissed = Notification(type="dismissed", id=old_id, payload={})
+                        for q in self._connections.get(nid, []):
+                            q.put_nowait(dismissed)
+                await backend.store("session", nid, notification)
 
         for q in self._connections.get(nid, []):
             q.put_nowait(notification)
@@ -96,25 +115,26 @@ class NotificationService:
         """Store a notification in the user queue and push to all connections for this user."""
         backend = self._get_backend()
 
-        from skrift.lib.notification_backends import InMemoryBackend
-        if isinstance(backend, InMemoryBackend):
-            old = backend.store_sync("user", user_id, notification)
-            if old is not None:
-                dismissed = Notification(type="dismissed", id=old.id, payload={})
-                for sid, uid in self._connection_user_ids.items():
-                    if uid == user_id:
-                        for q in self._connections.get(sid, []):
-                            q.put_nowait(dismissed)
-        else:
-            if notification.group:
-                old_id = await backend.remove_by_group("user", user_id, notification.group)
-                if old_id is not None:
-                    dismissed = Notification(type="dismissed", id=old_id, payload={})
+        if notification.mode != NotificationMode.EPHEMERAL:
+            from skrift.lib.notification_backends import InMemoryBackend
+            if isinstance(backend, InMemoryBackend):
+                old = backend.store_sync("user", user_id, notification)
+                if old is not None:
+                    dismissed = Notification(type="dismissed", id=old.id, payload={})
                     for sid, uid in self._connection_user_ids.items():
                         if uid == user_id:
                             for q in self._connections.get(sid, []):
                                 q.put_nowait(dismissed)
-            await backend.store("user", user_id, notification)
+            else:
+                if notification.group:
+                    old_id = await backend.remove_by_group("user", user_id, notification.group)
+                    if old_id is not None:
+                        dismissed = Notification(type="dismissed", id=old_id, payload={})
+                        for sid, uid in self._connection_user_ids.items():
+                            if uid == user_id:
+                                for q in self._connections.get(sid, []):
+                                    q.put_nowait(dismissed)
+                await backend.store("user", user_id, notification)
 
         for sid, uid in self._connection_user_ids.items():
             if uid == user_id:
@@ -149,12 +169,21 @@ class NotificationService:
 
         Lookup by *notification_id* (UUID) or *group* key — supply one.
         Returns True if a notification was found and removed.
+        Raises NotDismissibleError if the notification is timeseries mode.
         """
         backend = self._get_backend()
         dismissed_id: UUID | None = None
 
         from skrift.lib.notification_backends import InMemoryBackend
         if isinstance(backend, InMemoryBackend):
+            # Check mode before dismissing (InMemory path)
+            if notification_id is not None:
+                notif = backend.find_by_id(notification_id)
+                if notif is not None and notif.mode == NotificationMode.TIMESERIES:
+                    raise NotDismissibleError(
+                        f"Cannot dismiss timeseries notification {notification_id}"
+                    )
+
             # Session queue
             if notification_id is not None:
                 if backend.remove_sync("session", nid, notification_id):
@@ -174,7 +203,13 @@ class NotificationService:
                     if old is not None:
                         dismissed_id = old.id
         else:
+            # DB path — check mode before deleting
             if notification_id is not None:
+                mode = await backend.get_mode(notification_id)
+                if mode == NotificationMode.TIMESERIES.value:
+                    raise NotDismissibleError(
+                        f"Cannot dismiss timeseries notification {notification_id}"
+                    )
                 await backend.remove(notification_id)
                 dismissed_id = notification_id
             elif group is not None:
@@ -223,6 +258,23 @@ class NotificationService:
             merged[n.id] = n
         return sorted(merged.values(), key=lambda n: n.created_at)
 
+    async def get_since(
+        self, nid: str, user_id: str | None, since: float
+    ) -> list[Notification]:
+        """Return timeseries notifications created after *since* timestamp."""
+        backend = self._get_backend()
+
+        from skrift.lib.notification_backends import InMemoryBackend
+        if isinstance(backend, InMemoryBackend):
+            return backend.get_all_since(nid, user_id, since)
+
+        session_notifs = await backend.get_since("session", nid, since)
+        user_notifs = await backend.get_since("user", user_id, since) if user_id else []
+        merged: dict[UUID, Notification] = {}
+        for n in session_notifs + user_notifs:
+            merged[n.id] = n
+        return sorted(merged.values(), key=lambda n: n.created_at)
+
     def register_connection(
         self, nid: str, user_id: str | None
     ) -> asyncio.Queue:
@@ -252,12 +304,19 @@ class NotificationService:
             scope = message.get("sc")
             scope_id = message.get("sid")
             n_data = message.get("n", {})
+            mode_val = n_data.get("mode", NotificationMode.QUEUED.value)
             notification = Notification(
                 type=n_data.get("type", ""),
                 id=UUID(n_data["id"]),
-                payload={k: v for k, v in n_data.items() if k not in ("type", "id", "group")},
+                payload={
+                    k: v for k, v in n_data.items()
+                    if k not in ("type", "id", "group", "mode", "created_at")
+                },
                 group=n_data.get("group"),
+                mode=NotificationMode(mode_val),
             )
+            if "created_at" in n_data:
+                notification.created_at = n_data["created_at"]
 
             if scope == "session":
                 for q in self._connections.get(scope_id, []):
@@ -286,12 +345,19 @@ class NotificationService:
         elif action == "b":
             # Broadcast to all local connections
             n_data = message.get("n", {})
+            mode_val = n_data.get("mode", NotificationMode.EPHEMERAL.value)
             notification = Notification(
                 type=n_data.get("type", ""),
                 id=UUID(n_data["id"]),
-                payload={k: v for k, v in n_data.items() if k not in ("type", "id", "group")},
+                payload={
+                    k: v for k, v in n_data.items()
+                    if k not in ("type", "id", "group", "mode", "created_at")
+                },
                 group=n_data.get("group"),
+                mode=NotificationMode(mode_val),
             )
+            if "created_at" in n_data:
+                notification.created_at = n_data["created_at"]
             for queues in self._connections.values():
                 for q in queues:
                     q.put_nowait(notification)
@@ -301,23 +367,37 @@ class NotificationService:
 notifications = NotificationService()
 
 
-async def notify_session(nid: str, type: str, *, group: str | None = None, **payload) -> Notification:
+async def notify_session(
+    nid: str,
+    type: str,
+    *,
+    group: str | None = None,
+    mode: NotificationMode = NotificationMode.QUEUED,
+    **payload,
+) -> Notification:
     """Convenience: send a notification to a session."""
-    n = Notification(type=type, payload=payload, group=group)
+    n = Notification(type=type, payload=payload, group=group, mode=mode)
     await notifications.send_to_session(nid, n)
     return n
 
 
-async def notify_user(user_id: str, type: str, *, group: str | None = None, **payload) -> Notification:
+async def notify_user(
+    user_id: str,
+    type: str,
+    *,
+    group: str | None = None,
+    mode: NotificationMode = NotificationMode.QUEUED,
+    **payload,
+) -> Notification:
     """Convenience: send a notification to a user (all their sessions)."""
-    n = Notification(type=type, payload=payload, group=group)
+    n = Notification(type=type, payload=payload, group=group, mode=mode)
     await notifications.send_to_user(user_id, n)
     return n
 
 
 async def notify_broadcast(type: str, *, group: str | None = None, **payload) -> Notification:
     """Convenience: broadcast an ephemeral notification to all active connections."""
-    n = Notification(type=type, payload=payload, group=group)
+    n = Notification(type=type, payload=payload, group=group, mode=NotificationMode.EPHEMERAL)
     await notifications.broadcast(n)
     return n
 

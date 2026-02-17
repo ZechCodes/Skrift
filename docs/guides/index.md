@@ -90,6 +90,14 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Observability](observability.md)
 
+-   :material-bell-ring:{ .lg .middle } **Notifications**
+
+    ---
+
+    Send real-time browser notifications via SSE with pluggable backends and notification modes.
+
+    [:octicons-arrow-right-24: Notifications](notifications.md)
+
 </div>
 
 ## Guide Overview
@@ -105,6 +113,7 @@ Step-by-step guides for building and customizing your Skrift site.
 | [Custom Middleware](custom-middleware.md) | Request processing | Python, ASGI |
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |
 | [Observability](observability.md) | Tracing & logging | None |
+| [Notifications](notifications.md) | Real-time notifications | Python basics |
 
 ## What You Can Build
 

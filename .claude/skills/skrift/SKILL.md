@@ -156,12 +156,12 @@ class MyModel(Base):
 | Model | Table | Purpose |
 |-------|-------|---------|
 | `User` | `users` | User accounts |
-| `OAuthAccount` | `oauth_accounts` | Linked OAuth providers |
+| `OAuthAccount` | `oauth_accounts` | Linked OAuth providers (`access_token`, `refresh_token`) |
 | `Role` | `roles` | Permission roles |
 | `Page` | `pages` | Content pages |
 | `PageRevision` | `page_revisions` | Content history |
 | `Setting` | `settings` | Key-value site settings |
-| `StoredNotification` | `stored_notifications` | Persistent notifications (Redis/PgNotify backends) |
+| `StoredNotification` | `stored_notifications` | Persistent notifications with `mode` column (Redis/PgNotify backends) |
 
 Sessions injected via `db_session: AsyncSession` parameter in handlers.
 

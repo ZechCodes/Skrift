@@ -17,12 +17,15 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
-from skrift.lib.notifications import Notification
+from skrift.lib.notifications import Notification, NotificationMode
 
 if TYPE_CHECKING:
     from skrift.config import Settings
 
 logger = logging.getLogger(__name__)
+
+QUEUED_TTL_HOURS = 24
+TIMESERIES_TTL_DAYS = 7
 
 
 def load_backend(spec: str) -> type:
@@ -51,6 +54,8 @@ class NotificationBackend(Protocol):
     async def remove(self, notification_id: UUID) -> None: ...
     async def remove_by_group(self, scope: str, scope_id: str, group: str) -> UUID | None: ...
     async def get_queued(self, scope: str, scope_id: str) -> list[Notification]: ...
+    async def get_since(self, scope: str, scope_id: str, since: float) -> list[Notification]: ...
+    async def get_mode(self, notification_id: UUID) -> str | None: ...
     async def publish(self, message: dict) -> None: ...
     def on_remote_message(self, callback: Callable[[dict], Any]) -> None: ...
 
@@ -94,7 +99,22 @@ class InMemoryBackend:
     async def get_queued(self, scope: str, scope_id: str) -> list[Notification]:
         queues = self._session_queues if scope == "session" else self._user_queues
         q = queues.get(scope_id, {})
-        return sorted(q.values(), key=lambda n: n.created_at)
+        return sorted(
+            (n for n in q.values() if n.mode == NotificationMode.QUEUED),
+            key=lambda n: n.created_at,
+        )
+
+    async def get_since(self, scope: str, scope_id: str, since: float) -> list[Notification]:
+        queues = self._session_queues if scope == "session" else self._user_queues
+        q = queues.get(scope_id, {})
+        return sorted(
+            (n for n in q.values() if n.mode == NotificationMode.TIMESERIES and n.created_at > since),
+            key=lambda n: n.created_at,
+        )
+
+    async def get_mode(self, notification_id: UUID) -> str | None:
+        notif = self.find_by_id(notification_id)
+        return notif.mode.value if notif else None
 
     async def publish(self, message: dict) -> None:
         pass  # No cross-replica fanout in single-process mode
@@ -103,6 +123,13 @@ class InMemoryBackend:
         self._callback = callback
 
     # -- InMemory-specific helpers used by NotificationService --
+
+    def find_by_id(self, notification_id: UUID) -> Notification | None:
+        for queues in (self._session_queues, self._user_queues):
+            for q in queues.values():
+                if notification_id in q:
+                    return q[notification_id]
+        return None
 
     def get_session_queue(self, nid: str) -> dict[UUID, Notification]:
         return self._session_queues.get(nid, {})
@@ -135,9 +162,24 @@ class InMemoryBackend:
 
     def get_all_queued(self, nid: str, user_id: str | None) -> list[Notification]:
         merged: dict[UUID, Notification] = {}
-        merged.update(self._session_queues.get(nid, {}))
+        for uid, n in self._session_queues.get(nid, {}).items():
+            if n.mode == NotificationMode.QUEUED:
+                merged[uid] = n
         if user_id:
-            merged.update(self._user_queues.get(user_id, {}))
+            for uid, n in self._user_queues.get(user_id, {}).items():
+                if n.mode == NotificationMode.QUEUED:
+                    merged[uid] = n
+        return sorted(merged.values(), key=lambda n: n.created_at)
+
+    def get_all_since(self, nid: str, user_id: str | None, since: float) -> list[Notification]:
+        merged: dict[UUID, Notification] = {}
+        for uid, n in self._session_queues.get(nid, {}).items():
+            if n.mode == NotificationMode.TIMESERIES and n.created_at > since:
+                merged[uid] = n
+        if user_id:
+            for uid, n in self._user_queues.get(user_id, {}).items():
+                if n.mode == NotificationMode.TIMESERIES and n.created_at > since:
+                    merged[uid] = n
         return sorted(merged.values(), key=lambda n: n.created_at)
 
     @staticmethod
@@ -182,13 +224,23 @@ class _DatabaseStorageMixin:
 
     async def _delete_old_notifications(self) -> None:
         from skrift.db.models.notification import StoredNotification
-        from sqlalchemy import delete
+        from sqlalchemy import delete, or_, and_
 
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        queued_cutoff = datetime.now(timezone.utc) - timedelta(hours=QUEUED_TTL_HOURS)
+        timeseries_cutoff = datetime.now(timezone.utc) - timedelta(days=TIMESERIES_TTL_DAYS)
         async with self._session_maker() as session:
             await session.execute(
                 delete(StoredNotification).where(
-                    StoredNotification.notified_at < cutoff
+                    or_(
+                        and_(
+                            StoredNotification.mode == NotificationMode.QUEUED.value,
+                            StoredNotification.notified_at < queued_cutoff,
+                        ),
+                        and_(
+                            StoredNotification.mode == NotificationMode.TIMESERIES.value,
+                            StoredNotification.notified_at < timeseries_cutoff,
+                        ),
+                    )
                 )
             )
             await session.commit()
@@ -206,6 +258,7 @@ class _DatabaseStorageMixin:
             type=notification.type,
             payload_json=json.dumps(notification.payload),
             group_key=notification.group,
+            mode=notification.mode.value,
             notified_at=datetime.fromtimestamp(notification.created_at, tz=timezone.utc),
         )
         async with self._session_maker() as session:
@@ -252,6 +305,7 @@ class _DatabaseStorageMixin:
                 .where(
                     StoredNotification.scope == scope,
                     StoredNotification.scope_id == scope_id,
+                    StoredNotification.mode == NotificationMode.QUEUED.value,
                 )
                 .order_by(StoredNotification.notified_at)
             )
@@ -263,9 +317,51 @@ class _DatabaseStorageMixin:
                     created_at=row.notified_at.timestamp(),
                     payload=json.loads(row.payload_json),
                     group=row.group_key,
+                    mode=NotificationMode(row.mode),
                 )
                 for row in rows
             ]
+
+    async def get_since(self, scope: str, scope_id: str, since: float) -> list[Notification]:
+        from skrift.db.models.notification import StoredNotification
+        from sqlalchemy import select
+
+        since_dt = datetime.fromtimestamp(since, tz=timezone.utc)
+        async with self._session_maker() as session:
+            result = await session.execute(
+                select(StoredNotification)
+                .where(
+                    StoredNotification.scope == scope,
+                    StoredNotification.scope_id == scope_id,
+                    StoredNotification.mode == NotificationMode.TIMESERIES.value,
+                    StoredNotification.notified_at > since_dt,
+                )
+                .order_by(StoredNotification.notified_at)
+            )
+            rows = result.scalars().all()
+            return [
+                Notification(
+                    type=row.type,
+                    id=row.id,
+                    created_at=row.notified_at.timestamp(),
+                    payload=json.loads(row.payload_json),
+                    group=row.group_key,
+                    mode=NotificationMode(row.mode),
+                )
+                for row in rows
+            ]
+
+    async def get_mode(self, notification_id: UUID) -> str | None:
+        from skrift.db.models.notification import StoredNotification
+        from sqlalchemy import select
+
+        async with self._session_maker() as session:
+            result = await session.execute(
+                select(StoredNotification.mode).where(
+                    StoredNotification.id == notification_id
+                )
+            )
+            return result.scalar_one_or_none()
 
 
 class RedisBackend(_DatabaseStorageMixin):
