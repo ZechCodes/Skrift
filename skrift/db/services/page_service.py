@@ -22,6 +22,7 @@ async def list_pages(
     limit: int | None = None,
     offset: int = 0,
     order_by: OrderBy = "order",
+    page_type: str | None = None,
 ) -> list[Page]:
     """List pages with optional filtering.
 
@@ -47,6 +48,8 @@ async def list_pages(
         filters.append(or_(Page.publish_at.is_(None), Page.publish_at <= now))
     if user_id:
         filters.append(Page.user_id == user_id)
+    if page_type is not None:
+        filters.append(Page.type == page_type)
 
     if filters:
         query = query.where(and_(*filters))
@@ -75,6 +78,7 @@ async def get_page_by_slug(
     db_session: AsyncSession,
     slug: str,
     published_only: bool = False,
+    page_type: str | None = None,
 ) -> Page | None:
     """Get a single page by slug.
 
@@ -87,6 +91,9 @@ async def get_page_by_slug(
         Page object or None if not found
     """
     query = select(Page).where(Page.slug == slug)
+
+    if page_type is not None:
+        query = query.where(Page.type == page_type)
 
     if published_only:
         now = datetime.now(UTC)
@@ -130,6 +137,7 @@ async def create_page(
     og_description: str | None = None,
     og_image: str | None = None,
     meta_robots: str | None = None,
+    page_type: str = "page",
 ) -> Page:
     """Create a new page.
 
@@ -156,6 +164,7 @@ async def create_page(
         slug=slug,
         title=title,
         content=content,
+        type=page_type,
         is_published=is_published,
         published_at=published_at,
         user_id=user_id,
@@ -201,6 +210,7 @@ async def update_page(
     meta_robots: str | None | object = _UNSET,
     create_revision: bool = True,
     user_id: UUID | None = None,
+    page_type: str | None = None,
 ) -> Page | None:
     """Update an existing page.
 
@@ -264,6 +274,8 @@ async def update_page(
         page.og_image = og_image
     if meta_robots is not _UNSET:
         page.meta_robots = meta_robots
+    if page_type is not None:
+        page.type = page_type
 
     await db_session.commit()
     await db_session.refresh(page)

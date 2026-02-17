@@ -150,7 +150,7 @@ class SecurityHeadersConfig(BaseModel):
     """
 
     enabled: bool = True
-    content_security_policy: str | None = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'; form-action 'self'; base-uri 'self'"
+    content_security_policy: str | None = "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'; form-action 'self'; base-uri 'self'"
     csp_nonce: bool = True
     strict_transport_security: str | None = "max-age=63072000; includeSubDomains"
     x_content_type_options: str | None = "nosniff"

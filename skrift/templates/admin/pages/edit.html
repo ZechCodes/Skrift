@@ -9,6 +9,12 @@
 </hgroup>
 
 <form method="post" action="{{ '/admin/pages/' ~ page.id ~ '/edit' if page else '/admin/pages/new' }}">
+    <label for="type">Type</label>
+    <select id="type" name="type">
+        <option value="page" {{ 'selected' if not page or page.type == 'page' }}>Page</option>
+        <option value="post" {{ 'selected' if page and page.type == 'post' }}>Post</option>
+    </select>
+
     <label for="title">Title</label>
     <input type="text" id="title" name="title" value="{{ page.title if page else '' }}" required>
 

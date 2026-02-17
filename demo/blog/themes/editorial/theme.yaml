@@ -1,0 +1,8 @@
+name: Editorial
+description: Magazine-style layout with strong typographic hierarchy
+version: "1.0"
+author: Skrift Demo
+colors:
+  - "#fefdfb"
+  - "#1a1a1a"
+  - "#9f1239"

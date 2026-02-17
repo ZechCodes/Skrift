@@ -1,0 +1,8 @@
+name: Retro
+description: Typewriter aesthetic with aged paper tones
+version: "1.0"
+author: Skrift Demo
+colors:
+  - "#f4ecd8"
+  - "#3c2f2f"
+  - "#8b4513"

@@ -1,0 +1,8 @@
+name: Vivid
+description: Bold modern design with gradient accents
+version: "1.0"
+author: Skrift Demo
+colors:
+  - "#ffffff"
+  - "#2d1b69"
+  - "#f97316"

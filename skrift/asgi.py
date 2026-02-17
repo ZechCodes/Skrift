@@ -34,8 +34,10 @@ from skrift.app_factory import (
     EXCEPTION_HANDLERS,
     build_template_engine_callback,
     create_session_config,
-    create_static_router_and_hasher,
+    create_static_hasher,
     create_template_config,
+    get_template_directories,
+    get_static_directories,
 )
 from skrift.config import get_config_path, get_settings, is_config_valid
 from skrift.middleware.rate_limit import RateLimitMiddleware
@@ -47,6 +49,7 @@ from skrift.db.services.setting_service import (
     get_cached_site_tagline,
     get_cached_site_copyright_holder,
     get_cached_site_copyright_start_year,
+    get_cached_site_theme,
     get_setting,
     SETUP_COMPLETED_AT_KEY,
 )
@@ -268,6 +271,8 @@ class AppDispatcher:
         """Get the main app, creating it lazily if needed."""
         if self._main_app is None and self._main_app_error is None:
             try:
+                if self._db_url:
+                    _preload_settings_cache_sync(self._db_url)
                 self._main_app = create_app()
                 # Run lifespan startup for the newly created app
                 await self._start_main_app_lifespan()
@@ -436,6 +441,38 @@ class AppDispatcher:
         await send({"type": "http.response.body", "body": body})
 
 
+def _preload_settings_cache_sync(db_url: str) -> None:
+    """Synchronously load settings cache before app creation."""
+    from sqlalchemy import create_engine, text
+
+    # Convert async URL to sync for a quick settings read
+    sync_url = db_url
+    for async_driver, sync_driver in [
+        ("+aiosqlite", ""),
+        ("+asyncpg", "+psycopg2"),
+    ]:
+        if async_driver in sync_url:
+            sync_url = sync_url.replace(async_driver, sync_driver)
+            break
+
+    engine = create_engine(sync_url)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT key, value FROM settings")
+            ).fetchall()
+        from skrift.db.services.setting_service import SITE_DEFAULTS, _site_settings_cache
+        cache = SITE_DEFAULTS.copy()
+        for key, value in rows:
+            if key in cache:
+                cache[key] = value
+        # Populate the module-level cache directly
+        import skrift.db.services.setting_service as _ss
+        _ss._site_settings_cache = cache
+    finally:
+        engine.dispose()
+
+
 def create_app() -> Litestar:
     """Create and configure the main Litestar application.
 
@@ -527,23 +564,28 @@ def create_app() -> Litestar:
         )
 
     # Static files
-    static_files_router, static_url = create_static_router_and_hasher()
+    static_dirs = get_static_directories()
+    static_files_middleware, static_url = create_static_hasher(static_dirs)
 
     # Template configuration
     from skrift.forms import Form, csrf_field as _csrf_field
+    from skrift.lib.theme import themes_available
 
+    template_dirs = get_template_directories()
     engine_callback = build_template_engine_callback(
         extra_globals={
             "site_name": get_cached_site_name,
             "site_tagline": get_cached_site_tagline,
             "site_copyright_holder": get_cached_site_copyright_holder,
             "site_copyright_start_year": get_cached_site_copyright_start_year,
+            "active_theme": get_cached_site_theme,
+            "themes_available": themes_available,
             "Form": Form,
             "csrf_field": _csrf_field,
             "static_url": static_url,
         },
     )
-    template_config = create_template_config(engine_callback)
+    template_config = create_template_config(template_dirs, engine_callback)
 
     from skrift.controllers.notifications import NotificationsController
     from skrift.auth import sync_roles_to_database
@@ -581,9 +623,9 @@ def create_app() -> Litestar:
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
-        route_handlers=[NotificationsController, *controllers, static_files_router],
+        route_handlers=[NotificationsController, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
+        middleware=[static_files_middleware, DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream"),
         csrf_config=csrf_config,
@@ -611,10 +653,13 @@ def create_setup_app() -> Litestar:
     # Session configuration
     session_config = create_session_config(settings.secret_key)
 
-    # Static files
-    static_files_router, static_url = create_static_router_and_hasher()
+    # Static files (setup app never uses themes)
+    from skrift.app_factory import get_template_directories_for_theme, get_static_directories_for_theme
+    setup_static_dirs = get_static_directories_for_theme("")
+    static_files_middleware, static_url = create_static_hasher(setup_static_dirs)
 
-    # Template configuration
+    # Template configuration (setup app never uses themes)
+    setup_template_dirs = get_template_directories_for_theme("")
     engine_callback = build_template_engine_callback(
         extra_globals={
             "site_name": lambda: "Skrift",
@@ -624,7 +669,7 @@ def create_setup_app() -> Litestar:
             "static_url": static_url,
         },
     )
-    template_config = create_template_config(engine_callback)
+    template_config = create_template_config(setup_template_dirs, engine_callback)
 
     # Import controllers
     from skrift.setup.controller import SetupController, SetupAuthController
@@ -651,7 +696,7 @@ def create_setup_app() -> Litestar:
                 logger.debug("Could not resolve raw DB URL", exc_info=True)
 
     plugins = []
-    route_handlers = [SetupController, SetupAuthController, static_files_router]
+    route_handlers = [SetupController, SetupAuthController]
     db_config: SQLAlchemyAsyncConfig | None = None
 
     if db_url:
@@ -690,7 +735,7 @@ def create_setup_app() -> Litestar:
         on_startup=[on_startup],
         route_handlers=route_handlers,
         plugins=plugins,
-        middleware=[DefineMiddleware(SessionCleanupMiddleware), session_config.middleware],
+        middleware=[static_files_middleware, DefineMiddleware(SessionCleanupMiddleware), session_config.middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip"),
         exception_handlers=EXCEPTION_HANDLERS,
@@ -755,9 +800,22 @@ def create_dispatcher() -> ASGIApp:
     # Also check if config is valid
     config_valid, _ = is_config_valid()
 
+    # Pre-load settings cache so template/static directories include the
+    # active theme when the app is constructed
+    if db_url:
+        try:
+            _preload_settings_cache_sync(db_url)
+        except Exception:
+            logger.debug("Could not pre-load settings cache", exc_info=True)
+
     if initial_setup_complete and config_valid:
         # Setup already done - just return the main app directly
         return create_app()
+
+    # Create setup app first so that create_app() (if called) overwrites
+    # the module-level _static_dirs with the theme-aware list.  This
+    # ensures update_static_directories() mutates the main app's list.
+    setup_app = create_setup_app()
 
     # Try to create main app if config is valid
     main_app: Litestar | None = None
@@ -766,9 +824,6 @@ def create_dispatcher() -> ASGIApp:
             main_app = create_app()
         except Exception:
             logger.debug("Could not pre-create main app", exc_info=True)
-
-    # Always use dispatcher - it handles lazy main app creation
-    setup_app = create_setup_app()
     dispatcher = AppDispatcher(setup_app=setup_app, db_url=db_url, main_app=main_app)
     dispatcher.setup_locked = initial_setup_complete
     _dispatcher = dispatcher  # Store reference for later updates

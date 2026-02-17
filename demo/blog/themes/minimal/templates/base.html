@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ site_name() }}{% endblock %}</title>
+
+    {% if seo_meta %}
+    {{ seo_meta }}
+    {% endif %}
+
+    {% if og_meta %}
+    {{ og_meta }}
+    {% endif %}
+
+    <link rel="stylesheet" href="{{ static_url('css/theme.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <header class="site-header">
+        <div class="site-branding">
+            <h1 class="site-title"><a href="/">{{ site_name() }}</a></h1>
+            <p class="site-tagline">{{ site_tagline() }}</p>
+        </div>
+        <nav class="site-nav">
+            <a href="/">Blog</a>
+            {% for pg in nav_pages %}
+            <a href="/{{ pg.slug }}">{{ pg.title }}</a>
+            {% endfor %}
+            {% if user %}
+            <a href="/admin">Dashboard</a>
+            <a href="/auth/logout">Logout</a>
+            {% else %}
+            <a href="/auth/login">Login</a>
+            {% endif %}
+        </nav>
+    </header>
+
+    <main class="site-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <p>&copy; {{ site_copyright_start_year() }}&ndash;{{ now().year }} {{ site_copyright_holder() }}. {{ site_name() }}.</p>
+    </footer>
+
+    <script src="{{ static_url('js/notifications.js') }}"></script>
+    <script src="{{ static_url('js/blog.js') }}"></script>
+</body>
+</html>

@@ -127,6 +127,7 @@ SITE_TAGLINE_KEY = "site_tagline"
 SITE_COPYRIGHT_HOLDER_KEY = "site_copyright_holder"
 SITE_COPYRIGHT_START_YEAR_KEY = "site_copyright_start_year"
 SITE_BASE_URL_KEY = "site_base_url"
+SITE_THEME_KEY = "site_theme"
 
 # Setup wizard key
 SETUP_COMPLETED_AT_KEY = "setup_completed_at"
@@ -138,6 +139,7 @@ SITE_DEFAULTS = {
     SITE_COPYRIGHT_HOLDER_KEY: "",
     SITE_COPYRIGHT_START_YEAR_KEY: "",
     SITE_BASE_URL_KEY: "",
+    SITE_THEME_KEY: "",
 }
 
 
@@ -216,3 +218,8 @@ def get_cached_site_copyright_start_year() -> str | int | None:
 def get_cached_site_base_url() -> str:
     """Get the cached site base URL for use in SEO/sitemap."""
     return _get_cached_setting(SITE_BASE_URL_KEY)
+
+
+def get_cached_site_theme() -> str:
+    """Get the cached site theme name for use in template resolution."""
+    return _get_cached_setting(SITE_THEME_KEY)

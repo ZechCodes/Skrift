@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +16,9 @@ class Template:
 
     Template Directory Hierarchy:
     Templates are searched in the following order:
-    1. ./templates/ (working directory) - User overrides
-    2. skrift/templates/ (package directory) - Default templates
+    1. themes/<active>/templates/ (active theme) - Theme overrides
+    2. ./templates/ (working directory) - User overrides
+    3. skrift/templates/ (package directory) - Default templates
 
     Available Templates for Override:
     - base.html - Base layout template
@@ -30,7 +30,7 @@ class Template:
     - error-500.html - Server error page
 
     Users can override any template by creating a file with the same name
-    in their project's ./templates/ directory.
+    in their project's ./templates/ directory, or by using a theme.
     """
 
     def __init__(self, template_type: str, *slugs: str, context: dict[str, Any] | None = None):
@@ -49,21 +49,22 @@ class Template:
         candidates.append(f"{self.template_type}.html")
         return candidates
 
-    def resolve(self, template_dir: Path) -> str:
+    def resolve(self, template_dir: Path, theme_name: str = "") -> str:
         """Resolve the most specific template that exists.
 
         Searches for templates in order:
-        1. Working directory's ./templates/
-        2. Package's templates directory
+        1. themes/<theme_name>/templates/ (if theme_name is set)
+        2. Working directory's ./templates/
+        3. Package's templates directory
 
         Within each directory, searches from most to least specific template name.
         """
         if self._resolved_template:
             return self._resolved_template
 
-        # Define search paths: working directory first, then package directory
-        working_dir_templates = Path(os.getcwd()) / "templates"
-        search_dirs = [working_dir_templates, template_dir]
+        from skrift.app_factory import get_template_directories_for_theme
+
+        search_dirs = get_template_directories_for_theme(theme_name)
 
         # Search for templates in each directory
         for template_name in self._candidates():
@@ -92,13 +93,18 @@ class Template:
                 continue
         return None
 
-    def render(self, template_dir: Path, **extra_context: Any) -> TemplateResponse:
+    def render(self, template_dir: Path, theme_name: str = "", **extra_context: Any) -> TemplateResponse:
         """Resolve template and return TemplateResponse with merged context.
 
         Context passed to __init__ is merged with extra_context, with extra_context
         taking precedence for duplicate keys.
+
+        Args:
+            template_dir: Package template directory (used as fallback).
+            theme_name: Active theme name for directory resolution.
+            **extra_context: Additional context merged with init context.
         """
-        template_name = self.resolve(template_dir)
+        template_name = self.resolve(template_dir, theme_name=theme_name)
         merged_context = {**self.context, **extra_context}
         return TemplateResponse(template_name, context=merged_context)
 
@@ -110,13 +116,13 @@ def get_template_config(template_dir: Path) -> TemplateConfig:
     """Get the Jinja template configuration.
 
     Configures Jinja to search for templates in multiple directories:
-    1. ./templates/ (working directory) - for user overrides
-    2. package templates directory - for default templates
+    1. themes/<active>/templates/ (if a theme is active)
+    2. ./templates/ (working directory) - for user overrides
+    3. package templates directory - for default templates
     """
-    working_dir_templates = Path(os.getcwd()) / "templates"
-    directories = [working_dir_templates, template_dir]
+    from skrift.app_factory import get_template_directories
 
     return TemplateConfig(
-        directory=directories,
+        directory=get_template_directories(),
         engine=JinjaTemplateEngine,
     )

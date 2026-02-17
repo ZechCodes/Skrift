@@ -15,6 +15,7 @@
     <thead>
         <tr>
             <th>Order</th>
+            <th>Type</th>
             <th>Title</th>
             <th>Slug</th>
             <th>Status</th>
@@ -26,6 +27,7 @@
         {% for page in pages %}
         <tr>
             <td class="sk-text-muted">{{ page.order }}</td>
+            <td class="sk-text-muted">{{ page.type }}</td>
             <td>
                 <a href="/{{ page.slug }}">{{ page.title }}</a>
             </td>

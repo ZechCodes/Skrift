@@ -73,6 +73,7 @@ Lower numbers execute first. Default is 10.
 | `sitemap_page` | `(page_data, page) → page_data` | Modify single sitemap entry |
 | `robots_txt` | `(content,) → content` | Modify robots.txt content |
 | `template_context` | `(context,) → context` | Modify template context dict |
+| `resolve_theme` | `(theme_name, request) → theme_name` | Override active theme per-request (see `/skrift-theming`) |
 | `form_{name}_validated` | `(data,) → data` | Modify form data after validation (form-specific) |
 | `form_validated` | `(data, name) → data` | Modify form data after validation (global) |
 

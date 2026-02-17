@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Annotated
 
 from litestar import Controller, Request, get, post
-from litestar.response import Template as TemplateResponse, Redirect
+from litestar.exceptions import HTTPException
+from litestar.response import File, Template as TemplateResponse, Redirect
 from litestar.params import Body
 from litestar.enums import RequestEncodingType
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,13 +34,28 @@ class SettingsAdminController(Controller):
         self, request: Request, db_session: AsyncSession
     ) -> TemplateResponse:
         """Site settings page."""
+        from skrift.lib.theme import themes_available, discover_themes
+
         ctx = await get_admin_context(request, db_session)
         site_settings = await setting_service.get_site_settings(db_session)
+
+        # Build theme data only when themes directory exists
+        theme_data = None
+        if themes_available():
+            theme_data = {
+                "themes": discover_themes(),
+                "active": site_settings.get(setting_service.SITE_THEME_KEY, ""),
+            }
 
         flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/settings/site.html",
-            context={"flash_messages": flash_messages, "settings": site_settings, **ctx},
+            context={
+                "flash_messages": flash_messages,
+                "settings": site_settings,
+                "theme_data": theme_data,
+                **ctx,
+            },
         )
 
     @post(
@@ -53,6 +69,9 @@ class SettingsAdminController(Controller):
         data: Annotated[dict, Body(media_type=RequestEncodingType.URL_ENCODED)],
     ) -> Redirect:
         """Save site settings."""
+        from skrift.app_factory import update_template_directories, update_static_directories
+        from skrift.lib.theme import themes_available
+
         site_name = data.get("site_name", "").strip()
         site_tagline = data.get("site_tagline", "").strip()
         site_copyright_holder = data.get("site_copyright_holder", "").strip()
@@ -71,7 +90,33 @@ class SettingsAdminController(Controller):
             db_session, setting_service.SITE_COPYRIGHT_START_YEAR_KEY, site_copyright_start_year
         )
 
+        # Save theme selection if themes are available
+        if themes_available():
+            site_theme = data.get("site_theme", "").strip()
+            await setting_service.set_setting(
+                db_session, setting_service.SITE_THEME_KEY, site_theme
+            )
+
         await setting_service.load_site_settings_cache(db_session)
+
+        # Update template and static directories for instant theme switching
+        update_template_directories()
+        update_static_directories()
 
         flash_success(request, "Site settings saved successfully")
         return Redirect(path="/admin/settings")
+
+    @get(
+        "/theme-screenshot/{name:str}",
+        guards=[auth_guard],
+    )
+    async def theme_screenshot(self, request: Request, name: str) -> File:
+        """Serve a theme's screenshot image."""
+        from litestar.response import File
+        from skrift.lib.theme import get_theme_info
+
+        info = get_theme_info(name)
+        if not info or not info.screenshot:
+            raise HTTPException(status_code=404, detail="Screenshot not found")
+
+        return File(path=info.screenshot, media_type="image/png")

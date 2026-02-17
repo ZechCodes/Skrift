@@ -30,7 +30,7 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 
 - **Framework**: Litestar (async Python web framework)
 - **Database**: SQLAlchemy async with Advanced Alchemy
-- **Templates**: Jinja2 with WordPress-style template hierarchy
+- **Templates**: Jinja2 with WordPress-style template hierarchy + optional themes (see `/skrift-theming`)
 - **Config**: YAML (app.yaml) + environment variables (.env)
 - **Auth**: OAuth providers + role-based permissions (see `/skrift-auth`)
 - **Forms**: Pydantic-backed with CSRF (see `/skrift-forms`)
@@ -69,7 +69,8 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 | `skrift/cli.py` | CLI commands (serve, secret, db) |
 | `skrift/middleware/` | Security headers middleware |
 | `skrift/lib/hooks.py` | WordPress-like hook/filter system |
-| `skrift/lib/template.py` | Template resolution with fallbacks |
+| `skrift/lib/template.py` | Template resolution with fallbacks and theme support |
+| `skrift/lib/theme.py` | Theme discovery, metadata parsing |
 | `skrift/db/base.py` | SQLAlchemy Base class (UUIDAuditBase) |
 | `skrift/forms/` | Form system (CSRF, validation, rendering) |
 | `skrift/auth/` | Guards, roles, permissions |
@@ -207,7 +208,7 @@ async def create_item(db_session: AsyncSession, name: str) -> MyModel:
 
 ## Template Resolution
 
-WordPress-style hierarchy with fallbacks:
+WordPress-style hierarchy with fallbacks and optional theme support:
 
 ```python
 from skrift.lib.template import Template
@@ -218,14 +219,21 @@ template = Template("page", "about")
 # Tries: post-news-2024.html -> post-news.html -> post.html
 template = Template("post", "news", "2024")
 
+# Without theme
 return template.render(TEMPLATE_DIR, page=page)
+
+# With theme (searches theme dirs first)
+return template.render(TEMPLATE_DIR, theme_name="my-theme", page=page)
 ```
 
-Search order:
-1. `./templates/` (project root — user overrides)
-2. `skrift/templates/` (package — defaults)
+Search order (with active theme):
+1. `themes/<active>/templates/` (active theme)
+2. `./templates/` (project root — user overrides)
+3. `skrift/templates/` (package — defaults)
 
-Template globals: `now()`, `site_name()`, `site_tagline()`, `site_copyright_holder()`, `site_copyright_start_year()`. Filter: `markdown`.
+Template globals: `now()`, `site_name()`, `site_tagline()`, `site_copyright_holder()`, `site_copyright_start_year()`, `active_theme()`, `themes_available()`. Filter: `markdown`.
+
+For full theming details, see `/skrift-theming`.
 
 ## Middleware
 
@@ -279,5 +287,6 @@ For deep-dive guidance on specific subsystems:
 - **`/skrift-hooks`** — Hook/filter extensibility, custom hook points, built-in hooks
 - **`/skrift-forms`** — Form system, CSRF, field customization, template rendering
 - **`/skrift-auth`** — OAuth flow, guard system, roles, permissions
+- **`/skrift-theming`** — Theme discovery, template/static resolution, per-request switching, RESOLVE_THEME hook
 - **`/skrift-notifications`** — SSE protocol, pluggable backends, group keys, dismiss patterns
 - **`/skrift-observability`** — Logfire integration, structured tracing, instrumentation

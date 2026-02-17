@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Blog - {{ site_name() }}{% endblock %}
+{% block content %}
+<div id="post-grid">
+    {% for post in posts %}
+    <article class="blog-post-card" data-post-slug="{{ post.slug }}">
+        <h2 class="blog-post-title"><a href="/post/{{ post.slug }}">{{ post.title }}</a></h2>
+        <time class="blog-post-date">{{ post.published_at.strftime('%B %d, %Y') if post.published_at else '' }}</time>
+        <p class="blog-post-excerpt">{{ post.meta_description or '' }}</p>
+    </article>
+    {% endfor %}
+
+    {% if not posts %}
+    <p class="no-posts">No posts yet.</p>
+    {% endif %}
+</div>
+
+<template id="post-card-template">
+    <article class="blog-post-card" data-post-slug="">
+        <h2 class="blog-post-title"><a href=""></a></h2>
+        <time class="blog-post-date"></time>
+        <p class="blog-post-excerpt"></p>
+    </article>
+</template>
+{% endblock %}

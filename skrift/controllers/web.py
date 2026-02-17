@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models.user import User
 from skrift.db.services import page_service
-from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url
+from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url, get_cached_site_theme
+from skrift.lib.hooks import RESOLVE_THEME, apply_filters
 from skrift.lib.seo import get_page_seo_meta, get_page_og_meta
 from skrift.lib.template import Template
 
@@ -31,6 +32,11 @@ class WebController(Controller):
         user = result.scalar_one_or_none()
         return {"user": user}
 
+    async def _resolve_theme(self, request: "Request") -> str:
+        """Resolve the active theme for this request via filter hook."""
+        theme_name = get_cached_site_theme()
+        return await apply_filters(RESOLVE_THEME, theme_name, request)
+
     @get("/")
     async def index(
         self, request: "Request", db_session: AsyncSession
@@ -51,6 +57,7 @@ class WebController(Controller):
         """View a page by path with WP-like template resolution."""
         user_ctx = await self._get_user_context(request, db_session)
         flash = request.session.pop("flash", None)
+        theme_name = await self._resolve_theme(request)
 
         # Split path into slugs (e.g., "services/web" -> ["services", "web"])
         slugs = [s for s in path.split("/") if s]
@@ -81,4 +88,4 @@ class WebController(Controller):
                 "og_meta": og_meta,
             }
         )
-        return template.render(TEMPLATE_DIR, flash=flash, **user_ctx)
+        return template.render(TEMPLATE_DIR, theme_name=theme_name, flash=flash, **user_ctx)

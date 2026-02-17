@@ -251,7 +251,16 @@ Extract reusable components:
 {% include "_partials/page-header.html" with context %}
 ```
 
+## Themes
+
+For bundling template and static overrides into a reusable package, see the [Theming](theming.md) guide. When a theme is active, its templates take priority over both project-level overrides and Skrift defaults:
+
+```
+themes/<active>/templates/  →  ./templates/  →  skrift/templates/
+```
+
 ## Next Steps
 
+- [Theming](theming.md) - Bundle templates into distributable themes
 - [Custom Controllers](custom-controllers.md) - Add new routes
 - [CSS Framework](../reference/css-framework.md) - Available styles

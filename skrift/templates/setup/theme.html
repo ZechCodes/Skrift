@@ -1,0 +1,282 @@
+{% extends "setup/base.html" %}
+
+{% block title %}Theme Selection - Skrift{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .theme-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+    }
+
+    .theme-option {
+        display: flex;
+        flex-direction: column;
+        position: relative;
+        border: 2px solid var(--sk-color-border);
+        border-radius: var(--sk-radius-lg);
+        cursor: pointer;
+        background: var(--sk-color-bg);
+        overflow: hidden;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .theme-option:hover {
+        border-color: var(--sk-color-accent);
+    }
+
+    .theme-option.selected {
+        border-color: var(--sk-color-accent);
+        box-shadow: 0 0 0 3px var(--sk-color-accent-soft);
+    }
+
+    .theme-option input[type="radio"] {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    /* Mini preview mockup — colors driven by --tp-bg / --tp-fg / --tp-accent */
+    .theme-preview {
+        flex: 1;
+        min-height: 100px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        overflow: hidden;
+        background: var(--tp-bg);
+    }
+
+    .preview-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 4px;
+    }
+
+    .preview-title {
+        height: 8px;
+        width: 50px;
+        border-radius: 2px;
+        opacity: 0.9;
+        background: var(--tp-fg);
+    }
+
+    .preview-nav {
+        display: flex;
+        gap: 4px;
+    }
+
+    .preview-nav-item {
+        height: 5px;
+        width: 18px;
+        border-radius: 2px;
+        opacity: 0.4;
+        background: var(--tp-fg);
+    }
+
+    .preview-nav-item:last-child {
+        background: var(--tp-accent);
+    }
+
+    .preview-divider {
+        height: 1px;
+        opacity: 0.15;
+        margin: 2px 0;
+        background: var(--tp-fg);
+    }
+
+    .preview-heading {
+        height: 10px;
+        width: 70%;
+        border-radius: 2px;
+        opacity: 0.8;
+        margin-top: 4px;
+        background: var(--tp-fg);
+    }
+
+    .preview-line {
+        height: 4px;
+        border-radius: 2px;
+        opacity: 0.3;
+        background: var(--tp-fg);
+    }
+
+    .preview-line:nth-child(odd) { width: 90%; }
+    .preview-line:nth-child(even) { width: 75%; }
+
+    .preview-card {
+        display: flex;
+        gap: 6px;
+        margin-top: 2px;
+    }
+
+    .preview-card-block {
+        flex: 1;
+        height: 20px;
+        border-radius: 3px;
+        opacity: 0.08;
+        background: var(--tp-accent);
+    }
+
+    /* Theme info below preview */
+    .theme-info {
+        padding: 0.75rem 1rem;
+        border-top: 1px solid var(--sk-color-border);
+    }
+
+    .theme-info strong {
+        display: block;
+        font-size: 0.9rem;
+        margin-bottom: 0.15rem;
+    }
+
+    .theme-info small {
+        color: var(--sk-color-muted);
+        font-size: 0.78rem;
+        line-height: 1.3;
+    }
+
+    /* Selected checkmark */
+    .theme-check {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: var(--sk-color-accent);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 12px;
+        font-weight: bold;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+
+    .theme-option.selected .theme-check {
+        display: flex;
+    }
+
+    /* Default theme card — spans full width, uses Skrift design tokens */
+    .theme-option.default-theme {
+        grid-column: 1 / -1;
+        --tp-bg: var(--sk-color-surface);
+        --tp-fg: var(--sk-color-text);
+        --tp-accent: var(--sk-color-accent);
+    }
+
+    .theme-option.default-theme .theme-preview {
+        height: 48px;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 16px;
+    }
+
+    .theme-option.default-theme .preview-title {
+        height: 8px;
+        width: 60px;
+    }
+
+    .theme-option.default-theme .preview-nav {
+        margin-left: auto;
+    }
+
+    .theme-option.default-theme .preview-line,
+    .theme-option.default-theme .preview-heading,
+    .theme-option.default-theme .preview-divider,
+    .theme-option.default-theme .preview-card {
+        display: none;
+    }
+
+    /* Per-theme color tokens */
+    {% for theme in themes %}
+    .theme-option[data-theme="{{ theme.directory_name }}"] {
+        --tp-bg: {{ theme.colors[0] if theme.colors|length > 0 else '#ffffff' }};
+        --tp-fg: {{ theme.colors[1] if theme.colors|length > 1 else '#333333' }};
+        --tp-accent: {{ theme.colors[2] if theme.colors|length > 2 else '#666666' }};
+    }
+    {% endfor %}
+</style>
+{% endblock %}
+
+{% block content %}
+<h2>Choose a Theme</h2>
+<p class="description">Select a theme for your site's appearance. You can change this later in admin settings.</p>
+
+<form method="post" action="/setup/theme">
+    <div class="theme-grid">
+        <label class="theme-option default-theme selected" data-theme="">
+            <input type="radio" name="site_theme" value="" checked>
+            <span class="theme-check">&#10003;</span>
+            <div class="theme-preview">
+                <div class="preview-title"></div>
+                <div class="preview-nav">
+                    <div class="preview-nav-item"></div>
+                    <div class="preview-nav-item"></div>
+                    <div class="preview-nav-item"></div>
+                </div>
+            </div>
+            <div class="theme-info">
+                <strong>Default (no theme)</strong>
+                <small>Use the built-in Skrift templates</small>
+            </div>
+        </label>
+
+        {% for theme in themes %}
+        <label class="theme-option" data-theme="{{ theme.directory_name }}">
+            <input type="radio" name="site_theme" value="{{ theme.directory_name }}">
+            <span class="theme-check">&#10003;</span>
+            <div class="theme-preview">
+                <div class="preview-header">
+                    <div class="preview-title"></div>
+                    <div class="preview-nav">
+                        <div class="preview-nav-item"></div>
+                        <div class="preview-nav-item"></div>
+                        <div class="preview-nav-item"></div>
+                    </div>
+                </div>
+                <div class="preview-divider"></div>
+                <div class="preview-heading"></div>
+                <div class="preview-line"></div>
+                <div class="preview-line"></div>
+                <div class="preview-line"></div>
+                <div class="preview-card">
+                    <div class="preview-card-block"></div>
+                    <div class="preview-card-block"></div>
+                </div>
+            </div>
+            <div class="theme-info">
+                <strong>{{ theme.name }}</strong>
+                {% if theme.description %}<small>{{ theme.description }}</small>{% endif %}
+            </div>
+        </label>
+        {% endfor %}
+    </div>
+
+    <div class="form-actions">
+        <a href="/setup/site" class="btn-secondary" role="button">Back</a>
+        <button type="submit">Save &amp; Continue</button>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+document.querySelectorAll('.theme-option').forEach(option => {
+    const radio = option.querySelector('input[type="radio"]');
+    radio.addEventListener('change', () => {
+        document.querySelectorAll('.theme-option').forEach(o => o.classList.remove('selected'));
+        option.classList.add('selected');
+    });
+    option.addEventListener('click', () => {
+        radio.checked = true;
+        radio.dispatchEvent(new Event('change'));
+    });
+});
+</script>
+{% endblock %}

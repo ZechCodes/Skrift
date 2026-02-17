@@ -31,6 +31,7 @@ from skrift.config import get_config_path
 from skrift.db.services.setting_service import (
     SETUP_COMPLETED_AT_KEY,
     SITE_NAME_KEY,
+    SITE_THEME_KEY,
     get_setting,
 )
 
@@ -41,6 +42,7 @@ class SetupStep(Enum):
     DATABASE = "database"
     AUTH = "auth"
     SITE = "site"
+    THEME = "theme"
     ADMIN = "admin"
     COMPLETE = "complete"
 
@@ -246,6 +248,35 @@ async def is_site_configured() -> bool:
             await engine.dispose()
 
 
+async def is_theme_configured() -> bool:
+    """Check if the theme step has been completed.
+
+    The theme step is considered configured if the site_theme key exists
+    in the settings table (even if empty, meaning "no theme").
+    """
+    db_url = get_database_url_from_yaml()
+    if not db_url:
+        return False
+
+    engine = None
+    try:
+        engine = create_async_engine(db_url)
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        async_session = async_sessionmaker(engine, expire_on_commit=False)
+        async with async_session() as session:
+            try:
+                theme = await get_setting(session, SITE_THEME_KEY)
+                return theme is not None
+            except Exception:
+                return False
+    except Exception:
+        return False
+    finally:
+        if engine:
+            await engine.dispose()
+
+
 async def get_first_incomplete_step() -> SetupStep:
     """Determine the first incomplete step in the setup wizard.
 
@@ -285,7 +316,12 @@ async def get_first_incomplete_step() -> SetupStep:
     if not await is_site_configured():
         return SetupStep.SITE
 
-    # Step 4: Admin - always go here if setup not complete
+    # Step 4: Theme - only when themes/ directory exists with valid themes
+    from skrift.lib.theme import themes_available
+    if themes_available() and not await is_theme_configured():
+        return SetupStep.THEME
+
+    # Step 5 (or 4 without themes): Admin - always go here if setup not complete
     return SetupStep.ADMIN
 
 

@@ -299,6 +299,7 @@ SITEMAP_URLS = "sitemap_urls"
 SITEMAP_PAGE = "sitemap_page"
 ROBOTS_TXT = "robots_txt"
 TEMPLATE_CONTEXT = "template_context"
+RESOLVE_THEME = "resolve_theme"
 
 # Observability hooks
 LOGFIRE_CONFIGURED = "logfire_configured"

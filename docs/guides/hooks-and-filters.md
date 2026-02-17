@@ -139,6 +139,12 @@ result = await hooks.apply_filters("my_filter", initial_value, extra_arg)
 |------|------|-----------|-------------|
 | `template_context` | Filter | `context` | Modify template context |
 
+### Theme Hooks
+
+| Hook | Type | Arguments | Description |
+|------|------|-----------|-------------|
+| `resolve_theme` | Filter | `theme_name`, `request` | Override the active theme per-request (see [Theming](theming.md)) |
+
 ### Notification Hooks
 
 | Hook | Type | Arguments | Description |
@@ -271,6 +277,7 @@ from skrift.lib.hooks import (
     SITEMAP_PAGE,
     ROBOTS_TXT,
     TEMPLATE_CONTEXT,
+    RESOLVE_THEME,
     FORM_VALIDATED,
     NOTIFICATION_SENT,
     NOTIFICATION_DISMISSED,

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ site_name() }}{% endblock %}</title>
+
+    {% if seo_meta %}
+    {{ seo_meta }}
+    {% endif %}
+
+    {% if og_meta %}
+    {{ og_meta }}
+    {% endif %}
+
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ static_url('css/theme.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <h1 class="site-title"><a href="/">{{ site_name() }}</a></h1>
+            {% set tagline = site_tagline() %}
+            {% if tagline %}
+            <p class="site-tagline">{{ tagline }}</p>
+            {% endif %}
+        </div>
+        <nav class="site-nav">
+            <ul>
+                <li><a href="/">Blog</a></li>
+                {% for pg in nav_pages %}
+                <li><a href="/{{ pg.slug }}">{{ pg.title }}</a></li>
+                {% endfor %}
+                {% if user %}
+                <li><a href="/admin">Admin</a></li>
+                <li><a href="/auth/logout">Logout</a></li>
+                {% else %}
+                <li><a href="/auth/login">Login</a></li>
+                {% endif %}
+            </ul>
+        </nav>
+    </header>
+
+    <main class="site-main">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <p>&copy; {{ site_copyright_start_year() }}&ndash;{{ now().year }} {{ site_copyright_holder() }}. {{ site_name() }}.</p>
+    </footer>
+
+    <script src="{{ static_url('js/notifications.js') }}"></script>
+    <script src="{{ static_url('js/blog.js') }}"></script>
+</body>
+</html>
