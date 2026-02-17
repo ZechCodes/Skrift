@@ -155,13 +155,18 @@ class TestPageListFiltering:
     @pytest.mark.asyncio
     async def test_editor_sees_all_pages(self):
         """Editor with manage-pages should see all pages."""
-        from skrift.admin.pages import PageAdminController
+        from skrift.admin.page_type_factory import create_page_type_controller
+        from skrift.config import PageTypeConfig
+
+        PageController = create_page_type_controller(
+            PageTypeConfig(name="page", plural="pages")
+        )
 
         user_id = str(uuid4())
         mock_perms = MagicMock()
         mock_perms.permissions = {"manage-pages"}
 
-        controller = PageAdminController(owner=MagicMock())
+        controller = PageController(owner=MagicMock())
         request = MagicMock()
         request.session = {"user_id": user_id}
         request.url.path = "/admin/pages"
@@ -179,16 +184,17 @@ class TestPageListFiltering:
         mock_pages_result = MagicMock()
         mock_pages_result.scalars.return_value.all.return_value = [MagicMock(), MagicMock()]
 
-        with patch("skrift.admin.pages.get_admin_context", new_callable=AsyncMock, return_value=mock_context), \
-             patch("skrift.admin.pages.get_flash_messages", return_value=[]), \
-             patch("skrift.admin.pages.select") as mock_select:
+        with patch("skrift.admin.page_type_factory.get_admin_context", new_callable=AsyncMock, return_value=mock_context), \
+             patch("skrift.admin.page_type_factory.get_flash_messages", return_value=[]), \
+             patch("skrift.admin.page_type_factory.select") as mock_select:
             mock_query = MagicMock()
             mock_select.return_value = mock_query
+            mock_query.where.return_value = mock_query
             mock_query.options.return_value = mock_query
             mock_query.order_by.return_value = mock_query
             db_session.execute.return_value = mock_pages_result
 
-            result = await PageAdminController.list_pages.fn(
+            result = await PageController.list_pages.fn(
                 controller, request, db_session
             )
             assert result.template_name == "admin/pages/list.html"

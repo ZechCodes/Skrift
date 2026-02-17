@@ -20,7 +20,7 @@
         </div>
         <nav class="sk-sidebar-nav">
             {% for item in admin_nav %}
-            <a href="{{ item.path }}" class="sk-sidebar-link{% if current_path == item.path %} active{% endif %}">
+            <a href="{{ item.path }}" class="sk-sidebar-link{% if current_path.startswith(item.path) %} active{% endif %}">
                 {{ item.label }}
             </a>
             {% endfor %}

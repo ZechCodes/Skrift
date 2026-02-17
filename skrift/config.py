@@ -111,6 +111,34 @@ def load_model_modules() -> list[str]:
     return config.get("models", [])
 
 
+class PageTypeConfig(BaseModel):
+    """Configuration for a page type."""
+
+    name: str        # "post"
+    plural: str      # "posts"
+    icon: str = "file-text"
+    nav_order: int = 20
+
+
+DEFAULT_PAGE_TYPES = [
+    PageTypeConfig(name="page", plural="pages", icon="file-text", nav_order=20),
+]
+
+
+def load_page_types_from_yaml() -> list[PageTypeConfig]:
+    """Load page type definitions from app.yaml.
+
+    Ensures the "page" type always exists.
+    """
+    config = load_raw_app_config()
+    if config is None or "page_types" not in config:
+        return list(DEFAULT_PAGE_TYPES)
+    types = [PageTypeConfig(**pt) for pt in config["page_types"]]
+    if not any(t.name == "page" for t in types):
+        types = [DEFAULT_PAGE_TYPES[0], *types]
+    return types
+
+
 class DatabaseConfig(BaseModel):
     """Database connection configuration."""
 
@@ -304,6 +332,9 @@ class Settings(BaseSettings):
     # Logfire observability config (loaded from app.yaml)
     logfire: LogfireConfig = LogfireConfig()
 
+    # Page types config (loaded from app.yaml)
+    page_types: list[PageTypeConfig] = list(DEFAULT_PAGE_TYPES)
+
 
 def clear_settings_cache() -> None:
     """Clear the settings cache to force reload."""
@@ -386,6 +417,9 @@ def get_settings() -> Settings:
 
     if "logfire" in app_config:
         kwargs["logfire"] = LogfireConfig(**app_config["logfire"])
+
+    if "page_types" in app_config:
+        kwargs["page_types"] = [PageTypeConfig(**pt) for pt in app_config["page_types"]]
 
     # Create Settings with YAML nested configs
     # BaseSettings will still load debug/secret_key from env, but kwargs take precedence

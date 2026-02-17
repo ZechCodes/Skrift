@@ -16,7 +16,7 @@ class StoredNotification(Base):
     type: Mapped[str] = mapped_column(String(100), nullable=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     group_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    delivery_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     notified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.now
     )
@@ -25,5 +25,5 @@ class StoredNotification(Base):
         Index("ix_stored_notifications_scope_scope_id", "scope", "scope_id"),
         Index("ix_stored_notifications_scope_scope_id_group", "scope", "scope_id", "group_key"),
         Index("ix_stored_notifications_notified_at", "notified_at"),
-        Index("ix_stored_notifications_scope_sid_mode_notified", "scope", "scope_id", "mode", "notified_at"),
+        Index("ix_stored_notifications_scope_sid_dmode_notified", "scope", "scope_id", "delivery_mode", "notified_at"),
     )

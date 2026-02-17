@@ -1,26 +1,20 @@
 {% extends "admin/base.html" %}
 
-{% block title %}{{ "Edit" if page else "New" }} Page - Admin - {{ site_name() }}{% endblock %}
+{% block title %}{{ "Edit" if page else "New" }} {{ page_type_label }} - Admin - {{ site_name() }}{% endblock %}
 
 {% block admin_content %}
 <hgroup>
-    <h1>{{ "Edit" if page else "New" }} Page</h1>
-    <p>{{ "Update page details" if page else "Create a new page" }}</p>
+    <h1>{{ "Edit" if page else "New" }} {{ page_type_label }}</h1>
+    <p>{{ "Update " ~ page_type_name ~ " details" if page else "Create a new " ~ page_type_name }}</p>
 </hgroup>
 
-<form method="post" action="{{ '/admin/pages/' ~ page.id ~ '/edit' if page else '/admin/pages/new' }}">
-    <label for="type">Type</label>
-    <select id="type" name="type">
-        <option value="page" {{ 'selected' if not page or page.type == 'page' }}>Page</option>
-        <option value="post" {{ 'selected' if page and page.type == 'post' }}>Post</option>
-    </select>
-
+<form method="post" action="{{ admin_type_base ~ '/' ~ page.id ~ '/edit' if page else admin_type_base ~ '/new' }}">
     <label for="title">Title</label>
     <input type="text" id="title" name="title" value="{{ page.title if page else '' }}" required>
 
     <label for="slug">Slug</label>
     <input type="text" id="slug" name="slug" value="{{ page.slug if page else '' }}" required placeholder="e.g., about or services/consulting">
-    <small class="sk-text-muted">The URL path for this page (e.g., "about" becomes /about)</small>
+    <small class="sk-text-muted">The URL path for this {{ page_type_name }} (e.g., "about" becomes /about)</small>
 
     <label for="content">Content</label>
     <textarea id="content" name="content" rows="15">{{ page.content if page else '' }}</textarea>
@@ -68,10 +62,10 @@
     </details>
 
     <div class="sk-form-actions">
-        <button type="submit">{{ "Update" if page else "Create" }} Page</button>
-        <a href="/admin/pages" role="button" class="sk-btn-outline">Cancel</a>
+        <button type="submit">{{ "Update" if page else "Create" }} {{ page_type_label }}</button>
+        <a href="{{ admin_type_base }}" role="button" class="sk-btn-outline">Cancel</a>
         {% if page %}
-        <a href="/admin/pages/{{ page.id }}/revisions" role="button" class="sk-btn-outline">View History</a>
+        <a href="{{ admin_type_base }}/{{ page.id }}/revisions" role="button" class="sk-btn-outline">View History</a>
         {% endif %}
     </div>
 </form>

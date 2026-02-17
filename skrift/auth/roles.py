@@ -87,6 +87,29 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
 }
 
 
+def permissions_for_type(plural: str) -> dict[str, str]:
+    """Generate permission strings for a page type.
+
+    Returns a dict with keys: manage, create, edit_own, delete_own.
+    """
+    return {
+        "manage": f"manage-{plural}",
+        "create": f"create-{plural}",
+        "edit_own": f"edit-own-{plural}",
+        "delete_own": f"delete-own-{plural}",
+    }
+
+
+def expand_roles_for_page_types(page_types: list) -> None:
+    """Add type-specific permissions to default roles. Called at startup."""
+    for pt in page_types:
+        perms = permissions_for_type(pt.plural)
+        ADMIN.permissions.add(perms["manage"])
+        AUTHOR.permissions.update({perms["edit_own"], perms["delete_own"], perms["create"]})
+        EDITOR.permissions.update({perms["manage"], perms["create"]})
+        MODERATOR.permissions.update({perms["manage"], perms["create"]})
+
+
 def get_role_definition(name: str) -> RoleDefinition | None:
     """Get a role definition by name."""
     return ROLE_DEFINITIONS.get(name)

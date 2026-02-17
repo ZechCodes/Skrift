@@ -1,21 +1,20 @@
 {% extends "admin/base.html" %}
 
-{% block title %}Pages - Admin - {{ site_name() }}{% endblock %}
+{% block title %}{{ page_type_label_plural }} - Admin - {{ site_name() }}{% endblock %}
 
 {% block admin_content %}
 <div class="sk-admin-header">
     <hgroup>
-        <h1>Pages</h1>
-        <p>Manage site pages</p>
+        <h1>{{ page_type_label_plural }}</h1>
+        <p>Manage {{ page_type_plural }}</p>
     </hgroup>
-    <a href="/admin/pages/new" role="button">New Page</a>
+    <a href="{{ admin_type_base }}/new" role="button">New {{ page_type_label }}</a>
 </div>
 
 <table class="sk-admin-table">
     <thead>
         <tr>
             <th>Order</th>
-            <th>Type</th>
             <th>Title</th>
             <th>Slug</th>
             <th>Status</th>
@@ -27,7 +26,6 @@
         {% for page in pages %}
         <tr>
             <td class="sk-text-muted">{{ page.order }}</td>
-            <td class="sk-text-muted">{{ page.type }}</td>
             <td>
                 <a href="/{{ page.slug }}">{{ page.title }}</a>
             </td>
@@ -46,17 +44,17 @@
             </td>
             <td>{{ page.created_at.strftime('%Y-%m-%d') }}</td>
             <td class="sk-actions-cell">
-                <a href="/admin/pages/{{ page.id }}/edit" role="button" class="sk-btn-outline sk-btn-small">Edit</a>
+                <a href="{{ admin_type_base }}/{{ page.id }}/edit" role="button" class="sk-btn-outline sk-btn-small">Edit</a>
                 {% if page.is_published %}
-                <form method="post" action="/admin/pages/{{ page.id }}/unpublish" class="sk-inline-form">
+                <form method="post" action="{{ admin_type_base }}/{{ page.id }}/unpublish" class="sk-inline-form">
                     <button type="submit" class="sk-btn-outline sk-btn-small">Unpublish</button>
                 </form>
                 {% else %}
-                <form method="post" action="/admin/pages/{{ page.id }}/publish" class="sk-inline-form">
+                <form method="post" action="{{ admin_type_base }}/{{ page.id }}/publish" class="sk-inline-form">
                     <button type="submit" class="sk-btn-outline sk-btn-small">Publish</button>
                 </form>
                 {% endif %}
-                <form method="post" action="/admin/pages/{{ page.id }}/delete" class="sk-inline-form" onsubmit="return confirm('Are you sure you want to delete this page?');">
+                <form method="post" action="{{ admin_type_base }}/{{ page.id }}/delete" class="sk-inline-form" onsubmit="return confirm('Are you sure you want to delete this {{ page_type_name }}?');">
                     <button type="submit" class="sk-btn-outline sk-btn-small sk-btn-danger">Delete</button>
                 </form>
             </td>
@@ -66,6 +64,6 @@
 </table>
 
 {% if not pages %}
-<p class="sk-no-items">No pages found.</p>
+<p class="sk-no-items">No {{ page_type_plural }} found.</p>
 {% endif %}
 {% endblock %}
