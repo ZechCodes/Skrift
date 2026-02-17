@@ -448,6 +448,10 @@ def create_app() -> Litestar:
 
     settings = get_settings()
 
+    from skrift.lib import observability
+    observability.configure(settings)
+    observability.instrument_httpx()
+
     # Load controllers from app.yaml
     controllers = load_controllers()
 
@@ -562,6 +566,11 @@ def create_app() -> Litestar:
         except Exception:
             logger.info("Startup cache init skipped (DB may not exist)", exc_info=True)
 
+        observability.instrument_sqlalchemy(db_config.get_engine())
+
+        from skrift.lib.hooks import hooks
+        await hooks.do_action("logfire_configured")
+
         notification_service.set_backend(backend)
         await backend.start()
 
@@ -569,7 +578,7 @@ def create_app() -> Litestar:
         """Stop notification backend on shutdown."""
         await notification_service._get_backend().stop()
 
-    return Litestar(
+    app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
         route_handlers=[NotificationsController, *controllers, static_files_router],
@@ -581,6 +590,7 @@ def create_app() -> Litestar:
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
+    return observability.instrument_app(app)
 
 
 def create_setup_app() -> Litestar:

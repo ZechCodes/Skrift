@@ -258,6 +258,31 @@ When enabled:
 - Template auto-reload
 - SQL query logging possible
 
+### Observability (Logfire)
+
+Enable structured tracing with [Pydantic Logfire](https://logfire.pydantic.dev/):
+
+```yaml
+logfire:
+  enabled: true
+  service_name: my-site          # Identifies your app in Logfire
+  environment: production         # Defaults to SKRIFT_ENV
+  sample_rate: 1.0                # 0.0–1.0 trace sampling
+  console: true                   # Print spans to console (dev)
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `enabled` | Enable Logfire integration | `false` |
+| `service_name` | Service name in Logfire dashboard | `skrift` |
+| `environment` | Environment label | `SKRIFT_ENV` value |
+| `sample_rate` | Trace sampling rate (0.0–1.0) | `1.0` |
+| `console` | Print spans to stdout | `false` |
+
+Requires the `logfire` extra: `pip install skrift[logfire]`. Without it, the integration silently no-ops. Set `LOGFIRE_TOKEN` in your environment to send data to the Logfire dashboard.
+
+When enabled, Skrift automatically traces HTTP requests, SQL queries, httpx calls, hook execution, and OAuth flows.
+
 ## Programmatic Access
 
 Access configuration in your code:

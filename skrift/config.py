@@ -223,6 +223,16 @@ class RedisConfig(BaseModel):
         return ":".join(segments)
 
 
+class LogfireConfig(BaseModel):
+    """Pydantic Logfire observability configuration."""
+
+    enabled: bool = False
+    service_name: str = "skrift"
+    environment: str | None = None  # defaults to SKRIFT_ENV
+    sample_rate: float = 1.0
+    console: bool = False
+
+
 class NotificationsConfig(BaseModel):
     """Notification backend configuration."""
 
@@ -290,6 +300,9 @@ class Settings(BaseSettings):
 
     # Notifications config (loaded from app.yaml)
     notifications: NotificationsConfig = NotificationsConfig()
+
+    # Logfire observability config (loaded from app.yaml)
+    logfire: LogfireConfig = LogfireConfig()
 
 
 def clear_settings_cache() -> None:
@@ -370,6 +383,9 @@ def get_settings() -> Settings:
 
     if "notifications" in app_config:
         kwargs["notifications"] = NotificationsConfig(**app_config["notifications"])
+
+    if "logfire" in app_config:
+        kwargs["logfire"] = LogfireConfig(**app_config["logfire"])
 
     # Create Settings with YAML nested configs
     # BaseSettings will still load debug/secret_key from env, but kwargs take precedence

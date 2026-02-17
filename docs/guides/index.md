@@ -82,6 +82,14 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Protecting Routes](protecting-routes.md)
 
+-   :material-chart-timeline-variant:{ .lg .middle } **Observability**
+
+    ---
+
+    Add structured tracing and logging with Pydantic Logfire.
+
+    [:octicons-arrow-right-24: Observability](observability.md)
+
 </div>
 
 ## Guide Overview
@@ -96,6 +104,7 @@ Step-by-step guides for building and customizing your Skrift site.
 | [Forms](forms.md) | Form handling | Python basics |
 | [Custom Middleware](custom-middleware.md) | Request processing | Python, ASGI |
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |
+| [Observability](observability.md) | Tracing & logging | None |
 
 ## What You Can Build
 

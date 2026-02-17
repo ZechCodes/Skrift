@@ -70,6 +70,7 @@ nav:
     - Custom Middleware: guides/custom-middleware.md
     - Markdown Content: guides/markdown-content.md
     - Protecting Routes: guides/protecting-routes.md
+    - Observability: guides/observability.md
   - Admin:
     - admin/index.md
     - Managing Pages: admin/managing-pages.md
