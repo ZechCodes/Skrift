@@ -30,8 +30,11 @@ def cli():
 )
 def serve(host, port, reload, workers, log_level):
     """Run the Skrift server."""
+    import asyncio
+    import signal
+
+    from hypercorn.asyncio import serve as hypercorn_serve
     from hypercorn.config import Config
-    from hypercorn.run import run
 
     config = Config()
     config.application_path = "skrift.asgi:app"
@@ -42,8 +45,23 @@ def serve(host, port, reload, workers, log_level):
 
     if reload:
         config.use_reloader = True
+        from hypercorn.run import run
+        run(config)
+        return
 
-    run(config)
+    from skrift.asgi import app
+
+    shutdown_event = asyncio.Event()
+
+    loop = asyncio.new_event_loop()
+    loop.add_signal_handler(signal.SIGINT, shutdown_event.set)
+    loop.add_signal_handler(signal.SIGTERM, shutdown_event.set)
+    try:
+        loop.run_until_complete(
+            hypercorn_serve(app, config, shutdown_trigger=shutdown_event.wait)
+        )
+    finally:
+        loop.close()
 
 
 @cli.command()
