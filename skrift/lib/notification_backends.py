@@ -233,11 +233,11 @@ class _DatabaseStorageMixin:
                 delete(StoredNotification).where(
                     or_(
                         and_(
-                            StoredNotification.mode == NotificationMode.QUEUED.value,
+                            StoredNotification.delivery_mode == NotificationMode.QUEUED.value,
                             StoredNotification.notified_at < queued_cutoff,
                         ),
                         and_(
-                            StoredNotification.mode == NotificationMode.TIMESERIES.value,
+                            StoredNotification.delivery_mode == NotificationMode.TIMESERIES.value,
                             StoredNotification.notified_at < timeseries_cutoff,
                         ),
                     )
@@ -258,7 +258,7 @@ class _DatabaseStorageMixin:
             type=notification.type,
             payload_json=json.dumps(notification.payload),
             group_key=notification.group,
-            mode=notification.mode.value,
+            delivery_mode=notification.mode.value,
             notified_at=datetime.fromtimestamp(notification.created_at, tz=timezone.utc),
         )
         async with self._session_maker() as session:
@@ -305,7 +305,7 @@ class _DatabaseStorageMixin:
                 .where(
                     StoredNotification.scope == scope,
                     StoredNotification.scope_id == scope_id,
-                    StoredNotification.mode == NotificationMode.QUEUED.value,
+                    StoredNotification.delivery_mode == NotificationMode.QUEUED.value,
                 )
                 .order_by(StoredNotification.notified_at)
             )
@@ -317,7 +317,7 @@ class _DatabaseStorageMixin:
                     created_at=row.notified_at.timestamp(),
                     payload=json.loads(row.payload_json),
                     group=row.group_key,
-                    mode=NotificationMode(row.mode),
+                    mode=NotificationMode(row.delivery_mode),
                 )
                 for row in rows
             ]
@@ -333,7 +333,7 @@ class _DatabaseStorageMixin:
                 .where(
                     StoredNotification.scope == scope,
                     StoredNotification.scope_id == scope_id,
-                    StoredNotification.mode == NotificationMode.TIMESERIES.value,
+                    StoredNotification.delivery_mode == NotificationMode.TIMESERIES.value,
                     StoredNotification.notified_at > since_dt,
                 )
                 .order_by(StoredNotification.notified_at)
@@ -346,7 +346,7 @@ class _DatabaseStorageMixin:
                     created_at=row.notified_at.timestamp(),
                     payload=json.loads(row.payload_json),
                     group=row.group_key,
-                    mode=NotificationMode(row.mode),
+                    mode=NotificationMode(row.delivery_mode),
                 )
                 for row in rows
             ]
@@ -357,7 +357,7 @@ class _DatabaseStorageMixin:
 
         async with self._session_maker() as session:
             result = await session.execute(
-                select(StoredNotification.mode).where(
+                select(StoredNotification.delivery_mode).where(
                     StoredNotification.id == notification_id
                 )
             )
