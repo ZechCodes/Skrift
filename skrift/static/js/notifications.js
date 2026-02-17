@@ -8,6 +8,12 @@
 (function () {
     "use strict";
 
+    const _modeDefaults = {
+        queued:     { dismiss: "server", autoClear: false },
+        timeseries: { dismiss: false,    autoClear: 8000 },
+        ephemeral:  { dismiss: false,    autoClear: 5000 },
+    };
+
     class SkriftNotifications {
         constructor() {
             this._es = null;
@@ -23,16 +29,33 @@
             this._statusHideTimeout = null;
             this._connectingSince = null;
             this._connectingTimeout = null;
+            this._lastTimestamp = null;
+            this._config = {};
 
             this._onFocus = () => this._connect();
             this._onBlur = () => {
-                this._disconnect();
-                this._setStatus("suspended");
+                if (!this._config.persistConnection) {
+                    this._disconnect();
+                    this._setStatus("suspended");
+                }
             };
 
             window.addEventListener("focus", this._onFocus);
             window.addEventListener("blur", this._onBlur);
             this._connect();
+        }
+
+        configure(options) {
+            Object.assign(this._config, options);
+        }
+
+        _getModeConfig(mode) {
+            return Object.assign(
+                {},
+                _modeDefaults[mode] || _modeDefaults.queued,
+                this._config["*"],
+                this._config[mode],
+            );
         }
 
         get _maxVisible() {
@@ -61,7 +84,11 @@
             this._pendingSyncIds = new Set();
 
             this._setStatus("connecting");
-            this._es = new EventSource("/notifications/stream");
+            let url = "/notifications/stream";
+            if (this._lastTimestamp != null) {
+                url += `?since=${this._lastTimestamp}`;
+            }
+            this._es = new EventSource(url);
 
             this._es.addEventListener("notification", (e) => {
                 let data;
@@ -96,6 +123,11 @@
             if (data.type === "dismissed") {
                 this._removeDismissed(data.id);
                 return;
+            }
+
+            // Track latest timestamp for reconnect replay
+            if (data.created_at != null && (this._lastTimestamp == null || data.created_at > this._lastTimestamp)) {
+                this._lastTimestamp = data.created_at;
             }
 
             // Pre-sync: track IDs for deduplication
@@ -240,6 +272,9 @@
             const container = this._ensureContainer();
             this._visibleCount++;
 
+            const mode = data.mode || "queued";
+            const { dismiss: dismissMode, autoClear } = this._getModeConfig(mode);
+
             const article = document.createElement("article");
             article.className = "sk-notification";
             article.dataset.notificationId = data.id;
@@ -263,15 +298,47 @@
 
             article.appendChild(content);
 
-            const dismiss = document.createElement("button");
-            dismiss.type = "button";
-            dismiss.className = "sk-notification-dismiss";
-            dismiss.setAttribute("aria-label", "Dismiss");
-            dismiss.innerHTML = "&times;";
-            dismiss.addEventListener("click", () => this._dismiss(data.id));
-            article.appendChild(dismiss);
+            if (dismissMode === "server" || dismissMode === "visual") {
+                const dismiss = document.createElement("button");
+                dismiss.type = "button";
+                dismiss.className = "sk-notification-dismiss";
+                dismiss.setAttribute("aria-label", "Dismiss");
+                dismiss.innerHTML = "&times;";
+                dismiss.addEventListener("click", () => {
+                    if (dismissMode === "server") {
+                        this._dismiss(data.id);
+                    } else {
+                        this._clearVisual(data.id);
+                    }
+                });
+                article.appendChild(dismiss);
+            }
 
             container.appendChild(article);
+
+            if (autoClear) {
+                article._autoClearTimer = setTimeout(
+                    () => this._clearVisual(data.id),
+                    autoClear,
+                );
+            }
+        }
+
+        _clearVisual(id) {
+            const el = this._container?.querySelector(
+                `[data-notification-id="${id}"]`
+            );
+            if (!el) return;
+
+            clearTimeout(el._autoClearTimer);
+            el.classList.add("sk-notification-exit");
+            el.addEventListener("animationend", () => {
+                el.remove();
+                this._visibleCount--;
+                this._displayedIds.delete(id);
+                this._cleanGroupMap(id);
+                this._showNextFromQueue();
+            }, { once: true });
         }
 
         _dismiss(id) {
@@ -280,6 +347,7 @@
             );
             if (!el) return;
 
+            clearTimeout(el._autoClearTimer);
             el.classList.add("sk-notification-exit");
             el.addEventListener("animationend", () => {
                 el.remove();
@@ -304,6 +372,7 @@
                 return;
             }
 
+            clearTimeout(el._autoClearTimer);
             el.classList.add("sk-notification-exit");
             el.addEventListener("animationend", () => {
                 el.remove();

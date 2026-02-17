@@ -138,10 +138,26 @@ class AuthController(Controller):
         return Redirect("/")
 ```
 
+## OAuth Token Persistence
+
+On every login, `access_token` and `refresh_token` from the provider's token response are saved on the `OAuthAccount` record:
+
+```python
+# In find_or_create_oauth_user():
+oauth_account.access_token = tokens.get("access_token")
+oauth_account.refresh_token = tokens.get("refresh_token")
+```
+
+The `tokens` kwarg on `find_or_create_oauth_user()` accepts the raw token dict from the OAuth exchange. Both fields are `String(2048)`, nullable.
+
+Tokens are refreshed (overwritten) on every login. Skrift does not auto-refresh expired tokens — apps must handle refresh themselves.
+
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `skrift/auth/` | Guards, roles, permissions |
 | `skrift/controllers/auth.py` | OAuth login/callback controller |
-| `skrift/db/models/user.py` | `User`, `OAuthAccount`, `Role` models |
+| `skrift/auth/oauth_account_service.py` | `find_or_create_oauth_user()` with token persistence |
+| `skrift/db/models/user.py` | `User`, `Role` models |
+| `skrift/db/models/oauth_account.py` | `OAuthAccount` model (`access_token`, `refresh_token` fields) |

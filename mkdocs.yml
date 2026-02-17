@@ -71,6 +71,7 @@ nav:
     - Markdown Content: guides/markdown-content.md
     - Protecting Routes: guides/protecting-routes.md
     - Observability: guides/observability.md
+    - Notifications: guides/notifications.md
   - Admin:
     - admin/index.md
     - Managing Pages: admin/managing-pages.md

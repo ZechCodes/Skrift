@@ -1,9 +1,11 @@
-"""Tests for the notification service group key feature."""
+"""Tests for the notification service group key feature and notification modes."""
 
 import pytest
 
 from skrift.lib.notifications import (
+    NotDismissibleError,
     Notification,
+    NotificationMode,
     NotificationService,
     dismiss_session_group,
     dismiss_user_group,
@@ -17,6 +19,202 @@ from skrift.lib.notifications import (
 def svc():
     """Create a fresh NotificationService for each test."""
     return NotificationService()
+
+
+class TestNotificationMode:
+    """Test the NotificationMode enum and its effect on Notification."""
+
+    def test_enum_values(self):
+        assert NotificationMode.QUEUED.value == "queued"
+        assert NotificationMode.TIMESERIES.value == "timeseries"
+        assert NotificationMode.EPHEMERAL.value == "ephemeral"
+
+    def test_default_mode_is_queued(self):
+        n = Notification(type="generic")
+        assert n.mode == NotificationMode.QUEUED
+
+    def test_to_dict_includes_mode(self):
+        n = Notification(type="generic")
+        d = n.to_dict()
+        assert d["mode"] == "queued"
+
+    def test_to_dict_includes_created_at(self):
+        n = Notification(type="generic")
+        d = n.to_dict()
+        assert "created_at" in d
+        assert isinstance(d["created_at"], float)
+
+    def test_to_dict_timeseries_mode(self):
+        n = Notification(type="generic", mode=NotificationMode.TIMESERIES)
+        d = n.to_dict()
+        assert d["mode"] == "timeseries"
+
+    def test_to_dict_ephemeral_mode(self):
+        n = Notification(type="generic", mode=NotificationMode.EPHEMERAL)
+        d = n.to_dict()
+        assert d["mode"] == "ephemeral"
+
+
+class TestEphemeralMode:
+    """Test that ephemeral notifications are not stored."""
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_not_stored_session(self, svc):
+        n = Notification(type="generic", mode=NotificationMode.EPHEMERAL, payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        queued = await svc.get_queued("s1", None)
+        assert len(queued) == 0
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_not_stored_user(self, svc):
+        n = Notification(type="generic", mode=NotificationMode.EPHEMERAL, payload={"msg": "hi"})
+        await svc.send_to_user("u1", n)
+
+        queued = await svc.get_queued("_none_", "u1")
+        assert len(queued) == 0
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_pushed_to_live_connections(self, svc):
+        q = svc.register_connection("s1", None)
+        n = Notification(type="generic", mode=NotificationMode.EPHEMERAL, payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        msg = q.get_nowait()
+        assert msg.id == n.id
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_not_in_get_since(self, svc):
+        n = Notification(type="generic", mode=NotificationMode.EPHEMERAL, payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        since = await svc.get_since("s1", None, 0.0)
+        assert len(since) == 0
+
+
+class TestTimeseriesMode:
+    """Test timeseries mode storage and retrieval."""
+
+    @pytest.mark.asyncio
+    async def test_timeseries_stored(self, svc):
+        n = Notification(type="generic", mode=NotificationMode.TIMESERIES, payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        # Stored but not returned by get_queued
+        queued = await svc.get_queued("s1", None)
+        assert len(queued) == 0
+
+    @pytest.mark.asyncio
+    async def test_timeseries_returned_by_get_since(self, svc):
+        n = Notification(type="generic", mode=NotificationMode.TIMESERIES, payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        since = await svc.get_since("s1", None, 0.0)
+        assert len(since) == 1
+        assert since[0].id == n.id
+
+    @pytest.mark.asyncio
+    async def test_timeseries_filtered_by_timestamp(self, svc):
+        import time
+
+        n1 = Notification(type="generic", mode=NotificationMode.TIMESERIES, payload={"msg": "old"})
+        n1.created_at = time.time() - 100  # 100 seconds ago
+        await svc.send_to_session("s1", n1)
+
+        cutoff = time.time() - 50
+
+        n2 = Notification(type="generic", mode=NotificationMode.TIMESERIES, payload={"msg": "new"})
+        await svc.send_to_session("s1", n2)
+
+        since = await svc.get_since("s1", None, cutoff)
+        assert len(since) == 1
+        assert since[0].id == n2.id
+
+    @pytest.mark.asyncio
+    async def test_timeseries_dismiss_raises(self, svc):
+        n = Notification(type="generic", mode=NotificationMode.TIMESERIES, payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        with pytest.raises(NotDismissibleError):
+            await svc.dismiss("s1", None, n.id)
+
+    @pytest.mark.asyncio
+    async def test_timeseries_user_scope(self, svc):
+        n = Notification(type="generic", mode=NotificationMode.TIMESERIES, payload={"msg": "hi"})
+        await svc.send_to_user("u1", n)
+
+        queued = await svc.get_queued("_none_", "u1")
+        assert len(queued) == 0
+
+        since = await svc.get_since("_none_", "u1", 0.0)
+        assert len(since) == 1
+        assert since[0].id == n.id
+
+
+class TestConvenienceFunctionsModeParam:
+    """Test that convenience functions forward mode correctly."""
+
+    @pytest.mark.asyncio
+    async def test_notify_session_mode_forwarded(self):
+        svc = NotificationService()
+
+        from skrift.lib import notifications as mod
+        original = mod.notifications
+        mod.notifications = svc
+        try:
+            n = await notify_session(
+                "s1", "generic", mode=NotificationMode.TIMESERIES, title="Hi"
+            )
+            assert n.mode == NotificationMode.TIMESERIES
+
+            # Should be in get_since, not get_queued
+            queued = await svc.get_queued("s1", None)
+            assert len(queued) == 0
+            since = await svc.get_since("s1", None, 0.0)
+            assert len(since) == 1
+        finally:
+            mod.notifications = original
+
+    @pytest.mark.asyncio
+    async def test_notify_user_mode_forwarded(self):
+        svc = NotificationService()
+
+        from skrift.lib import notifications as mod
+        original = mod.notifications
+        mod.notifications = svc
+        try:
+            n = await notify_user(
+                "u1", "generic", mode=NotificationMode.TIMESERIES, title="Hi"
+            )
+            assert n.mode == NotificationMode.TIMESERIES
+        finally:
+            mod.notifications = original
+
+    @pytest.mark.asyncio
+    async def test_notify_broadcast_is_ephemeral(self):
+        svc = NotificationService()
+
+        from skrift.lib import notifications as mod
+        original = mod.notifications
+        mod.notifications = svc
+        try:
+            n = await notify_broadcast("generic", title="Hi")
+            assert n.mode == NotificationMode.EPHEMERAL
+        finally:
+            mod.notifications = original
+
+    @pytest.mark.asyncio
+    async def test_notify_session_default_mode_queued(self):
+        svc = NotificationService()
+
+        from skrift.lib import notifications as mod
+        original = mod.notifications
+        mod.notifications = svc
+        try:
+            n = await notify_session("s1", "generic", title="Hi")
+            assert n.mode == NotificationMode.QUEUED
+        finally:
+            mod.notifications = original
 
 
 class TestNotificationGroupField:

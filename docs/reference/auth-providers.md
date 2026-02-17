@@ -311,6 +311,38 @@ value = extract_metadata_field(metadata, "missing", "field", default="N/A")
 # Returns: "N/A"
 ```
 
+## OAuth Token Storage
+
+After each successful login, Skrift persists the provider's `access_token` and `refresh_token` on the `OAuthAccount` record. Tokens are updated on every login, so they stay current as long as the user continues to sign in.
+
+### Retrieving Tokens
+
+Use the `oauth_account_service` to look up a user's tokens:
+
+```python
+from skrift.db.services import oauth_service
+
+# Get the OAuthAccount for a specific provider
+account = await oauth_service.get_by_user_and_provider(db_session, user.id, "github")
+if account and account.access_token:
+    # Make an API call on behalf of the user
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://api.github.com/user/repos",
+            headers={"Authorization": f"Bearer {account.access_token}"},
+        )
+```
+
+### Token Details
+
+| Field | Type | Max Length | Notes |
+|-------|------|-----------|-------|
+| `access_token` | `str \| None` | 2048 chars | Set on every login |
+| `refresh_token` | `str \| None` | 2048 chars | Set on every login (if provider returns one) |
+
+!!! note
+    Tokens are stored as plain strings. Skrift does **not** automatically refresh expired tokens — if your application needs long-lived access, you are responsible for using the `refresh_token` to obtain new tokens from the provider.
+
 ## Routes
 
 Each provider gets these routes automatically:
