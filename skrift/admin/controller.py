@@ -12,7 +12,6 @@ from skrift.admin.helpers import get_admin_context
 from skrift.lib.flash import get_flash_messages
 
 # Re-export split controllers for convenient registration
-from skrift.admin.pages import PageAdminController  # noqa: F401
 from skrift.admin.users import UserAdminController  # noqa: F401
 from skrift.admin.settings import SettingsAdminController  # noqa: F401
 

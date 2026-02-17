@@ -1,12 +1,23 @@
 """SEO utilities for generating page metadata."""
 
 from dataclasses import dataclass
+from html import escape
 from typing import TYPE_CHECKING
+
+from markupsafe import Markup
 
 from skrift.lib.hooks import hooks, PAGE_SEO_META, PAGE_OG_META
 
 if TYPE_CHECKING:
     from skrift.db.models import Page
+
+
+def _meta_tag(name: str, content: str) -> str:
+    return f'<meta name="{escape(name)}" content="{escape(content)}">'
+
+
+def _og_tag(prop: str, content: str) -> str:
+    return f'<meta property="{escape(prop)}" content="{escape(content)}">'
 
 
 @dataclass
@@ -17,6 +28,16 @@ class SEOMeta:
     description: str | None
     canonical_url: str
     robots: str | None
+
+    def __html__(self) -> str:
+        parts: list[str] = []
+        if self.description:
+            parts.append(_meta_tag("description", self.description))
+        if self.robots:
+            parts.append(_meta_tag("robots", self.robots))
+        if self.canonical_url:
+            parts.append(f'<link rel="canonical" href="{escape(self.canonical_url)}">')
+        return Markup("\n    ".join(parts))
 
 
 @dataclass
@@ -29,6 +50,19 @@ class OpenGraphMeta:
     url: str
     site_name: str
     type: str = "website"
+
+    def __html__(self) -> str:
+        parts = [
+            _og_tag("og:title", self.title),
+            _og_tag("og:type", self.type),
+            _og_tag("og:url", self.url),
+            _og_tag("og:site_name", self.site_name),
+        ]
+        if self.description:
+            parts.append(_og_tag("og:description", self.description))
+        if self.image:
+            parts.append(_og_tag("og:image", self.image))
+        return Markup("\n    ".join(parts))
 
 
 async def get_page_seo_meta(

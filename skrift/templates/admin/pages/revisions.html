@@ -9,7 +9,7 @@
 </hgroup>
 
 <div class="sk-form-actions" style="margin-bottom: 1rem;">
-    <a href="/admin/pages/{{ page.id }}/edit" role="button" class="sk-btn-outline">&larr; Back to Edit</a>
+    <a href="{{ admin_type_base }}/{{ page.id }}/edit" role="button" class="sk-btn-outline">&larr; Back to Edit</a>
 </div>
 
 {% if revisions %}
@@ -37,7 +37,7 @@
             </td>
             <td>{{ revision.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
             <td class="sk-actions-cell">
-                <form method="post" action="/admin/pages/{{ page.id }}/revisions/{{ revision.id }}/restore" class="sk-inline-form" onsubmit="return confirm('Restore to revision #{{ revision.revision_number }}? This will create a new revision of the current state first.');">
+                <form method="post" action="{{ admin_type_base }}/{{ page.id }}/revisions/{{ revision.id }}/restore" class="sk-inline-form" onsubmit="return confirm('Restore to revision #{{ revision.revision_number }}? This will create a new revision of the current state first.');">
                     <button type="submit" class="sk-btn-outline sk-btn-small">Restore</button>
                 </form>
             </td>
@@ -46,7 +46,7 @@
     </tbody>
 </table>
 {% else %}
-<p class="sk-no-items">No revisions yet. Revisions are created when you save changes to a page.</p>
+<p class="sk-no-items">No revisions yet. Revisions are created when you save changes to a {{ page_type_name }}.</p>
 {% endif %}
 
 <details style="margin-top: 2rem;">

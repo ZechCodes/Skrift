@@ -141,10 +141,21 @@ def load_controllers() -> list:
 
         # Auto-expand AdminController to include split sub-controllers
         if class_name == "AdminController" and module_path == "skrift.admin.controller":
-            for sub_name in ("PageAdminController", "UserAdminController", "SettingsAdminController"):
+            for sub_name in ("UserAdminController", "SettingsAdminController"):
                 sub_class = getattr(module, sub_name, None)
                 if sub_class and sub_class not in controllers:
                     controllers.append(sub_class)
+
+            # Generate dynamic per-type page admin controllers
+            from skrift.config import load_page_types_from_yaml
+            from skrift.admin.page_type_factory import create_page_type_controller
+            from skrift.auth.roles import expand_roles_for_page_types
+
+            page_types = load_page_types_from_yaml()
+            expand_roles_for_page_types(page_types)
+
+            for pt in page_types:
+                controllers.append(create_page_type_controller(pt))
 
     return controllers
 
