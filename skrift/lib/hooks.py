@@ -307,3 +307,5 @@ LOGFIRE_CONFIGURED = "logfire_configured"
 # Notification hooks
 NOTIFICATION_SENT = "notification_sent"
 NOTIFICATION_DISMISSED = "notification_dismissed"
+NOTIFICATION_PRE_SEND = "notification_pre_send"
+WEBHOOK_NOTIFICATION_RECEIVED = "webhook_notification_received"

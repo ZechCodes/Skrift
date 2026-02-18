@@ -2,6 +2,7 @@
 
 import pytest
 
+from skrift.lib.hooks import hooks, NOTIFICATION_PRE_SEND, NOTIFICATION_SENT, NOTIFICATION_DISMISSED
 from skrift.lib.notifications import (
     NotDismissibleError,
     Notification,
@@ -593,3 +594,226 @@ class TestDismissGroupConvenience:
             assert await dismiss_user_group("u1", "nope") is False
         finally:
             mod.notifications = original
+
+
+class TestNotificationHooks:
+    """Test hook integration in the notification service."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_hooks(self):
+        hooks.clear()
+        yield
+        hooks.clear()
+
+    @pytest.fixture
+    def svc(self):
+        return NotificationService()
+
+    # --- NOTIFICATION_PRE_SEND filter ---
+
+    @pytest.mark.asyncio
+    async def test_filter_can_modify_notification_session(self, svc):
+        async def modify(notification, scope, scope_id):
+            notification.payload["injected"] = True
+            return notification
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, modify)
+
+        n = Notification(type="generic", payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        queued = await svc.get_queued("s1", None)
+        assert len(queued) == 1
+        assert queued[0].payload["injected"] is True
+
+    @pytest.mark.asyncio
+    async def test_filter_can_modify_notification_user(self, svc):
+        async def modify(notification, scope, scope_id):
+            notification.payload["injected"] = True
+            return notification
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, modify)
+
+        n = Notification(type="generic", payload={"msg": "hi"})
+        await svc.send_to_user("u1", n)
+
+        queued = await svc.get_queued("_none_", "u1")
+        assert len(queued) == 1
+        assert queued[0].payload["injected"] is True
+
+    @pytest.mark.asyncio
+    async def test_filter_can_modify_notification_broadcast(self, svc):
+        async def modify(notification, scope, scope_id):
+            notification.payload["injected"] = True
+            return notification
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, modify)
+
+        q = svc.register_connection("s1", None)
+        n = Notification(type="generic", mode=NotificationMode.EPHEMERAL, payload={"msg": "hi"})
+        await svc.broadcast(n)
+
+        msg = q.get_nowait()
+        assert msg.payload["injected"] is True
+
+    @pytest.mark.asyncio
+    async def test_filter_returning_none_suppresses_session(self, svc):
+        async def suppress(notification, scope, scope_id):
+            return None
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, suppress)
+
+        q = svc.register_connection("s1", None)
+        n = Notification(type="generic", payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        assert await svc.get_queued("s1", None) == []
+        assert q.empty()
+
+    @pytest.mark.asyncio
+    async def test_filter_returning_none_suppresses_user(self, svc):
+        async def suppress(notification, scope, scope_id):
+            return None
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, suppress)
+
+        n = Notification(type="generic", payload={"msg": "hi"})
+        await svc.send_to_user("u1", n)
+
+        assert await svc.get_queued("_none_", "u1") == []
+
+    @pytest.mark.asyncio
+    async def test_filter_returning_none_suppresses_broadcast(self, svc):
+        async def suppress(notification, scope, scope_id):
+            return None
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, suppress)
+
+        q = svc.register_connection("s1", None)
+        n = Notification(type="generic", mode=NotificationMode.EPHEMERAL, payload={"msg": "hi"})
+        await svc.broadcast(n)
+
+        assert q.empty()
+
+    @pytest.mark.asyncio
+    async def test_filter_receives_correct_scope_session(self, svc):
+        received = []
+
+        async def capture(notification, scope, scope_id):
+            received.append((scope, scope_id))
+            return notification
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, capture)
+
+        await svc.send_to_session("sess-42", Notification(type="generic"))
+        assert received == [("session", "sess-42")]
+
+    @pytest.mark.asyncio
+    async def test_filter_receives_correct_scope_user(self, svc):
+        received = []
+
+        async def capture(notification, scope, scope_id):
+            received.append((scope, scope_id))
+            return notification
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, capture)
+
+        await svc.send_to_user("user-99", Notification(type="generic"))
+        assert received == [("user", "user-99")]
+
+    @pytest.mark.asyncio
+    async def test_filter_receives_correct_scope_broadcast(self, svc):
+        received = []
+
+        async def capture(notification, scope, scope_id):
+            received.append((scope, scope_id))
+            return notification
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, capture)
+
+        await svc.broadcast(Notification(type="generic", mode=NotificationMode.EPHEMERAL))
+        assert received == [("broadcast", None)]
+
+    # --- NOTIFICATION_SENT action ---
+
+    @pytest.mark.asyncio
+    async def test_sent_action_fires_session(self, svc):
+        fired = []
+
+        async def on_sent(notification, scope, scope_id):
+            fired.append((notification.type, scope, scope_id))
+
+        hooks.add_action(NOTIFICATION_SENT, on_sent)
+
+        await svc.send_to_session("s1", Notification(type="deploy"))
+        assert fired == [("deploy", "session", "s1")]
+
+    @pytest.mark.asyncio
+    async def test_sent_action_fires_user(self, svc):
+        fired = []
+
+        async def on_sent(notification, scope, scope_id):
+            fired.append((notification.type, scope, scope_id))
+
+        hooks.add_action(NOTIFICATION_SENT, on_sent)
+
+        await svc.send_to_user("u1", Notification(type="alert"))
+        assert fired == [("alert", "user", "u1")]
+
+    @pytest.mark.asyncio
+    async def test_sent_action_fires_broadcast(self, svc):
+        fired = []
+
+        async def on_sent(notification, scope, scope_id):
+            fired.append((notification.type, scope, scope_id))
+
+        hooks.add_action(NOTIFICATION_SENT, on_sent)
+
+        await svc.broadcast(Notification(type="maintenance", mode=NotificationMode.EPHEMERAL))
+        assert fired == [("maintenance", "broadcast", None)]
+
+    @pytest.mark.asyncio
+    async def test_sent_action_does_not_fire_when_suppressed(self, svc):
+        async def suppress(notification, scope, scope_id):
+            return None
+
+        hooks.add_filter(NOTIFICATION_PRE_SEND, suppress)
+
+        fired = []
+
+        async def on_sent(notification, scope, scope_id):
+            fired.append(True)
+
+        hooks.add_action(NOTIFICATION_SENT, on_sent)
+
+        await svc.send_to_session("s1", Notification(type="deploy"))
+        assert fired == []
+
+    # --- NOTIFICATION_DISMISSED action ---
+
+    @pytest.mark.asyncio
+    async def test_dismissed_action_fires(self, svc):
+        fired = []
+
+        async def on_dismissed(notification_id):
+            fired.append(notification_id)
+
+        hooks.add_action(NOTIFICATION_DISMISSED, on_dismissed)
+
+        n = Notification(type="generic", payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        await svc.dismiss("s1", None, n.id)
+        assert fired == [n.id]
+
+    @pytest.mark.asyncio
+    async def test_dismissed_action_does_not_fire_when_not_found(self, svc):
+        fired = []
+
+        async def on_dismissed(notification_id):
+            fired.append(notification_id)
+
+        hooks.add_action(NOTIFICATION_DISMISSED, on_dismissed)
+
+        await svc.dismiss("s1", None, group="nonexistent")
+        assert fired == []

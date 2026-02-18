@@ -149,8 +149,10 @@ result = await hooks.apply_filters("my_filter", initial_value, extra_arg)
 
 | Hook | Type | Arguments | Description |
 |------|------|-----------|-------------|
-| `notification_sent` | Action | `notification` | After a notification is sent |
-| `notification_dismissed` | Action | `notification` | After a notification is dismissed |
+| `notification_pre_send` | Filter | `notification`, `scope`, `scope_id` | Before a notification is stored/broadcast — return `None` to suppress |
+| `notification_sent` | Action | `notification`, `scope`, `scope_id` | After a notification is sent |
+| `notification_dismissed` | Action | `notification_id` | After a notification is dismissed |
+| `webhook_notification_received` | Action | `notification`, `target_type`, `scope_id` | After an external webhook notification is received |
 
 ### Form Hooks
 
@@ -281,6 +283,8 @@ from skrift.lib.hooks import (
     FORM_VALIDATED,
     NOTIFICATION_SENT,
     NOTIFICATION_DISMISSED,
+    NOTIFICATION_PRE_SEND,
+    WEBHOOK_NOTIFICATION_RECEIVED,
 )
 ```
 
