@@ -265,6 +265,7 @@ class NotificationsConfig(BaseModel):
     """Notification backend configuration."""
 
     backend: str = ""  # empty = InMemoryBackend; or "module:ClassName" import string
+    webhook_secret: str = ""  # empty = webhook disabled
 
 
 class AuthConfig(BaseModel):

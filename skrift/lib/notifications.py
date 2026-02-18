@@ -22,6 +22,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+from skrift.lib.hooks import hooks, NOTIFICATION_PRE_SEND, NOTIFICATION_SENT, NOTIFICATION_DISMISSED
+
 if TYPE_CHECKING:
     from skrift.lib.notification_backends import NotificationBackend
 
@@ -84,6 +86,10 @@ class NotificationService:
 
     async def send_to_session(self, nid: str, notification: Notification) -> None:
         """Store a notification in the session queue and push to active connections."""
+        notification = await hooks.apply_filters(NOTIFICATION_PRE_SEND, notification, "session", nid)
+        if notification is None:
+            return
+
         backend = self._get_backend()
 
         if notification.mode != NotificationMode.EPHEMERAL:
@@ -111,8 +117,14 @@ class NotificationService:
             "n": notification.to_dict(),
         })
 
+        await hooks.do_action(NOTIFICATION_SENT, notification, "session", nid)
+
     async def send_to_user(self, user_id: str, notification: Notification) -> None:
         """Store a notification in the user queue and push to all connections for this user."""
+        notification = await hooks.apply_filters(NOTIFICATION_PRE_SEND, notification, "user", user_id)
+        if notification is None:
+            return
+
         backend = self._get_backend()
 
         if notification.mode != NotificationMode.EPHEMERAL:
@@ -146,8 +158,14 @@ class NotificationService:
             "n": notification.to_dict(),
         })
 
+        await hooks.do_action(NOTIFICATION_SENT, notification, "user", user_id)
+
     async def broadcast(self, notification: Notification) -> None:
         """Push an ephemeral notification to ALL active connections. Not stored — won't replay on reconnect."""
+        notification = await hooks.apply_filters(NOTIFICATION_PRE_SEND, notification, "broadcast", None)
+        if notification is None:
+            return
+
         for queues in self._connections.values():
             for q in queues:
                 q.put_nowait(notification)
@@ -156,6 +174,8 @@ class NotificationService:
             "a": "b",
             "n": notification.to_dict(),
         })
+
+        await hooks.do_action(NOTIFICATION_SENT, notification, "broadcast", None)
 
     async def dismiss(
         self,
@@ -238,6 +258,8 @@ class NotificationService:
                 "uid": user_id,
                 "nid": str(dismissed_id),
             })
+
+            await hooks.do_action(NOTIFICATION_DISMISSED, dismissed_id)
 
         return dismissed_id is not None
 

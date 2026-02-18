@@ -619,9 +619,18 @@ def create_app() -> Litestar:
     template_config = create_template_config(template_dirs, engine_callback)
 
     from skrift.controllers.notifications import NotificationsController
+    from skrift.controllers.notification_webhook import NotificationsWebhookController
     from skrift.auth import sync_roles_to_database
     from skrift.lib.notification_backends import InMemoryBackend, load_backend
     from skrift.lib.notifications import notifications as notification_service
+
+    # Webhook controller — only registered when a secret is configured
+    webhook_handlers: list = []
+    if settings.notifications.webhook_secret:
+        webhook_handlers.append(NotificationsWebhookController)
+        # Exempt webhook from CSRF since it uses bearer-token auth
+        if settings.csrf is not None:
+            settings.csrf.exclude.append("/notifications/webhook")
 
     # Notification backend setup
     if settings.notifications.backend:
@@ -656,7 +665,7 @@ def create_app() -> Litestar:
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
-        route_handlers=[NotificationsController, *controllers],
+        route_handlers=[NotificationsController, *webhook_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
@@ -665,6 +674,7 @@ def create_app() -> Litestar:
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
+    app.state.webhook_secret = settings.notifications.webhook_secret
     from skrift.middleware.static import StaticFilesMiddleware
     return StaticFilesMiddleware(
         observability.instrument_app(app),
