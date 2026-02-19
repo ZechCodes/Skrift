@@ -7,6 +7,7 @@ from litestar.response import Template as TemplateResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.db.models.user import User
 from skrift.db.services import page_service
 from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url, get_cached_site_theme
@@ -24,7 +25,7 @@ class WebController(Controller):
         self, request: "Request", db_session: AsyncSession
     ) -> dict:
         """Get user data for template context if logged in."""
-        user_id = request.session.get("user_id")
+        user_id = request.session.get(SESSION_USER_ID)
         if not user_id:
             return {"user": None}
 
@@ -67,7 +68,7 @@ class WebController(Controller):
 
         # Fetch page from database
         page = await page_service.get_page_by_slug(
-            db_session, page_slug, published_only=not request.session.get("user_id")
+            db_session, page_slug, published_only=not request.session.get(SESSION_USER_ID)
         )
         if not page:
             raise NotFoundException(f"Page '{path}' not found")

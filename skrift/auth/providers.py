@@ -114,14 +114,11 @@ class GoogleProvider(OAuthProvider):
 
 class GitHubProvider(OAuthProvider):
     async def fetch_user_info(self, access_token: str) -> dict:
-        headers = {"Authorization": f"Bearer {access_token}"}
-        async with httpx.AsyncClient() as client:
-            response = await client.get(self.provider_info.userinfo_url, headers=headers)
-            if response.status_code != 200:
-                raise HTTPException(status_code=400, detail="Failed to fetch user info")
-            user_info = response.json()
+        user_info = await super().fetch_user_info(access_token)
 
-            if not user_info.get("email"):
+        if not user_info.get("email"):
+            headers = {"Authorization": f"Bearer {access_token}"}
+            async with httpx.AsyncClient() as client:
                 email_response = await client.get(
                     "https://api.github.com/user/emails", headers=headers
                 )
@@ -133,7 +130,7 @@ class GitHubProvider(OAuthProvider):
                     if primary_email:
                         user_info["email"] = primary_email
 
-            return user_info
+        return user_info
 
     def extract_user_data(self, user_info: dict) -> NormalizedUserData:
         return NormalizedUserData(
@@ -199,6 +196,8 @@ class TwitterProvider(OAuthProvider):
 
     def build_token_data(self, client_id, client_secret, code, redirect_uri, code_verifier=None):
         data = super().build_token_data(client_id, client_secret, code, redirect_uri, code_verifier)
+        # Twitter uses Basic auth — client_secret goes in the header, not the POST body
+        data.pop("client_secret", None)
         if code_verifier:
             data["code_verifier"] = code_verifier
         return data
@@ -213,20 +212,14 @@ class TwitterProvider(OAuthProvider):
         return headers
 
     async def fetch_user_info(self, access_token: str) -> dict:
-        headers = {"Authorization": f"Bearer {access_token}"}
-        async with httpx.AsyncClient() as client:
-            response = await client.get(self.provider_info.userinfo_url, headers=headers)
-            if response.status_code != 200:
-                raise HTTPException(status_code=400, detail="Failed to fetch user info")
-            user_info = response.json()
-
-            data = user_info.get("data", {})
-            return {
-                "id": data.get("id"),
-                "name": data.get("name"),
-                "username": data.get("username"),
-                "email": None,
-            }
+        user_info = await super().fetch_user_info(access_token)
+        data = user_info.get("data", {})
+        return {
+            "id": data.get("id"),
+            "name": data.get("name"),
+            "username": data.get("username"),
+            "email": None,
+        }
 
     def extract_user_data(self, user_info: dict) -> NormalizedUserData:
         return NormalizedUserData(

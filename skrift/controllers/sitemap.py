@@ -23,6 +23,11 @@ class SitemapEntry:
     priority: float | None = None
 
 
+def _get_base_url(request: Request) -> str:
+    """Get the site base URL from settings or fall back to request."""
+    return get_cached_site_base_url() or str(request.base_url).rstrip("/")
+
+
 class SitemapController(Controller):
     """Controller for sitemap.xml and robots.txt."""
 
@@ -33,7 +38,7 @@ class SitemapController(Controller):
         self, request: Request, db_session: AsyncSession
     ) -> Response:
         """Generate sitemap.xml with published pages."""
-        base_url = get_cached_site_base_url() or str(request.base_url).rstrip("/")
+        base_url = _get_base_url(request)
 
         # Get all published pages (respects scheduling)
         pages = await page_service.list_pages(db_session, published_only=True)
@@ -97,7 +102,7 @@ class SitemapController(Controller):
         self, request: Request, db_session: AsyncSession
     ) -> Response:
         """Generate robots.txt with sitemap reference."""
-        base_url = get_cached_site_base_url() or str(request.base_url).rstrip("/")
+        base_url = _get_base_url(request)
         sitemap_url = f"{base_url}/sitemap.xml"
 
         content = f"""User-agent: *

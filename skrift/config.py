@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load .env file early so env vars are available for YAML interpolation
@@ -148,6 +148,7 @@ class DatabaseConfig(BaseModel):
     pool_timeout: int = 30
     pool_pre_ping: bool = True  # Validate connections before use
     echo: bool = False
+    db_schema: str | None = Field(default=None, validation_alias="schema")
 
 
 class OAuthProviderConfig(BaseModel):

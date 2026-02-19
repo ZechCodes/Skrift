@@ -1,0 +1,10 @@
+"""Session key constants for auth-related session data."""
+
+SESSION_USER_ID = "user_id"
+SESSION_USER_NAME = "user_name"
+SESSION_USER_EMAIL = "user_email"
+SESSION_USER_PICTURE_URL = "user_picture_url"
+SESSION_AUTH_NEXT = "auth_next"
+SESSION_OAUTH_STATE = "oauth_state"
+SESSION_OAUTH_PROVIDER = "oauth_provider"
+SESSION_OAUTH_CODE_VERIFIER = "oauth_code_verifier"

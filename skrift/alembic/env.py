@@ -57,6 +57,15 @@ def get_url() -> str:
         return config.get_main_option("sqlalchemy.url", "")
 
 
+def get_schema() -> str | None:
+    """Get database schema from settings, if configured."""
+    try:
+        settings = get_settings()
+        return settings.db.db_schema
+    except Exception:
+        return None
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
@@ -64,11 +73,18 @@ def run_migrations_offline() -> None:
     Calls to context.execute() emit the SQL to the script output.
     """
     url = get_url()
+    schema = get_schema()
+
+    if schema:
+        Base.metadata.schema = schema
+
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=bool(schema),
+        version_table_schema=schema,
     )
 
     with context.begin_transaction():
@@ -77,7 +93,17 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     """Run migrations within a connection context."""
-    context.configure(connection=connection, target_metadata=target_metadata)
+    schema = get_schema()
+
+    if schema:
+        Base.metadata.schema = schema
+
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_schemas=bool(schema),
+        version_table_schema=schema,
+    )
 
     with context.begin_transaction():
         context.run_migrations()

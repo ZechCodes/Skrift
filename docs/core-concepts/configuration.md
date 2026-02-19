@@ -97,7 +97,40 @@ db:
   echo: true                          # Log SQL (dev only)
   pool_size: 5                        # Connection pool
   pool_overflow: 10                   # Extra connections allowed
+  schema: myschema                    # PostgreSQL schema (optional)
 ```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `url` | Database connection string | `sqlite+aiosqlite:///./app.db` |
+| `echo` | Log SQL queries | `false` |
+| `pool_size` | Base connection pool size | `5` |
+| `pool_overflow` | Extra connections beyond pool_size | `10` |
+| `pool_timeout` | Seconds to wait for a connection | `30` |
+| `pool_pre_ping` | Validate connections before use | `true` |
+| `schema` | PostgreSQL schema for all tables | `null` (default schema) |
+
+#### Database Schemas
+
+PostgreSQL supports schemas to isolate tables within a single database. This is useful for multi-tenant setups or separating environments (e.g., `staging` and `production` sharing one database).
+
+```yaml
+# Production (app.yaml) — tables in "app" schema
+db:
+  url: $DATABASE_URL
+  schema: app
+```
+
+When `schema` is set, SQLAlchemy prefixes all table references with the schema name (e.g., `app.users`, `app.pages`) and Alembic migrations target the correct schema.
+
+!!! warning "SQLite does not support schemas"
+    If you set `schema` with a SQLite database URL, Skrift fails at startup with a clear error. Use `app.dev.yaml` to override the database config for local development without a schema:
+
+    ```yaml
+    # Development (app.dev.yaml) — no schema needed
+    db:
+      url: sqlite+aiosqlite:///./dev.db
+    ```
 
 ### Authentication
 
