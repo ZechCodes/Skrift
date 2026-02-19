@@ -1,13 +1,15 @@
-"""Pytest fixtures for middleware loading tests."""
+"""Shared pytest fixtures."""
 
 import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
+
+from skrift.lib.hooks import hooks
 
 
 @pytest.fixture
@@ -40,3 +42,27 @@ def clean_sys_path():
     original_path = sys.path.copy()
     yield
     sys.path = original_path
+
+
+@pytest.fixture
+def clean_hooks():
+    """Save and restore hooks state around a test."""
+    original_filters = hooks._filters.copy()
+    original_actions = hooks._actions.copy()
+    yield
+    hooks._filters = original_filters
+    hooks._actions = original_actions
+
+
+@pytest.fixture
+def mock_request_factory():
+    """Factory fixture that returns mock requests with a session dict."""
+    def _make(session=None, form_data=None):
+        request = MagicMock()
+        request.session = session if session is not None else {}
+        if form_data is not None:
+            async def _form():
+                return form_data
+            request.form = _form
+        return request
+    return _make

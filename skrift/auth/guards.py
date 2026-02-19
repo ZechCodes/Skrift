@@ -9,6 +9,8 @@ from litestar.connection import ASGIConnection
 from litestar.exceptions import NotAuthorizedException
 from litestar.handlers import BaseRouteHandler
 
+from skrift.auth.session_keys import SESSION_USER_ID
+
 if TYPE_CHECKING:
     from skrift.auth.services import UserPermissions
 
@@ -122,7 +124,7 @@ async def auth_guard(
     from skrift.auth.services import get_user_permissions
 
     # Get user_id from session
-    user_id = connection.session.get("user_id") if connection.session else None
+    user_id = connection.session.get(SESSION_USER_ID) if connection.session else None
 
     if not user_id:
         raise NotAuthorizedException("Authentication required")

@@ -24,7 +24,7 @@ from skrift.auth.roles import ROLE_DEFINITIONS
 from skrift.admin.helpers import get_admin_context
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.db.models.user import User
-from skrift.lib.flash import get_flash_messages
+from skrift.lib.flash import flash_error, flash_success, get_flash_messages
 
 
 class UserAdminController(Controller):
@@ -117,7 +117,7 @@ class UserAdminController(Controller):
         )
         target_user = result.scalar_one_or_none()
         if not target_user:
-            request.session["flash"] = "User not found"
+            flash_error(request, "User not found")
             return Redirect(path="/admin/users")
 
         current_roles = {role.name for role in target_user.roles}
@@ -130,5 +130,5 @@ class UserAdminController(Controller):
 
         invalidate_user_permissions_cache(user_id)
 
-        request.session["flash"] = f"Roles updated for {target_user.name or target_user.email}"
+        flash_success(request, f"Roles updated for {target_user.name or target_user.email}")
         return Redirect(path="/admin/users")

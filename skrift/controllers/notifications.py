@@ -9,6 +9,7 @@ from litestar import Controller, Request, delete, get
 from litestar.response import Response
 from litestar.response.sse import ServerSentEvent, ServerSentEventMessage
 
+from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.lib.notifications import NotDismissibleError, _ensure_nid, notifications
 
 
@@ -19,7 +20,7 @@ class NotificationsController(Controller):
     async def stream(self, request: Request) -> ServerSentEvent:
         """SSE endpoint that streams notifications to the client."""
         nid = _ensure_nid(request)
-        user_id = request.session.get("user_id")
+        user_id = request.session.get(SESSION_USER_ID)
 
         since_raw = request.query_params.get("since")
         since: float | None = None
@@ -62,44 +63,29 @@ class NotificationsController(Controller):
 
         return ServerSentEvent(generate())
 
-    @delete("/{notification_id:uuid}", status_code=200)
-    async def dismiss(
-        self, request: Request, notification_id: UUID
+    async def _dismiss(
+        self, request: Request, *, notification_id: UUID | None = None, group: str | None = None
     ) -> Response:
-        """Dismiss a notification by ID."""
+        """Shared dismiss logic for by-ID and by-group endpoints."""
         nid = _ensure_nid(request)
-        user_id = request.session.get("user_id")
+        user_id = request.session.get(SESSION_USER_ID)
         try:
-            found = await notifications.dismiss(nid, user_id, notification_id)
+            found = await notifications.dismiss(nid, user_id, notification_id, group=group)
         except NotDismissibleError:
             return Response(
                 content={"error": "notification is not dismissible"}, status_code=409
             )
         if found:
-            return Response(
-                content={"dismissed": str(notification_id)}, status_code=200
-            )
-        return Response(
-            content={"error": "not found"}, status_code=404
-        )
+            payload = {"dismissed": str(notification_id)} if notification_id else {"dismissed_group": group}
+            return Response(content=payload, status_code=200)
+        return Response(content={"error": "not found"}, status_code=404)
+
+    @delete("/{notification_id:uuid}", status_code=200)
+    async def dismiss(self, request: Request, notification_id: UUID) -> Response:
+        """Dismiss a notification by ID."""
+        return await self._dismiss(request, notification_id=notification_id)
 
     @delete("/group/{group:str}", status_code=200)
-    async def dismiss_group(
-        self, request: Request, group: str
-    ) -> Response:
+    async def dismiss_group(self, request: Request, group: str) -> Response:
         """Dismiss a notification by group key."""
-        nid = _ensure_nid(request)
-        user_id = request.session.get("user_id")
-        try:
-            found = await notifications.dismiss(nid, user_id, group=group)
-        except NotDismissibleError:
-            return Response(
-                content={"error": "notification is not dismissible"}, status_code=409
-            )
-        if found:
-            return Response(
-                content={"dismissed_group": group}, status_code=200
-            )
-        return Response(
-            content={"error": "not found"}, status_code=404
-        )
+        return await self._dismiss(request, group=group)

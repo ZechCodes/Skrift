@@ -12,10 +12,9 @@ import asyncio
 import importlib
 import json
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from skrift.lib.notifications import Notification, NotificationMode
 
@@ -50,7 +49,7 @@ class NotificationBackend(Protocol):
 
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
-    async def store(self, scope: str, scope_id: str, notification: Notification) -> None: ...
+    async def store(self, scope: str, scope_id: str, notification: Notification) -> UUID | None: ...
     async def remove(self, notification_id: UUID) -> None: ...
     async def remove_by_group(self, scope: str, scope_id: str, group: str) -> UUID | None: ...
     async def get_queued(self, scope: str, scope_id: str) -> list[Notification]: ...
@@ -68,20 +67,25 @@ class InMemoryBackend:
         self._user_queues: dict[str, dict[UUID, Notification]] = {}
         self._callback: Callable[[dict], Any] | None = None
 
+    def _get_queues(self, scope: str) -> dict[str, dict[UUID, Notification]]:
+        return self._session_queues if scope == "session" else self._user_queues
+
     async def start(self) -> None:
         pass
 
     async def stop(self) -> None:
         pass
 
-    async def store(self, scope: str, scope_id: str, notification: Notification) -> None:
-        queues = self._session_queues if scope == "session" else self._user_queues
+    async def store(self, scope: str, scope_id: str, notification: Notification) -> UUID | None:
+        queues = self._get_queues(scope)
+        old_id: UUID | None = None
         if notification.group:
             q = queues.get(scope_id, {})
             old = self._dismiss_by_group(q, notification.group)
             if old is not None:
-                return  # caller handles dismissed event push via returned old id
+                old_id = old.id
         queues.setdefault(scope_id, {})[notification.id] = notification
+        return old_id
 
     async def remove(self, notification_id: UUID) -> None:
         for queues in (self._session_queues, self._user_queues):
@@ -91,13 +95,13 @@ class InMemoryBackend:
                     return
 
     async def remove_by_group(self, scope: str, scope_id: str, group: str) -> UUID | None:
-        queues = self._session_queues if scope == "session" else self._user_queues
+        queues = self._get_queues(scope)
         q = queues.get(scope_id, {})
         old = self._dismiss_by_group(q, group)
         return old.id if old else None
 
     async def get_queued(self, scope: str, scope_id: str) -> list[Notification]:
-        queues = self._session_queues if scope == "session" else self._user_queues
+        queues = self._get_queues(scope)
         q = queues.get(scope_id, {})
         return sorted(
             (n for n in q.values() if n.mode == NotificationMode.QUEUED),
@@ -105,7 +109,7 @@ class InMemoryBackend:
         )
 
     async def get_since(self, scope: str, scope_id: str, since: float) -> list[Notification]:
-        queues = self._session_queues if scope == "session" else self._user_queues
+        queues = self._get_queues(scope)
         q = queues.get(scope_id, {})
         return sorted(
             (n for n in q.values() if n.mode == NotificationMode.TIMESERIES and n.created_at > since),
@@ -113,7 +117,7 @@ class InMemoryBackend:
         )
 
     async def get_mode(self, notification_id: UUID) -> str | None:
-        notif = self.find_by_id(notification_id)
+        notif = self._find_by_id(notification_id)
         return notif.mode.value if notif else None
 
     async def publish(self, message: dict) -> None:
@@ -122,65 +126,12 @@ class InMemoryBackend:
     def on_remote_message(self, callback: Callable[[dict], Any]) -> None:
         self._callback = callback
 
-    # -- InMemory-specific helpers used by NotificationService --
-
-    def find_by_id(self, notification_id: UUID) -> Notification | None:
+    def _find_by_id(self, notification_id: UUID) -> Notification | None:
         for queues in (self._session_queues, self._user_queues):
             for q in queues.values():
                 if notification_id in q:
                     return q[notification_id]
         return None
-
-    def get_session_queue(self, nid: str) -> dict[UUID, Notification]:
-        return self._session_queues.get(nid, {})
-
-    def get_user_queue(self, user_id: str) -> dict[UUID, Notification]:
-        return self._user_queues.get(user_id, {})
-
-    def store_sync(self, scope: str, scope_id: str, notification: Notification) -> Notification | None:
-        """Synchronous store that returns the old notification if group-replaced."""
-        queues = self._session_queues if scope == "session" else self._user_queues
-        old: Notification | None = None
-        if notification.group:
-            q = queues.get(scope_id, {})
-            old = self._dismiss_by_group(q, notification.group)
-        queues.setdefault(scope_id, {})[notification.id] = notification
-        return old
-
-    def remove_sync(self, scope: str, scope_id: str, notification_id: UUID) -> bool:
-        queues = self._session_queues if scope == "session" else self._user_queues
-        q = queues.get(scope_id, {})
-        if notification_id in q:
-            del q[notification_id]
-            return True
-        return False
-
-    def remove_by_group_sync(self, scope: str, scope_id: str, group: str) -> Notification | None:
-        queues = self._session_queues if scope == "session" else self._user_queues
-        q = queues.get(scope_id, {})
-        return self._dismiss_by_group(q, group)
-
-    def get_all_queued(self, nid: str, user_id: str | None) -> list[Notification]:
-        merged: dict[UUID, Notification] = {}
-        for uid, n in self._session_queues.get(nid, {}).items():
-            if n.mode == NotificationMode.QUEUED:
-                merged[uid] = n
-        if user_id:
-            for uid, n in self._user_queues.get(user_id, {}).items():
-                if n.mode == NotificationMode.QUEUED:
-                    merged[uid] = n
-        return sorted(merged.values(), key=lambda n: n.created_at)
-
-    def get_all_since(self, nid: str, user_id: str | None, since: float) -> list[Notification]:
-        merged: dict[UUID, Notification] = {}
-        for uid, n in self._session_queues.get(nid, {}).items():
-            if n.mode == NotificationMode.TIMESERIES and n.created_at > since:
-                merged[uid] = n
-        if user_id:
-            for uid, n in self._user_queues.get(user_id, {}).items():
-                if n.mode == NotificationMode.TIMESERIES and n.created_at > since:
-                    merged[uid] = n
-        return sorted(merged.values(), key=lambda n: n.created_at)
 
     @staticmethod
     def _dismiss_by_group(queue: dict[UUID, Notification], group: str) -> Notification | None:
@@ -245,11 +196,12 @@ class _DatabaseStorageMixin:
             )
             await session.commit()
 
-    async def store(self, scope: str, scope_id: str, notification: Notification) -> None:
+    async def store(self, scope: str, scope_id: str, notification: Notification) -> UUID | None:
         from skrift.db.models.notification import StoredNotification
 
+        old_id: UUID | None = None
         if notification.group:
-            await self.remove_by_group(scope, scope_id, notification.group)
+            old_id = await self.remove_by_group(scope, scope_id, notification.group)
 
         row = StoredNotification(
             id=notification.id,
@@ -264,6 +216,7 @@ class _DatabaseStorageMixin:
         async with self._session_maker() as session:
             session.add(row)
             await session.commit()
+        return old_id
 
     async def remove(self, notification_id: UUID) -> None:
         from skrift.db.models.notification import StoredNotification
@@ -310,17 +263,7 @@ class _DatabaseStorageMixin:
                 .order_by(StoredNotification.notified_at)
             )
             rows = result.scalars().all()
-            return [
-                Notification(
-                    type=row.type,
-                    id=row.id,
-                    created_at=row.notified_at.timestamp(),
-                    payload=json.loads(row.payload_json),
-                    group=row.group_key,
-                    mode=NotificationMode(row.delivery_mode),
-                )
-                for row in rows
-            ]
+            return [self._row_to_notification(row) for row in rows]
 
     async def get_since(self, scope: str, scope_id: str, since: float) -> list[Notification]:
         from skrift.db.models.notification import StoredNotification
@@ -339,17 +282,18 @@ class _DatabaseStorageMixin:
                 .order_by(StoredNotification.notified_at)
             )
             rows = result.scalars().all()
-            return [
-                Notification(
-                    type=row.type,
-                    id=row.id,
-                    created_at=row.notified_at.timestamp(),
-                    payload=json.loads(row.payload_json),
-                    group=row.group_key,
-                    mode=NotificationMode(row.delivery_mode),
-                )
-                for row in rows
-            ]
+            return [self._row_to_notification(row) for row in rows]
+
+    @staticmethod
+    def _row_to_notification(row) -> Notification:
+        return Notification(
+            type=row.type,
+            id=row.id,
+            created_at=row.notified_at.timestamp(),
+            payload=json.loads(row.payload_json),
+            group=row.group_key,
+            mode=NotificationMode(row.delivery_mode),
+        )
 
     async def get_mode(self, notification_id: UUID) -> str | None:
         from skrift.db.models.notification import StoredNotification

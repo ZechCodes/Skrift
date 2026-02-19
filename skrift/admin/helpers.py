@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.services import get_user_permissions
+from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.admin.navigation import build_admin_nav
 from skrift.db.models.user import User
 from skrift.db.services import page_service
@@ -71,7 +72,7 @@ def extract_page_form_data(data: dict) -> PageFormData:
 
 async def get_admin_context(request: Request, db_session: AsyncSession) -> dict:
     """Get common admin context including nav and user."""
-    user_id = request.session.get("user_id")
+    user_id = request.session.get(SESSION_USER_ID)
     if not user_id:
         raise NotAuthorizedException("Authentication required")
 
@@ -118,7 +119,7 @@ async def check_page_access(
     Raises:
         NotAuthorizedException: If the user doesn't have access.
     """
-    user_id = request.session.get("user_id")
+    user_id = request.session.get(SESSION_USER_ID)
     if not user_id:
         raise NotAuthorizedException("Authentication required")
 

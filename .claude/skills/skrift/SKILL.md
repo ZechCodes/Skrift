@@ -92,6 +92,7 @@ db:
   url: $DATABASE_URL
   pool_size: 5
   echo: false
+  schema: myschema  # optional; PostgreSQL only — prefixes all tables
 
 auth:
   redirect_base_url: "https://example.com"

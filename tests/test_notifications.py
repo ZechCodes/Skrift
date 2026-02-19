@@ -600,9 +600,7 @@ class TestNotificationHooks:
     """Test hook integration in the notification service."""
 
     @pytest.fixture(autouse=True)
-    def _clear_hooks(self):
-        hooks.clear()
-        yield
+    def _clear_hooks(self, clean_hooks):
         hooks.clear()
 
     @pytest.fixture

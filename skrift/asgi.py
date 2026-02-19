@@ -518,6 +518,15 @@ def create_app() -> Litestar:
     # Load middleware from app.yaml
     user_middleware = load_middleware()
 
+    # Database schema configuration
+    if settings.db.db_schema:
+        if "sqlite" in settings.db.url:
+            raise ValueError(
+                f"Database schema '{settings.db.db_schema}' is configured but SQLite does not support schemas. "
+                "For dev environments, use app.dev.yaml to override the database configuration."
+            )
+        Base.metadata.schema = settings.db.db_schema
+
     # Database configuration
     if "sqlite" in settings.db.url:
         engine_config = EngineConfig(echo=settings.db.echo)

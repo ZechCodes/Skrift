@@ -1,7 +1,6 @@
 """Tests for the enhanced flash message system."""
 
 import pytest
-from unittest.mock import MagicMock
 
 from skrift.lib.flash import (
     FlashType,
@@ -16,11 +15,9 @@ from skrift.lib.flash import (
 
 
 @pytest.fixture
-def mock_request():
+def mock_request(mock_request_factory):
     """Create a mock request with a session dict."""
-    request = MagicMock()
-    request.session = {}
-    return request
+    return mock_request_factory()
 
 
 class TestFlashType:

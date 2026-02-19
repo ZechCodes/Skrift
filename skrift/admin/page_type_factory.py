@@ -19,6 +19,7 @@ from skrift.admin.helpers import (
     extract_page_form_data,
     get_admin_context,
 )
+from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.auth.guards import OwnerOrPermission, Permission, auth_guard
 from skrift.auth.roles import permissions_for_type
@@ -45,6 +46,20 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
     label_plural = plural.title()        # "Posts"
     admin_base = f"/admin/{plural}"      # "/admin/posts"
     perms = permissions_for_type(plural)  # {"manage": "manage-posts", ...}
+
+    page_type_ctx = {
+        "page_type_name": type_name,
+        "page_type_plural": plural,
+        "page_type_label": label,
+        "page_type_label_plural": label_plural,
+        "admin_type_base": admin_base,
+    }
+
+    def _get_page_or_redirect(page, request):
+        if page is None:
+            flash_error(request, f"{label} not found")
+            return Redirect(path=admin_base)
+        return None
 
     class _PageTypeController(Controller):
         path = "/admin"
@@ -73,7 +88,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 "administrator" not in permissions.permissions
                 and perms["manage"] not in permissions.permissions
             ):
-                user_id = UUID(request.session["user_id"])
+                user_id = UUID(request.session[SESSION_USER_ID])
                 query = query.where(Page.user_id == user_id)
 
             result = await db_session.execute(query)
@@ -85,11 +100,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 context={
                     "flash_messages": flash_messages,
                     "pages": pages,
-                    "page_type_name": type_name,
-                    "page_type_plural": plural,
-                    "page_type_label": label,
-                    "page_type_label_plural": label_plural,
-                    "admin_type_base": admin_base,
+                    **page_type_ctx,
                     **ctx,
                 },
             )
@@ -108,11 +119,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 context={
                     "flash_messages": flash_messages,
                     "page": None,
-                    "page_type_name": type_name,
-                    "page_type_plural": plural,
-                    "page_type_label": label,
-                    "page_type_label_plural": label_plural,
-                    "admin_type_base": admin_base,
+                    **page_type_ctx,
                     **ctx,
                 },
             )
@@ -138,7 +145,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 return Redirect(path=f"{admin_base}/new")
 
             published_at = datetime.now(UTC) if form.is_published else None
-            user_id = UUID(request.session["user_id"])
+            user_id = UUID(request.session[SESSION_USER_ID])
 
             try:
                 await page_service.create_page(
@@ -174,9 +181,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             ctx = await get_admin_context(request, db_session)
 
             page = await page_service.get_page_by_id(db_session, page_id)
-            if not page:
-                flash_error(request, f"{label} not found")
-                return Redirect(path=admin_base)
+            if redirect := _get_page_or_redirect(page, request):
+                return redirect
 
             await check_page_access(
                 db_session, request, page, perms["edit_own"], perms["manage"]
@@ -188,11 +194,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 context={
                     "flash_messages": flash_messages,
                     "page": page,
-                    "page_type_name": type_name,
-                    "page_type_plural": plural,
-                    "page_type_label": label,
-                    "page_type_label_plural": label_plural,
-                    "admin_type_base": admin_base,
+                    **page_type_ctx,
                     **ctx,
                 },
             )
@@ -219,9 +221,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 return Redirect(path=f"{admin_base}/{page_id}/edit")
 
             page = await page_service.get_page_by_id(db_session, page_id)
-            if not page:
-                flash_error(request, f"{label} not found")
-                return Redirect(path=admin_base)
+            if redirect := _get_page_or_redirect(page, request):
+                return redirect
 
             await check_page_access(
                 db_session, request, page, perms["edit_own"], perms["manage"]
@@ -263,9 +264,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             self, request: Request, db_session: AsyncSession, page_id: UUID
         ) -> Redirect:
             page = await page_service.get_page_by_id(db_session, page_id)
-            if not page:
-                request.session["flash"] = f"{label} not found"
-                return Redirect(path=admin_base)
+            if redirect := _get_page_or_redirect(page, request):
+                return redirect
 
             await page_service.update_page(
                 db_session,
@@ -274,7 +274,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 published_at=datetime.now(UTC),
             )
 
-            request.session["flash"] = f"'{page.title}' has been published"
+            flash_success(request, f"'{page.title}' has been published")
             return Redirect(path=admin_base)
 
         @post(
@@ -285,9 +285,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             self, request: Request, db_session: AsyncSession, page_id: UUID
         ) -> Redirect:
             page = await page_service.get_page_by_id(db_session, page_id)
-            if not page:
-                request.session["flash"] = f"{label} not found"
-                return Redirect(path=admin_base)
+            if redirect := _get_page_or_redirect(page, request):
+                return redirect
 
             await page_service.update_page(
                 db_session,
@@ -295,7 +294,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 is_published=False,
             )
 
-            request.session["flash"] = f"'{page.title}' has been unpublished"
+            flash_success(request, f"'{page.title}' has been unpublished")
             return Redirect(path=admin_base)
 
         @post(
@@ -306,9 +305,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             self, request: Request, db_session: AsyncSession, page_id: UUID
         ) -> Redirect:
             page = await page_service.get_page_by_id(db_session, page_id)
-            if not page:
-                request.session["flash"] = f"{label} not found"
-                return Redirect(path=admin_base)
+            if redirect := _get_page_or_redirect(page, request):
+                return redirect
 
             await check_page_access(
                 db_session, request, page, perms["delete_own"], perms["manage"]
@@ -317,7 +315,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             page_title = page.title
             await page_service.delete_page(db_session, page_id)
 
-            request.session["flash"] = f"'{page_title}' has been deleted"
+            flash_success(request, f"'{page_title}' has been deleted")
             return Redirect(path=admin_base)
 
         @get(
@@ -330,9 +328,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             ctx = await get_admin_context(request, db_session)
 
             page = await page_service.get_page_by_id(db_session, page_id)
-            if not page:
-                flash_error(request, f"{label} not found")
-                return Redirect(path=admin_base)
+            if redirect := _get_page_or_redirect(page, request):
+                return redirect
 
             await check_page_access(
                 db_session, request, page, perms["edit_own"], perms["manage"]
@@ -347,11 +344,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                     "flash_messages": flash_messages,
                     "page": page,
                     "revisions": revisions,
-                    "page_type_name": type_name,
-                    "page_type_plural": plural,
-                    "page_type_label": label,
-                    "page_type_label_plural": label_plural,
-                    "admin_type_base": admin_base,
+                    **page_type_ctx,
                     **ctx,
                 },
             )
@@ -368,9 +361,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             revision_id: UUID,
         ) -> Redirect:
             page = await page_service.get_page_by_id(db_session, page_id)
-            if not page:
-                flash_error(request, f"{label} not found")
-                return Redirect(path=admin_base)
+            if redirect := _get_page_or_redirect(page, request):
+                return redirect
 
             await check_page_access(
                 db_session, request, page, perms["edit_own"], perms["manage"]
@@ -381,7 +373,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 flash_error(request, "Revision not found")
                 return Redirect(path=f"{admin_base}/{page_id}/revisions")
 
-            user_id = request.session.get("user_id")
+            user_id = request.session.get(SESSION_USER_ID)
             await revision_service.restore_revision(
                 db_session, page, revision, UUID(user_id) if user_id else None
             )

@@ -6,6 +6,7 @@ from litestar import Request, Response
 from litestar.exceptions import HTTPException
 from litestar.status_codes import HTTP_500_INTERNAL_SERVER_ERROR
 
+from skrift.auth.session_keys import SESSION_USER_EMAIL, SESSION_USER_ID, SESSION_USER_NAME, SESSION_USER_PICTURE_URL
 from skrift.config import get_settings
 from skrift.db.services.setting_service import get_cached_site_name
 
@@ -86,14 +87,14 @@ def _get_user_context_from_session(session: dict | None) -> dict | None:
     if not session:
         return None
     try:
-        user_id = session.get("user_id")
+        user_id = session.get(SESSION_USER_ID)
         if not user_id:
             return None
         return {
             "id": user_id,
-            "name": session.get("user_name"),
-            "email": session.get("user_email"),
-            "picture_url": session.get("user_picture_url"),
+            "name": session.get(SESSION_USER_NAME),
+            "email": session.get(SESSION_USER_EMAIL),
+            "picture_url": session.get(SESSION_USER_PICTURE_URL),
         }
     except Exception:
         logger.debug("Failed to extract user from session", exc_info=True)
@@ -110,11 +111,10 @@ class SessionUser:
         self.picture_url = data.get("picture_url")
 
 
-def http_exception_handler(request: Request, exc: HTTPException) -> Response:
-    """Handle HTTP exceptions with HTML for browsers, JSON for APIs."""
-    status_code = exc.status_code
-    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-
+def _render_error_response(
+    request: Request, status_code: int, detail: str, json_detail: str | None = None
+) -> Response:
+    """Render an error response as HTML for browsers or JSON for API clients."""
     if _accepts_html(request):
         session = _get_session_from_cookie(request)
         user_data = _get_user_context_from_session(session)
@@ -134,40 +134,22 @@ def http_exception_handler(request: Request, exc: HTTPException) -> Response:
             media_type="text/html",
         )
 
-    # JSON response for API clients
     return Response(
-        content={"status_code": status_code, "detail": detail},
+        content={"status_code": status_code, "detail": json_detail or detail},
         status_code=status_code,
         media_type="application/json",
     )
 
 
+def http_exception_handler(request: Request, exc: HTTPException) -> Response:
+    """Handle HTTP exceptions with HTML for browsers, JSON for APIs."""
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    return _render_error_response(request, exc.status_code, detail)
+
+
 def internal_server_error_handler(request: Request, exc: Exception) -> Response:
     """Handle unexpected exceptions with HTML for browsers, JSON for APIs."""
-    status_code = HTTP_500_INTERNAL_SERVER_ERROR
-
-    if _accepts_html(request):
-        session = _get_session_from_cookie(request)
-        user_data = _get_user_context_from_session(session)
-        user = SessionUser(user_data) if user_data else None
-        template_name = _resolve_error_template(status_code)
-        template_engine = request.app.template_engine
-        template = template_engine.get_template(template_name)
-        content = template.render(
-            status_code=status_code,
-            message="An unexpected error occurred.",
-            user=user,
-            site_name=get_cached_site_name,
-        )
-        return Response(
-            content=content,
-            status_code=status_code,
-            media_type="text/html",
-        )
-
-    # JSON response for API clients
-    return Response(
-        content={"status_code": status_code, "detail": "Internal Server Error"},
-        status_code=status_code,
-        media_type="application/json",
+    return _render_error_response(
+        request, HTTP_500_INTERNAL_SERVER_ERROR,
+        "An unexpected error occurred.", json_detail="Internal Server Error",
     )

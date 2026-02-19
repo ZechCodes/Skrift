@@ -22,6 +22,16 @@ from skrift.auth.oauth_account_service import find_or_create_oauth_user
 from skrift.auth.providers import NormalizedUserData, get_oauth_provider
 from skrift.config import get_settings
 from skrift.db.models.user import User
+from skrift.auth.session_keys import (
+    SESSION_AUTH_NEXT,
+    SESSION_OAUTH_CODE_VERIFIER,
+    SESSION_OAUTH_PROVIDER,
+    SESSION_OAUTH_STATE,
+    SESSION_USER_EMAIL,
+    SESSION_USER_ID,
+    SESSION_USER_NAME,
+    SESSION_USER_PICTURE_URL,
+)
 from skrift.forms import verify_csrf
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
 
@@ -70,7 +80,7 @@ def _is_safe_redirect_url(url: str, allowed_domains: list[str]) -> bool:
 
 def _get_safe_redirect_url(request: Request, allowed_domains: list[str], default: str = "/") -> str:
     """Get the next redirect URL from session, validating it's safe."""
-    next_url = request.session.pop("auth_next", None)
+    next_url = request.session.pop(SESSION_AUTH_NEXT, None)
     if next_url and _is_safe_redirect_url(next_url, allowed_domains):
         return next_url
     return default
@@ -118,10 +128,6 @@ async def _exchange_and_fetch(
     token_data = provider.build_token_data(client_id, client_secret, code, redirect_uri, code_verifier)
     token_headers = provider.build_token_headers(client_id, client_secret)
 
-    # Twitter uses Basic auth — remove client_secret from POST data
-    if provider_key == "twitter":
-        token_data.pop("client_secret", None)
-
     from skrift.lib.observability import span
 
     with span("oauth.exchange:{provider_key}", provider_key=provider_key):
@@ -163,10 +169,10 @@ def _set_login_session(request: Request, user: "User") -> None:
     request.session.clear()
 
     # Repopulate with user data
-    request.session["user_id"] = str(user.id)
-    request.session["user_name"] = user.name
-    request.session["user_email"] = user.email
-    request.session["user_picture_url"] = user.picture_url
+    request.session[SESSION_USER_ID] = str(user.id)
+    request.session[SESSION_USER_NAME] = user.name
+    request.session[SESSION_USER_EMAIL] = user.email
+    request.session[SESSION_USER_PICTURE_URL] = user.picture_url
 
     # Restore flash state
     if flash is not None:
@@ -193,7 +199,7 @@ class AuthController(Controller):
 
         # Store next URL in session if provided and valid
         if next_url and _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
-            request.session["auth_next"] = next_url
+            request.session[SESSION_AUTH_NEXT] = next_url
 
         if not provider_info:
             raise NotFoundException(f"Unknown provider: {provider}")
@@ -211,8 +217,8 @@ class AuthController(Controller):
 
         # Generate CSRF state token
         state = secrets.token_urlsafe(32)
-        request.session["oauth_state"] = state
-        request.session["oauth_provider"] = provider
+        request.session[SESSION_OAUTH_STATE] = state
+        request.session[SESSION_OAUTH_PROVIDER] = provider
 
         # Get the provider strategy for PKCE + auth params
         oauth_provider = get_oauth_provider(provider)
@@ -221,7 +227,7 @@ class AuthController(Controller):
         code_challenge = None
         if oauth_provider.requires_pkce:
             code_verifier = secrets.token_urlsafe(64)[:128]
-            request.session["oauth_code_verifier"] = code_verifier
+            request.session[SESSION_OAUTH_CODE_VERIFIER] = code_verifier
             code_challenge = base64.urlsafe_b64encode(
                 hashlib.sha256(code_verifier.encode()).digest()
             ).decode().rstrip("=")
@@ -261,14 +267,14 @@ class AuthController(Controller):
             return Redirect(path="/auth/login")
 
         # Verify CSRF state
-        stored_state = request.session.pop("oauth_state", None)
+        stored_state = request.session.pop(SESSION_OAUTH_STATE, None)
         if not oauth_state or oauth_state != stored_state:
             raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
         if not code:
             raise HTTPException(status_code=400, detail="Missing authorization code")
 
-        code_verifier = request.session.pop("oauth_code_verifier", None)
+        code_verifier = request.session.pop(SESSION_OAUTH_CODE_VERIFIER, None)
 
         user_data, user_info, tokens = await _exchange_and_fetch(
             provider, settings, code,
@@ -298,7 +304,7 @@ class AuthController(Controller):
 
         # Store next URL in session if provided and valid
         if next_url and _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
-            request.session["auth_next"] = next_url
+            request.session[SESSION_AUTH_NEXT] = next_url
 
         # Get configured providers (excluding dummy from main list)
         configured_providers = list(settings.auth.providers.keys())

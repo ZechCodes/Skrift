@@ -32,7 +32,7 @@ NamedModel._form_action = "/submit"
 NamedModel._form_method = "post"
 
 
-# -- Helper --
+# -- Helpers --
 
 def make_request(session=None, form_data=None):
     request = MagicMock()
@@ -43,6 +43,15 @@ def make_request(session=None, form_data=None):
 
     request.form = _form
     return request
+
+
+def make_csrf_request(token="tok", extra_session=None, **form_fields):
+    """Create a request with CSRF token pre-set in session and form data."""
+    session = {CSRF_SESSION_KEY: token}
+    if extra_session:
+        session.update(extra_session)
+    form_data = {CSRF_FIELD_NAME: token, **form_fields}
+    return make_request(session=session, form_data=form_data)
 
 
 # ---------------------------------------------------------------------------
@@ -100,10 +109,7 @@ class TestCSRF:
 
     @pytest.mark.asyncio
     async def test_validate_accepts_correct_csrf_token(self):
-        token = "test-token-123"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token, "name": "John", "email": "john@example.com"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(token="test-token-123", name="John", email="john@example.com")
         form = Form(SimpleForm, request)
 
         with patch("skrift.lib.hooks.hooks") as mock_hooks:
@@ -115,9 +121,7 @@ class TestCSRF:
     @pytest.mark.asyncio
     async def test_validate_rotates_token_after_successful_csrf_check(self):
         token = "original-token"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token, "name": "John", "email": "john@example.com"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(token=token, name="John", email="john@example.com")
         form = Form(SimpleForm, request)
 
         with patch("skrift.lib.hooks.hooks") as mock_hooks:
@@ -155,10 +159,7 @@ class TestCSRF:
 class TestValidation:
     @pytest.mark.asyncio
     async def test_validate_returns_true_for_valid_data(self):
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token, "name": "Alice", "email": "alice@example.com"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(name="Alice", email="alice@example.com")
         form = Form(SimpleForm, request)
 
         with patch("skrift.lib.hooks.hooks") as mock_hooks:
@@ -169,21 +170,15 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_validate_returns_false_for_invalid_data(self):
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
         # Missing required "email" field
-        form_data = {CSRF_FIELD_NAME: token, "name": "Alice"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(name="Alice")
         form = Form(SimpleForm, request)
         result = await form.validate()
         assert result is False
 
     @pytest.mark.asyncio
     async def test_validate_populates_data_on_success(self):
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token, "name": "Bob", "email": "bob@test.com"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(name="Bob", email="bob@test.com")
         form = Form(SimpleForm, request)
 
         with patch("skrift.lib.hooks.hooks") as mock_hooks:
@@ -196,20 +191,14 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_validate_populates_errors_on_failure(self):
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token, "name": "Alice"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(name="Alice")
         form = Form(SimpleForm, request)
         await form.validate()
         assert "email" in form.errors
 
     @pytest.mark.asyncio
     async def test_validate_preserves_submitted_values(self):
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token, "name": "Alice"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(name="Alice")
         form = Form(SimpleForm, request)
         await form.validate()
         assert form._values["name"] == "Alice"
@@ -219,10 +208,7 @@ class TestValidation:
     @pytest.mark.asyncio
     async def test_validate_keeps_first_error_per_field(self):
         """When Pydantic reports multiple errors for a field, only the first is kept."""
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token}  # Both fields missing
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request()  # Both fields missing
         form = Form(SimpleForm, request)
         await form.validate()
         # Both fields should have exactly one error each
@@ -233,10 +219,7 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_value_returns_submitted_data_after_failed_validate(self):
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token, "name": "Alice"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(name="Alice")
         form = Form(SimpleForm, request)
         await form.validate()
         assert form.value("name") == "Alice"
@@ -244,11 +227,8 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_bool_coercion_missing_checkbox_gets_false(self):
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
         # "agree" field is missing, simulating unchecked checkbox
-        form_data = {CSRF_FIELD_NAME: token, "name": "Alice"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(name="Alice")
         form = Form(BoolForm, request)
 
         with patch("skrift.lib.hooks.hooks") as mock_hooks:
@@ -260,10 +240,7 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_is_valid_true_after_successful_validation(self):
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token, "name": "A", "email": "a@b.com"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(name="A", email="a@b.com")
         form = Form(SimpleForm, request)
 
         with patch("skrift.lib.hooks.hooks") as mock_hooks:
@@ -274,10 +251,7 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_is_valid_false_after_failed_validation(self):
-        token = "tok"
-        session = {CSRF_SESSION_KEY: token}
-        form_data = {CSRF_FIELD_NAME: token, "name": "A"}
-        request = make_request(session=session, form_data=form_data)
+        request = make_csrf_request(name="A")
         form = Form(SimpleForm, request)
         await form.validate()
         assert form.is_valid is False

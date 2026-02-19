@@ -18,14 +18,6 @@ def mock_page():
     return page
 
 
-@pytest.fixture
-def clean_hooks():
-    """Reset hooks after each test."""
-    original_filters = hooks._filters.copy()
-    yield
-    hooks._filters = original_filters
-
-
 class TestSitemapEntry:
     """Test the SitemapEntry dataclass."""
 

@@ -5,8 +5,8 @@ import pytest
 from skrift.controllers.notification_webhook import (
     NotificationsWebhookController,
     _FailedAuthLimiter,
-    _get_client_ip,
 )
+from skrift.lib.client_ip import get_client_ip
 from skrift.lib.hooks import hooks, WEBHOOK_NOTIFICATION_RECEIVED
 from skrift.lib.notifications import NotificationMode, NotificationService
 
@@ -50,33 +50,31 @@ class TestFailedAuthLimiter:
 
 
 class TestGetClientIP:
-    def _make_request(self, headers=None, client=None):
-        """Create a minimal mock request for IP extraction."""
-
-        class FakeRequest:
-            def __init__(self, headers, scope):
-                self.headers = headers or {}
-                self.scope = scope
-
+    def _make_scope(self, headers=None, client=None):
+        """Create a minimal ASGI scope for IP extraction."""
         scope = {}
+        if headers:
+            scope["headers"] = [
+                (k.encode(), v.encode()) for k, v in headers.items()
+            ]
         if client is not None:
             scope["client"] = client
-        return FakeRequest(headers or {}, scope)
+        return scope
 
     def test_uses_x_forwarded_for_first_entry(self):
-        req = self._make_request(
+        scope = self._make_scope(
             headers={"x-forwarded-for": "10.0.0.1, 10.0.0.2"},
             client=("192.168.1.1", 12345),
         )
-        assert _get_client_ip(req) == "10.0.0.1"
+        assert get_client_ip(scope) == "10.0.0.1"
 
     def test_falls_back_to_client(self):
-        req = self._make_request(client=("192.168.1.1", 12345))
-        assert _get_client_ip(req) == "192.168.1.1"
+        scope = self._make_scope(client=("192.168.1.1", 12345))
+        assert get_client_ip(scope) == "192.168.1.1"
 
     def test_returns_unknown_when_no_info(self):
-        req = self._make_request()
-        assert _get_client_ip(req) == "unknown"
+        scope = self._make_scope()
+        assert get_client_ip(scope) == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -330,9 +328,7 @@ class TestWebhookHook:
     """Test that WEBHOOK_NOTIFICATION_RECEIVED fires with correct args."""
 
     @pytest.fixture(autouse=True)
-    def _clear_hooks(self):
-        hooks.clear()
-        yield
+    def _clear_hooks(self, clean_hooks):
         hooks.clear()
 
     def test_webhook_hook_fires_session(self, webhook_client, auth_headers):
