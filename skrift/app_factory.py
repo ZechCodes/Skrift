@@ -94,11 +94,21 @@ def update_template_directories() -> None:
 def build_template_engine_callback(
     extra_globals: dict[str, Any],
     extra_filters: dict[str, Any] | None = None,
+    register_for_updates: bool = True,
 ) -> Callable:
-    """Build a template engine callback that sets globals and filters."""
+    """Build a template engine callback that sets globals and filters.
+
+    Args:
+        register_for_updates: When True, store this engine as the module-level
+            ``_jinja_env`` so that ``update_template_directories()`` can update
+            its searchpath at runtime (e.g. after theme changes).  Set to False
+            for subsidiary apps (subdomain sites) whose template directories
+            are fixed at creation time.
+    """
     def configure_engine(engine: JinjaTemplateEngine):
-        global _jinja_env
-        _jinja_env = engine.engine
+        if register_for_updates:
+            global _jinja_env
+            _jinja_env = engine.engine
 
         engine.engine.globals.update({
             "now": datetime.now,

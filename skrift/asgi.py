@@ -15,6 +15,7 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import yaml
 from advanced_alchemy.config import EngineConfig
@@ -555,6 +556,7 @@ def _build_site_app(
             "theme_url": ThemeStaticURL(static_url, lambda _t=theme: _t),
             "login_url": lambda: f"https://{settings.domain}/auth/login",
         },
+        register_for_updates=False,
     )
     template_config = create_template_config(template_dirs, engine_callback)
 
@@ -623,13 +625,19 @@ def create_app() -> ASGIApp:
     if "sqlite" in settings.db.url:
         engine_config = EngineConfig(echo=settings.db.echo)
     else:
-        engine_config = EngineConfig(
+        engine_kwargs: dict[str, Any] = dict(
             pool_size=settings.db.pool_size,
             max_overflow=settings.db.pool_overflow,
             pool_timeout=settings.db.pool_timeout,
             pool_pre_ping=settings.db.pool_pre_ping,
             echo=settings.db.echo,
         )
+        if settings.db.db_schema:
+            engine_kwargs["execution_options"] = {
+                "schema_translate_map": {None: settings.db.db_schema},
+            }
+
+        engine_config = EngineConfig(**engine_kwargs)
 
     db_config = SQLAlchemyAsyncConfig(
         connection_string=settings.db.url,
