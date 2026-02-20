@@ -12,6 +12,7 @@ import asyncio
 import importlib
 import json
 import logging
+from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 from uuid import UUID
@@ -49,12 +50,23 @@ class NotificationBackend(Protocol):
 
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
-    async def store(self, scope: str, scope_id: str, notification: Notification) -> UUID | None: ...
-    async def remove(self, notification_id: UUID) -> None: ...
-    async def remove_by_group(self, scope: str, scope_id: str, group: str) -> UUID | None: ...
-    async def get_queued(self, scope: str, scope_id: str) -> list[Notification]: ...
-    async def get_since(self, scope: str, scope_id: str, since: float) -> list[Notification]: ...
+
+    # Storage — source_key based
+    async def store(self, source_key: str, notification: Notification) -> UUID | None: ...
+    async def remove(self, notification_id: UUID) -> str | None: ...
+    async def remove_by_group(self, source_key: str, group: str) -> UUID | None: ...
     async def get_mode(self, notification_id: UUID) -> str | None: ...
+
+    # Batch queries across multiple source keys
+    async def get_queued_multi(self, source_keys: Collection[str]) -> list[Notification]: ...
+    async def get_since_multi(self, source_keys: Collection[str], since: float) -> list[Notification]: ...
+
+    # Persistent subscriptions
+    async def get_persistent_subscriptions(self, subscriber_key: str) -> list[str]: ...
+    async def add_subscription(self, subscriber_key: str, source_key: str) -> None: ...
+    async def remove_subscription(self, subscriber_key: str, source_key: str) -> None: ...
+
+    # Cross-replica fanout
     async def publish(self, message: dict) -> None: ...
     def on_remote_message(self, callback: Callable[[dict], Any]) -> None: ...
 
@@ -63,12 +75,9 @@ class InMemoryBackend:
     """Dict-based storage with no cross-replica fanout. Default backend."""
 
     def __init__(self, **kwargs: Any) -> None:
-        self._session_queues: dict[str, dict[UUID, Notification]] = {}
-        self._user_queues: dict[str, dict[UUID, Notification]] = {}
+        self._queues: dict[str, dict[UUID, Notification]] = {}
+        self._subscriptions: dict[str, set[str]] = {}  # subscriber_key → {source_keys}
         self._callback: Callable[[dict], Any] | None = None
-
-    def _get_queues(self, scope: str) -> dict[str, dict[UUID, Notification]]:
-        return self._session_queues if scope == "session" else self._user_queues
 
     async def start(self) -> None:
         pass
@@ -76,49 +85,60 @@ class InMemoryBackend:
     async def stop(self) -> None:
         pass
 
-    async def store(self, scope: str, scope_id: str, notification: Notification) -> UUID | None:
-        queues = self._get_queues(scope)
+    async def store(self, source_key: str, notification: Notification) -> UUID | None:
         old_id: UUID | None = None
         if notification.group:
-            q = queues.get(scope_id, {})
+            q = self._queues.get(source_key, {})
             old = self._dismiss_by_group(q, notification.group)
             if old is not None:
                 old_id = old.id
-        queues.setdefault(scope_id, {})[notification.id] = notification
+        self._queues.setdefault(source_key, {})[notification.id] = notification
         return old_id
 
-    async def remove(self, notification_id: UUID) -> None:
-        for queues in (self._session_queues, self._user_queues):
-            for q in queues.values():
-                if notification_id in q:
-                    del q[notification_id]
-                    return
+    async def remove(self, notification_id: UUID) -> str | None:
+        for source_key, q in self._queues.items():
+            if notification_id in q:
+                del q[notification_id]
+                return source_key
+        return None
 
-    async def remove_by_group(self, scope: str, scope_id: str, group: str) -> UUID | None:
-        queues = self._get_queues(scope)
-        q = queues.get(scope_id, {})
+    async def remove_by_group(self, source_key: str, group: str) -> UUID | None:
+        q = self._queues.get(source_key, {})
         old = self._dismiss_by_group(q, group)
         return old.id if old else None
 
-    async def get_queued(self, scope: str, scope_id: str) -> list[Notification]:
-        queues = self._get_queues(scope)
-        q = queues.get(scope_id, {})
-        return sorted(
-            (n for n in q.values() if n.mode == NotificationMode.QUEUED),
-            key=lambda n: n.created_at,
-        )
+    async def get_queued_multi(self, source_keys: Collection[str]) -> list[Notification]:
+        merged: dict[UUID, Notification] = {}
+        for key in source_keys:
+            q = self._queues.get(key, {})
+            for n in q.values():
+                if n.mode == NotificationMode.QUEUED:
+                    merged[n.id] = n
+        return sorted(merged.values(), key=lambda n: n.created_at)
 
-    async def get_since(self, scope: str, scope_id: str, since: float) -> list[Notification]:
-        queues = self._get_queues(scope)
-        q = queues.get(scope_id, {})
-        return sorted(
-            (n for n in q.values() if n.mode == NotificationMode.TIMESERIES and n.created_at > since),
-            key=lambda n: n.created_at,
-        )
+    async def get_since_multi(self, source_keys: Collection[str], since: float) -> list[Notification]:
+        merged: dict[UUID, Notification] = {}
+        for key in source_keys:
+            q = self._queues.get(key, {})
+            for n in q.values():
+                if n.mode == NotificationMode.TIMESERIES and n.created_at > since:
+                    merged[n.id] = n
+        return sorted(merged.values(), key=lambda n: n.created_at)
 
     async def get_mode(self, notification_id: UUID) -> str | None:
         notif = self._find_by_id(notification_id)
         return notif.mode.value if notif else None
+
+    async def get_persistent_subscriptions(self, subscriber_key: str) -> list[str]:
+        return list(self._subscriptions.get(subscriber_key, set()))
+
+    async def add_subscription(self, subscriber_key: str, source_key: str) -> None:
+        self._subscriptions.setdefault(subscriber_key, set()).add(source_key)
+
+    async def remove_subscription(self, subscriber_key: str, source_key: str) -> None:
+        subs = self._subscriptions.get(subscriber_key)
+        if subs:
+            subs.discard(source_key)
 
     async def publish(self, message: dict) -> None:
         pass  # No cross-replica fanout in single-process mode
@@ -127,10 +147,9 @@ class InMemoryBackend:
         self._callback = callback
 
     def _find_by_id(self, notification_id: UUID) -> Notification | None:
-        for queues in (self._session_queues, self._user_queues):
-            for q in queues.values():
-                if notification_id in q:
-                    return q[notification_id]
+        for q in self._queues.values():
+            if notification_id in q:
+                return q[notification_id]
         return None
 
     @staticmethod
@@ -196,17 +215,21 @@ class _DatabaseStorageMixin:
             )
             await session.commit()
 
-    async def store(self, scope: str, scope_id: str, notification: Notification) -> UUID | None:
+    async def store(self, source_key: str, notification: Notification) -> UUID | None:
         from skrift.db.models.notification import StoredNotification
 
         old_id: UUID | None = None
         if notification.group:
-            old_id = await self.remove_by_group(scope, scope_id, notification.group)
+            old_id = await self.remove_by_group(source_key, notification.group)
+
+        # Derive scope/scope_id from source_key for backwards compat
+        scope, scope_id = _parse_source_key(source_key)
 
         row = StoredNotification(
             id=notification.id,
             scope=scope,
             scope_id=scope_id,
+            source_key=source_key,
             type=notification.type,
             payload_json=json.dumps(notification.payload),
             group_key=notification.group,
@@ -218,25 +241,32 @@ class _DatabaseStorageMixin:
             await session.commit()
         return old_id
 
-    async def remove(self, notification_id: UUID) -> None:
+    async def remove(self, notification_id: UUID) -> str | None:
         from skrift.db.models.notification import StoredNotification
-        from sqlalchemy import delete
+        from sqlalchemy import select, delete
 
         async with self._session_maker() as session:
-            await session.execute(
-                delete(StoredNotification).where(StoredNotification.id == notification_id)
+            result = await session.execute(
+                select(StoredNotification.source_key).where(
+                    StoredNotification.id == notification_id
+                )
             )
-            await session.commit()
+            source_key = result.scalar_one_or_none()
+            if source_key is not None:
+                await session.execute(
+                    delete(StoredNotification).where(StoredNotification.id == notification_id)
+                )
+                await session.commit()
+            return source_key
 
-    async def remove_by_group(self, scope: str, scope_id: str, group: str) -> UUID | None:
+    async def remove_by_group(self, source_key: str, group: str) -> UUID | None:
         from skrift.db.models.notification import StoredNotification
         from sqlalchemy import select, delete
 
         async with self._session_maker() as session:
             result = await session.execute(
                 select(StoredNotification.id).where(
-                    StoredNotification.scope == scope,
-                    StoredNotification.scope_id == scope_id,
+                    StoredNotification.source_key == source_key,
                     StoredNotification.group_key == group,
                 )
             )
@@ -248,16 +278,18 @@ class _DatabaseStorageMixin:
                 await session.commit()
             return old_id
 
-    async def get_queued(self, scope: str, scope_id: str) -> list[Notification]:
+    async def get_queued_multi(self, source_keys: Collection[str]) -> list[Notification]:
         from skrift.db.models.notification import StoredNotification
         from sqlalchemy import select
+
+        if not source_keys:
+            return []
 
         async with self._session_maker() as session:
             result = await session.execute(
                 select(StoredNotification)
                 .where(
-                    StoredNotification.scope == scope,
-                    StoredNotification.scope_id == scope_id,
+                    StoredNotification.source_key.in_(source_keys),
                     StoredNotification.delivery_mode == NotificationMode.QUEUED.value,
                 )
                 .order_by(StoredNotification.notified_at)
@@ -265,17 +297,19 @@ class _DatabaseStorageMixin:
             rows = result.scalars().all()
             return [self._row_to_notification(row) for row in rows]
 
-    async def get_since(self, scope: str, scope_id: str, since: float) -> list[Notification]:
+    async def get_since_multi(self, source_keys: Collection[str], since: float) -> list[Notification]:
         from skrift.db.models.notification import StoredNotification
         from sqlalchemy import select
+
+        if not source_keys:
+            return []
 
         since_dt = datetime.fromtimestamp(since, tz=timezone.utc)
         async with self._session_maker() as session:
             result = await session.execute(
                 select(StoredNotification)
                 .where(
-                    StoredNotification.scope == scope,
-                    StoredNotification.scope_id == scope_id,
+                    StoredNotification.source_key.in_(source_keys),
                     StoredNotification.delivery_mode == NotificationMode.TIMESERIES.value,
                     StoredNotification.notified_at > since_dt,
                 )
@@ -283,6 +317,45 @@ class _DatabaseStorageMixin:
             )
             rows = result.scalars().all()
             return [self._row_to_notification(row) for row in rows]
+
+    async def get_persistent_subscriptions(self, subscriber_key: str) -> list[str]:
+        from skrift.db.models.notification import NotificationSubscription
+        from sqlalchemy import select
+
+        async with self._session_maker() as session:
+            result = await session.execute(
+                select(NotificationSubscription.source_key).where(
+                    NotificationSubscription.subscriber_key == subscriber_key
+                )
+            )
+            return list(result.scalars().all())
+
+    async def add_subscription(self, subscriber_key: str, source_key: str) -> None:
+        from skrift.db.models.notification import NotificationSubscription
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        async with self._session_maker() as session:
+            stmt = pg_insert(NotificationSubscription).values(
+                subscriber_key=subscriber_key,
+                source_key=source_key,
+            ).on_conflict_do_nothing(
+                constraint="uq_notification_sub_subscriber_source"
+            )
+            await session.execute(stmt)
+            await session.commit()
+
+    async def remove_subscription(self, subscriber_key: str, source_key: str) -> None:
+        from skrift.db.models.notification import NotificationSubscription
+        from sqlalchemy import delete
+
+        async with self._session_maker() as session:
+            await session.execute(
+                delete(NotificationSubscription).where(
+                    NotificationSubscription.subscriber_key == subscriber_key,
+                    NotificationSubscription.source_key == source_key,
+                )
+            )
+            await session.commit()
 
     @staticmethod
     def _row_to_notification(row) -> Notification:
@@ -306,6 +379,16 @@ class _DatabaseStorageMixin:
                 )
             )
             return result.scalar_one_or_none()
+
+
+def _parse_source_key(source_key: str) -> tuple[str, str]:
+    """Parse a source_key into (scope, scope_id) for backwards compat."""
+    if source_key == "global":
+        return ("broadcast", "")
+    if ":" in source_key:
+        scope, scope_id = source_key.split(":", 1)
+        return (scope, scope_id)
+    return (source_key, "")
 
 
 class RedisBackend(_DatabaseStorageMixin):
