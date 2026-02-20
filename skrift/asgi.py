@@ -556,6 +556,7 @@ def _build_site_app(
             "theme_url": ThemeStaticURL(static_url, lambda _t=theme: _t),
             "login_url": lambda: f"https://{settings.domain}/auth/login",
         },
+        register_for_updates=False,
     )
     template_config = create_template_config(template_dirs, engine_callback)
 
