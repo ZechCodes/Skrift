@@ -70,6 +70,18 @@ from skrift.db.services.setting_service import (
 
 The setting is included in `SITE_DEFAULTS` (default: `""`), loaded into the in-memory cache at startup, and invalidated when changed.
 
+## app.yaml Fallback Theme
+
+The `theme` key in `app.yaml` sets a default theme that is used when the database cache is empty (e.g., before migrations or during a DB outage):
+
+```yaml
+theme: my-theme
+```
+
+Resolution order: DB `site_theme` > app.yaml `theme` > no theme (Skrift defaults).
+
+`get_cached_site_theme()` checks the DB cache first, then falls back to `get_settings().theme` from app.yaml. This ensures the site renders with the intended theme even when the database is unavailable.
+
 ## Directory Resolution (`skrift/app_factory.py`)
 
 ```python

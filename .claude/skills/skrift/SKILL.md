@@ -37,6 +37,7 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 - **Hooks**: WordPress-style extensibility (see `/skrift-hooks`)
 - **Notifications**: Real-time SSE with pluggable backends (see `/skrift-notifications`)
 - **Observability**: Optional Logfire tracing and structured logging (see `/skrift-observability`)
+- **OAuth2 Server**: Hub/spoke identity federation (see `/skrift-oauth2`)
 
 ### AppDispatcher Pattern
 
@@ -104,6 +105,8 @@ auth:
 
 session:
   cookie_domain: null
+
+theme: my-theme  # default theme (overridden by admin UI)
 
 controllers:
   - skrift.controllers.auth:AuthController
@@ -291,3 +294,4 @@ For deep-dive guidance on specific subsystems:
 - **`/skrift-theming`** — Theme discovery, template/static resolution, per-request switching, RESOLVE_THEME hook
 - **`/skrift-notifications`** — SSE protocol, pluggable backends, group keys, dismiss patterns
 - **`/skrift-observability`** — Logfire integration, structured tracing, instrumentation
+- **`/skrift-oauth2`** — OAuth2 Authorization Server, hub/spoke identity federation, Skrift provider

@@ -26,6 +26,10 @@ auth:
       scopes: ["openid", "email", "profile"]
 ```
 
+Available providers: `google`, `github`, `microsoft`, `discord`, `facebook`, `twitter`, `skrift`.
+
+The `skrift` provider authenticates against another Skrift instance's OAuth2 server. See `/skrift-oauth2` for hub/spoke setup.
+
 ## Session Management
 
 Client-side encrypted cookies (Litestar's CookieBackendConfig):

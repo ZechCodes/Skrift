@@ -70,6 +70,16 @@ Themes only affect **frontend/public templates**. Admin templates (`admin/*`) an
 
 If a `themes/` directory with valid themes exists when running the setup wizard, an additional "Theme" step appears between "Site Settings" and "Admin Account". Select a theme or choose "Default (no theme)" to skip.
 
+### In app.yaml
+
+Set a default theme in your configuration file:
+
+```yaml
+theme: my-theme
+```
+
+This theme is used when the database hasn't been configured yet or is unavailable. The admin UI theme setting (stored in the database) overrides this value when present.
+
 ### In Admin Settings
 
 After setup, go to **Admin > Settings**. When themes are available, a theme dropdown appears in the site settings form. Changes take effect immediately — no server restart required.
@@ -206,11 +216,12 @@ Two theme-related globals are available in all templates:
 
 ## How It Works Internally
 
-1. The active theme name is stored as a `site_theme` key-value in the settings table
+1. The active theme name is resolved with the following priority: DB `site_theme` setting > `app.yaml` `theme` key > no theme (Skrift defaults)
 2. On app startup, `get_template_directories()` and `get_static_directories()` prepend the theme's directories to the search path
 3. The Jinja2 `FileSystemLoader` searches directories in order, so theme templates are found first
 4. When the theme is changed in admin settings, `update_template_directories()` updates the Jinja loader's search path in-place — no restart needed
-5. For page routes, the `RESOLVE_THEME` filter hook can override the theme per-request before template resolution
+5. If the database is unavailable, the `app.yaml` theme ensures the site still renders with the correct theme
+6. For page routes, the `RESOLVE_THEME` filter hook can override the theme per-request before template resolution
 
 ## Next Steps
 

@@ -242,6 +242,57 @@ class GenericProvider(OAuthProvider):
         )
 
 
+class SkriftProvider(OAuthProvider):
+    """Provider for authenticating against a remote Skrift OAuth2 server."""
+
+    @property
+    def requires_pkce(self) -> bool:
+        return True
+
+    def resolve_url(self, url: str, tenant: str | None = None) -> str:
+        """Replace {server_url} placeholder with the configured server URL."""
+        if "{server_url}" in url:
+            from skrift.config import get_settings
+            settings = get_settings()
+            provider_config = settings.auth.providers.get(self.provider_key)
+            server_url = getattr(provider_config, "server_url", "")
+            url = url.replace("{server_url}", server_url.rstrip("/"))
+        return url
+
+    def build_auth_params(self, client_id, redirect_uri, scopes, state, code_challenge=None):
+        params = super().build_auth_params(client_id, redirect_uri, scopes, state, code_challenge)
+        if code_challenge:
+            params["code_challenge"] = code_challenge
+            params["code_challenge_method"] = "S256"
+        return params
+
+    def build_token_data(self, client_id, client_secret, code, redirect_uri, code_verifier=None):
+        data = super().build_token_data(client_id, client_secret, code, redirect_uri, code_verifier)
+        if not client_secret:
+            data.pop("client_secret", None)
+        if code_verifier:
+            data["code_verifier"] = code_verifier
+        return data
+
+    async def fetch_user_info(self, access_token: str) -> dict:
+        """Fetch user info, resolving {server_url} in the userinfo URL."""
+        url = self.resolve_url(self.provider_info.userinfo_url)
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code != 200:
+                raise HTTPException(status_code=400, detail="Failed to fetch user info")
+            return response.json()
+
+    def extract_user_data(self, user_info: dict) -> NormalizedUserData:
+        return NormalizedUserData(
+            oauth_id=str(user_info.get("sub")),
+            email=user_info.get("email"),
+            name=user_info.get("name"),
+            picture_url=user_info.get("picture"),
+        )
+
+
 _PROVIDER_CLASSES: dict[str, type[OAuthProvider]] = {
     "google": GoogleProvider,
     "github": GitHubProvider,
@@ -249,6 +300,7 @@ _PROVIDER_CLASSES: dict[str, type[OAuthProvider]] = {
     "discord": DiscordProvider,
     "facebook": FacebookProvider,
     "twitter": TwitterProvider,
+    "skrift": SkriftProvider,
 }
 
 

@@ -37,6 +37,7 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 - **Hooks**: WordPress-style extensibility (see `/skrift-hooks`)
 - **Notifications**: Real-time SSE with pluggable backends (see `/skrift-notifications`)
 - **Observability**: Optional Logfire tracing and structured logging (see `/skrift-observability`)
+- **OAuth2 Server**: Hub/spoke identity federation (see `/skrift-oauth2`)
 
 ### AppDispatcher Pattern
 
@@ -92,6 +93,7 @@ db:
   url: $DATABASE_URL
   pool_size: 5
   echo: false
+  schema: myschema  # optional; PostgreSQL only — prefixes all tables
 
 auth:
   redirect_base_url: "https://example.com"
@@ -103,6 +105,8 @@ auth:
 
 session:
   cookie_domain: null
+
+theme: my-theme  # default theme (overridden by admin UI)
 
 controllers:
   - skrift.controllers.auth:AuthController
@@ -157,12 +161,12 @@ class MyModel(Base):
 | Model | Table | Purpose |
 |-------|-------|---------|
 | `User` | `users` | User accounts |
-| `OAuthAccount` | `oauth_accounts` | Linked OAuth providers |
+| `OAuthAccount` | `oauth_accounts` | Linked OAuth providers (`access_token`, `refresh_token`) |
 | `Role` | `roles` | Permission roles |
 | `Page` | `pages` | Content pages |
 | `PageRevision` | `page_revisions` | Content history |
 | `Setting` | `settings` | Key-value site settings |
-| `StoredNotification` | `stored_notifications` | Persistent notifications (Redis/PgNotify backends) |
+| `StoredNotification` | `stored_notifications` | Persistent notifications with `mode` column (Redis/PgNotify backends) |
 
 Sessions injected via `db_session: AsyncSession` parameter in handlers.
 
@@ -290,3 +294,4 @@ For deep-dive guidance on specific subsystems:
 - **`/skrift-theming`** — Theme discovery, template/static resolution, per-request switching, RESOLVE_THEME hook
 - **`/skrift-notifications`** — SSE protocol, pluggable backends, group keys, dismiss patterns
 - **`/skrift-observability`** — Logfire integration, structured tracing, instrumentation
+- **`/skrift-oauth2`** — OAuth2 Authorization Server, hub/spoke identity federation, Skrift provider

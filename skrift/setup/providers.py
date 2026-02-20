@@ -152,6 +152,21 @@ OAUTH_PROVIDERS = {
         """.strip(),
         icon="twitter",
     ),
+    "skrift": OAuthProviderInfo(
+        name="Skrift",
+        auth_url="{server_url}/oauth/authorize",
+        token_url="{server_url}/oauth/token",
+        userinfo_url="{server_url}/oauth/userinfo",
+        scopes=["openid", "profile", "email"],
+        console_url="",
+        fields=[
+            {"key": "server_url", "label": "Server URL", "type": "text"},
+            {"key": "client_id", "label": "Client ID", "type": "text"},
+            {"key": "client_secret", "label": "Client Secret", "type": "password", "optional": True},
+        ],
+        instructions="Point at another Skrift instance's OAuth2 server.",
+        icon="skrift",
+    ),
     DUMMY_PROVIDER_KEY: OAuthProviderInfo(
         name="Dummy (Development Only)",
         auth_url="",

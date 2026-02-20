@@ -1,0 +1,103 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Authorize - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .consent-container {
+        max-width: 400px;
+        margin: 2rem auto;
+    }
+
+    .scope-list {
+        list-style: none;
+        padding: 0;
+        margin: 1.5rem 0;
+    }
+
+    .scope-list li {
+        padding: 0.5rem 0;
+        border-bottom: 1px solid var(--sk-color-border, #eee);
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .scope-list li::before {
+        content: "\2713";
+        color: #16a34a;
+        font-weight: bold;
+    }
+
+    .client-name {
+        font-weight: 600;
+        color: var(--sk-color-primary, #2563eb);
+    }
+
+    .consent-buttons {
+        display: flex;
+        gap: 1rem;
+        margin-top: 1.5rem;
+    }
+
+    .consent-buttons button {
+        flex: 1;
+        padding: 0.75rem 1.5rem;
+        border: none;
+        border-radius: 0.5rem;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+    }
+
+    .btn-allow {
+        background: #16a34a;
+        color: white;
+    }
+
+    .btn-allow:hover {
+        background: #15803d;
+    }
+
+    .btn-deny {
+        background: #e5e7eb;
+        color: #374151;
+    }
+
+    .btn-deny:hover {
+        background: #d1d5db;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="consent-container">
+    <article>
+        <header>
+            <h1>Authorize Application</h1>
+        </header>
+
+        <p>
+            <span class="client-name">{{ client_id }}</span>
+            wants to access your account.
+        </p>
+
+        {% if scopes %}
+        <p>This will allow the application to:</p>
+        <ul class="scope-list">
+            {% for scope in scopes %}
+            <li>{{ scope }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+
+        <form method="post" action="/oauth/authorize">
+            {{ csrf_field(request) }}
+            <div class="consent-buttons">
+                <button type="submit" name="action" value="deny" class="btn-deny">Deny</button>
+                <button type="submit" name="action" value="allow" class="btn-allow">Allow</button>
+            </div>
+        </form>
+    </article>
+</div>
+{% endblock %}

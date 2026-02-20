@@ -72,6 +72,7 @@ nav:
     - Protecting Routes: guides/protecting-routes.md
     - Observability: guides/observability.md
     - Notifications: guides/notifications.md
+    - Multi-Subdomain Sites: guides/multisite.md
   - Admin:
     - admin/index.md
     - Managing Pages: admin/managing-pages.md
