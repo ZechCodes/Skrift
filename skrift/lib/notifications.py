@@ -253,6 +253,12 @@ class NotificationService:
         """Publish to any source key."""
         await self._send(source_key, notification)
 
+    @staticmethod
+    def _subscriber_key_for(nid: str, user_id: str | None) -> str:
+        if user_id:
+            return f"user:{user_id}"
+        return f"session:{nid}"
+
     async def dismiss(
         self,
         nid: str,
@@ -261,15 +267,15 @@ class NotificationService:
         *,
         group: str | None = None,
     ) -> bool:
-        """Remove a notification from queues and push a dismissed event.
+        """Record a per-subscriber dismissal and push a dismissed event.
 
         Lookup by *notification_id* (UUID) or *group* key — supply one.
-        Returns True if a notification was found and removed.
+        Returns True if a notification was found and dismissed.
         Raises NotDismissibleError if the notification is timeseries mode.
         """
         backend = self._get_backend()
+        subscriber_key = self._subscriber_key_for(nid, user_id)
         dismissed_id: UUID | None = None
-        dismiss_source_key: str | None = None
 
         if notification_id is not None:
             mode = await backend.get_mode(notification_id)
@@ -277,30 +283,26 @@ class NotificationService:
                 raise NotDismissibleError(
                     f"Cannot dismiss timeseries notification {notification_id}"
                 )
-            dismiss_source_key = await backend.remove(notification_id)
-            dismissed_id = notification_id
+            source_key = await backend.dismiss_for_subscriber(subscriber_key, notification_id)
+            if source_key is not None:
+                dismissed_id = notification_id
         elif group is not None:
             for key in self._storage_keys_for(nid, user_id):
-                old_id = await backend.remove_by_group(key, group)
-                if old_id:
-                    dismissed_id = old_id
-                    dismiss_source_key = key
+                found_id = await backend.find_by_group(key, group)
+                if found_id is not None:
+                    await backend.dismiss_for_subscriber(subscriber_key, found_id)
+                    dismissed_id = found_id
 
         if dismissed_id is not None:
             dismissed = Notification.dismissed(dismissed_id)
 
-            # Push through the graph — the source_key cascading handles delivery
-            # to all relevant sessions
-            if dismiss_source_key:
-                self._registry.push(dismiss_source_key, dismissed)
-            else:
-                # Fallback: push to session and user directly
-                self._registry.push(f"session:{nid}", dismissed)
-                if user_id:
-                    self._registry.push(f"user:{user_id}", dismissed)
+            # Push only to the dismisser's sessions, not the source
+            self._registry.push(f"session:{nid}", dismissed)
+            if user_id:
+                self._registry.push(f"user:{user_id}", dismissed)
 
             await backend.publish({
-                "a": "d", "sk": dismiss_source_key or f"session:{nid}",
+                "a": "d", "sub": subscriber_key,
                 "pid": self._publisher_id,
                 "nid": str(dismissed_id),
             })
@@ -314,14 +316,30 @@ class NotificationService:
     ) -> list[Notification]:
         """Return all queued notifications sorted oldest-first."""
         keys = self._storage_keys_for(nid, user_id)
-        return await self._get_backend().get_queued_multi(keys)
+        backend = self._get_backend()
+        results = await backend.get_queued_multi(keys)
+        if not results:
+            return results
+        subscriber_key = self._subscriber_key_for(nid, user_id)
+        dismissed = await backend.get_dismissed_ids(subscriber_key, [n.id for n in results])
+        if dismissed:
+            results = [n for n in results if n.id not in dismissed]
+        return results
 
     async def get_since(
         self, nid: str, user_id: str | None, since: float
     ) -> list[Notification]:
         """Return timeseries notifications created after *since* timestamp."""
         keys = self._storage_keys_for(nid, user_id)
-        return await self._get_backend().get_since_multi(keys, since)
+        backend = self._get_backend()
+        results = await backend.get_since_multi(keys, since)
+        if not results:
+            return results
+        subscriber_key = self._subscriber_key_for(nid, user_id)
+        dismissed = await backend.get_dismissed_ids(subscriber_key, [n.id for n in results])
+        if dismissed:
+            results = [n for n in results if n.id not in dismissed]
+        return results
 
     def _storage_keys_for(self, nid: str, user_id: str | None) -> list[str]:
         """Compute the set of source_keys to query for stored notifications.
@@ -401,7 +419,12 @@ class NotificationService:
         elif action == "d":
             dismissed_id = UUID(message["nid"])
             dismissed = Notification.dismissed(dismissed_id)
-            self._registry.push(source_key, dismissed)
+            sub = message.get("sub")
+            if sub:
+                self._registry.push(sub, dismissed)
+            else:
+                # Rolling deploy compat: old replicas send "sk" instead of "sub"
+                self._registry.push(source_key, dismissed)
 
 
 def _notification_from_wire(

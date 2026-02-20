@@ -114,7 +114,7 @@ class TestNotificationBackends:
         assert items2[0].id == n.id
 
     async def test_cross_replica_dismiss(self, backend_pair):
-        """Store on A → register on B → dismiss on A → B receives dismissed + DB cleared."""
+        """Store on A → register on B → dismiss on A → B receives dismissed + notification still in storage but dismissed for subscriber."""
         (svc_a, backend_a), (svc_b, _) = backend_pair
 
         n = Notification(type="generic", payload={"title": "Will dismiss"})
@@ -134,9 +134,12 @@ class TestNotificationBackends:
         assert items[0].type == "dismissed"
         assert items[0].id == n.id
 
-        # DB should be empty
+        # Notification still in storage but dismissed for subscriber
         queued = await backend_a.get_queued_multi(["session:sess-1"])
-        assert len(queued) == 0
+        assert len(queued) == 1  # still physically present
+
+        dismissed_ids = await backend_a.get_dismissed_ids("session:sess-1", [n.id])
+        assert n.id in dismissed_ids
 
     async def test_group_replacement_across_replicas(self, backend_pair):
         """Send n1 on A → replace with n2 (same group) on A → B sees n2, DB has only n2."""

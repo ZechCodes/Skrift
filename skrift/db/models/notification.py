@@ -1,6 +1,7 @@
 from datetime import datetime
+from uuid import UUID
 
-from sqlalchemy import DateTime, Index, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Index, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from skrift.db.base import Base
@@ -50,4 +51,23 @@ class NotificationSubscription(Base):
         UniqueConstraint("subscriber_key", "source_key", name="uq_notification_sub_subscriber_source"),
         Index("ix_notification_subscriptions_subscriber_key", "subscriber_key"),
         Index("ix_notification_subscriptions_source_key", "source_key"),
+    )
+
+
+class DismissedNotification(Base):
+    __tablename__ = "dismissed_notifications"
+
+    subscriber_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    notification_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    dismissed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "subscriber_key", "notification_id",
+            name="uq_dismissed_subscriber_notification",
+        ),
+        Index("ix_dismissed_notifications_subscriber_key", "subscriber_key"),
+        Index("ix_dismissed_notifications_notification_id", "notification_id"),
     )

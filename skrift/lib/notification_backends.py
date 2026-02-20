@@ -66,6 +66,12 @@ class NotificationBackend(Protocol):
     async def add_subscription(self, subscriber_key: str, source_key: str) -> None: ...
     async def remove_subscription(self, subscriber_key: str, source_key: str) -> None: ...
 
+    # Per-subscriber dismissals
+    async def find_by_group(self, source_key: str, group: str) -> UUID | None: ...
+    async def dismiss_for_subscriber(self, subscriber_key: str, notification_id: UUID) -> str | None: ...
+    async def get_dismissed_ids(self, subscriber_key: str, notification_ids: Collection[UUID]) -> set[UUID]: ...
+    async def cleanup_dismissed(self) -> None: ...
+
     # Cross-replica fanout
     async def publish(self, message: dict) -> None: ...
     def on_remote_message(self, callback: Callable[[dict], Any]) -> None: ...
@@ -77,6 +83,7 @@ class InMemoryBackend:
     def __init__(self, **kwargs: Any) -> None:
         self._queues: dict[str, dict[UUID, Notification]] = {}
         self._subscriptions: dict[str, set[str]] = {}  # subscriber_key → {source_keys}
+        self._dismissed: dict[str, set[UUID]] = {}  # subscriber_key → {notification_ids}
         self._callback: Callable[[dict], Any] | None = None
 
     async def start(self) -> None:
@@ -146,6 +153,33 @@ class InMemoryBackend:
     def on_remote_message(self, callback: Callable[[dict], Any]) -> None:
         self._callback = callback
 
+    async def find_by_group(self, source_key: str, group: str) -> UUID | None:
+        q = self._queues.get(source_key, {})
+        for nid, notif in q.items():
+            if notif.group == group:
+                return nid
+        return None
+
+    async def dismiss_for_subscriber(self, subscriber_key: str, notification_id: UUID) -> str | None:
+        for source_key, q in self._queues.items():
+            if notification_id in q:
+                self._dismissed.setdefault(subscriber_key, set()).add(notification_id)
+                return source_key
+        return None
+
+    async def get_dismissed_ids(self, subscriber_key: str, notification_ids: Collection[UUID]) -> set[UUID]:
+        dismissed = self._dismissed.get(subscriber_key, set())
+        return dismissed & set(notification_ids)
+
+    async def cleanup_dismissed(self) -> None:
+        live_ids: set[UUID] = set()
+        for q in self._queues.values():
+            live_ids.update(q.keys())
+        for sub_key in list(self._dismissed):
+            self._dismissed[sub_key] = self._dismissed[sub_key] & live_ids
+            if not self._dismissed[sub_key]:
+                del self._dismissed[sub_key]
+
     def _find_by_id(self, notification_id: UUID) -> Notification | None:
         for q in self._queues.values():
             if notification_id in q:
@@ -187,6 +221,7 @@ class _DatabaseStorageMixin:
             try:
                 await asyncio.sleep(600)  # 10 minutes
                 await self._delete_old_notifications()
+                await self.cleanup_dismissed()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -379,6 +414,74 @@ class _DatabaseStorageMixin:
                 )
             )
             return result.scalar_one_or_none()
+
+    async def find_by_group(self, source_key: str, group: str) -> UUID | None:
+        from skrift.db.models.notification import StoredNotification
+        from sqlalchemy import select
+
+        async with self._session_maker() as session:
+            result = await session.execute(
+                select(StoredNotification.id).where(
+                    StoredNotification.source_key == source_key,
+                    StoredNotification.group_key == group,
+                )
+            )
+            return result.scalar_one_or_none()
+
+    async def dismiss_for_subscriber(self, subscriber_key: str, notification_id: UUID) -> str | None:
+        from skrift.db.models.notification import DismissedNotification, StoredNotification
+        from sqlalchemy import select
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        async with self._session_maker() as session:
+            result = await session.execute(
+                select(StoredNotification.source_key).where(
+                    StoredNotification.id == notification_id
+                )
+            )
+            source_key = result.scalar_one_or_none()
+            if source_key is None:
+                return None
+
+            stmt = pg_insert(DismissedNotification).values(
+                subscriber_key=subscriber_key,
+                notification_id=notification_id,
+            ).on_conflict_do_nothing(
+                constraint="uq_dismissed_subscriber_notification"
+            )
+            await session.execute(stmt)
+            await session.commit()
+            return source_key
+
+    async def get_dismissed_ids(self, subscriber_key: str, notification_ids: Collection[UUID]) -> set[UUID]:
+        from skrift.db.models.notification import DismissedNotification
+        from sqlalchemy import select
+
+        if not notification_ids:
+            return set()
+
+        async with self._session_maker() as session:
+            result = await session.execute(
+                select(DismissedNotification.notification_id).where(
+                    DismissedNotification.subscriber_key == subscriber_key,
+                    DismissedNotification.notification_id.in_(notification_ids),
+                )
+            )
+            return set(result.scalars().all())
+
+    async def cleanup_dismissed(self) -> None:
+        from skrift.db.models.notification import DismissedNotification, StoredNotification
+        from sqlalchemy import delete, select
+
+        async with self._session_maker() as session:
+            await session.execute(
+                delete(DismissedNotification).where(
+                    DismissedNotification.notification_id.notin_(
+                        select(StoredNotification.id)
+                    )
+                )
+            )
+            await session.commit()
 
 
 def _parse_source_key(source_key: str) -> tuple[str, str]:

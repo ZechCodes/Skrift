@@ -1171,6 +1171,124 @@ class TestSourceSubscriptionModel:
         assert dismissed.type == "dismissed"
         assert dismissed.id == n.id
 
-        # Storage is cleared
+        # Storage is cleared for dismisser
         queued = await svc.get_queued("abc", "alice")
         assert queued == []
+
+
+# ===========================================================================
+# Per-subscriber dismissals
+# ===========================================================================
+
+
+class TestPerSubscriberDismissals:
+    """Test that dismiss is per-subscriber, not global."""
+
+    @pytest.mark.asyncio
+    async def test_dismiss_does_not_remove_for_other_subscribers(self, svc):
+        """Alice dismisses a shared notification, Bob still sees it."""
+        # Both subscribe to blog:tech
+        await svc.register_connection("alice-s", "alice")
+        await svc.subscribe("user:alice", "blog:tech")
+        await svc.register_connection("bob-s", "bob")
+        await svc.subscribe("user:bob", "blog:tech")
+
+        n = Notification(type="post", payload={"title": "Hello"})
+        await svc.send("blog:tech", n)
+
+        # Alice dismisses
+        assert await svc.dismiss("alice-s", "alice", n.id) is True
+
+        # Alice sees nothing
+        alice_queued = await svc.get_queued("alice-s", "alice")
+        assert alice_queued == []
+
+        # Bob still sees it
+        bob_queued = await svc.get_queued("bob-s", "bob")
+        assert len(bob_queued) == 1
+        assert bob_queued[0].id == n.id
+
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_per_subscriber(self, svc):
+        """Group dismiss is also per-subscriber."""
+        await svc.register_connection("alice-s", "alice")
+        await svc.subscribe("user:alice", "blog:tech")
+        await svc.register_connection("bob-s", "bob")
+        await svc.subscribe("user:bob", "blog:tech")
+
+        n = Notification(type="post", group="latest", payload={"title": "Hello"})
+        await svc.send("blog:tech", n)
+
+        # Alice dismisses by group
+        assert await svc.dismiss("alice-s", "alice", group="latest") is True
+
+        alice_queued = await svc.get_queued("alice-s", "alice")
+        assert alice_queued == []
+
+        bob_queued = await svc.get_queued("bob-s", "bob")
+        assert len(bob_queued) == 1
+        assert bob_queued[0].id == n.id
+
+    @pytest.mark.asyncio
+    async def test_session_only_dismiss(self, svc):
+        """Anonymous session dismiss with no user_id."""
+        n = Notification(type="alert", payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        assert await svc.dismiss("s1", None, n.id) is True
+        assert await svc.get_queued("s1", None) == []
+
+    @pytest.mark.asyncio
+    async def test_dismiss_event_only_reaches_dismisser_sessions(self, svc):
+        """Alice's dismiss doesn't push a dismissed event to Bob's queue."""
+        q_alice = await svc.register_connection("alice-s", "alice")
+        await svc.subscribe("user:alice", "blog:tech")
+        q_bob = await svc.register_connection("bob-s", "bob")
+        await svc.subscribe("user:bob", "blog:tech")
+
+        n = Notification(type="post", payload={"title": "Hello"})
+        await svc.send("blog:tech", n)
+
+        # Drain send events
+        q_alice.get_nowait()
+        q_bob.get_nowait()
+
+        await svc.dismiss("alice-s", "alice", n.id)
+
+        # Alice gets dismissed event
+        dismissed = q_alice.get_nowait()
+        assert dismissed.type == "dismissed"
+        assert dismissed.id == n.id
+
+        # Bob's queue should be empty (no spurious dismissed event)
+        assert q_bob.empty()
+
+    @pytest.mark.asyncio
+    async def test_dismiss_idempotent(self, svc):
+        """Dismissing the same notification twice returns True both times."""
+        n = Notification(type="alert", payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        assert await svc.dismiss("s1", None, n.id) is True
+        assert await svc.dismiss("s1", None, n.id) is True
+
+    @pytest.mark.asyncio
+    async def test_group_replacement_on_store_still_deletes(self, svc):
+        """store() group replacement physically deletes (producer-side)."""
+        n1 = Notification(type="post", group="latest", payload={"step": "1"})
+        n2 = Notification(type="post", group="latest", payload={"step": "2"})
+
+        await svc.send("blog:tech", n1)
+        await svc.send("blog:tech", n2)
+
+        # Only n2 should be in storage — group replacement deletes n1
+        backend = svc._get_backend()
+        stored = await backend.get_queued_multi(["blog:tech"])
+        assert len(stored) == 1
+        assert stored[0].id == n2.id
+
+    def test_subscriber_key_derivation(self):
+        from skrift.lib.notifications import NotificationService
+
+        assert NotificationService._subscriber_key_for("s1", "alice") == "user:alice"
+        assert NotificationService._subscriber_key_for("s1", None) == "session:s1"
