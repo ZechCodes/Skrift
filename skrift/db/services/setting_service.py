@@ -227,5 +227,17 @@ def get_cached_site_base_url() -> str:
 
 
 def get_cached_site_theme() -> str:
-    """Get the cached site theme name for use in template resolution."""
-    return _get_cached_setting(SITE_THEME_KEY)
+    """Get the cached site theme name for use in template resolution.
+
+    Falls back to the app.yaml ``theme`` setting when the database
+    cache has not been populated or the DB has no theme configured.
+    """
+    theme = _get_cached_setting(SITE_THEME_KEY)
+    if theme:
+        return theme
+
+    try:
+        from skrift.config import get_settings
+        return get_settings().theme
+    except Exception:
+        return ""

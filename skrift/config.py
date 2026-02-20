@@ -306,6 +306,7 @@ class Settings(BaseSettings):
     # Application
     debug: bool = False
     secret_key: str
+    theme: str = ""
 
     # Database config (loaded from app.yaml)
     db: DatabaseConfig = DatabaseConfig()
@@ -422,6 +423,9 @@ def get_settings() -> Settings:
 
     if "page_types" in app_config:
         kwargs["page_types"] = [PageTypeConfig(**pt) for pt in app_config["page_types"]]
+
+    if "theme" in app_config:
+        kwargs["theme"] = app_config["theme"]
 
     # Create Settings with YAML nested configs
     # BaseSettings will still load debug/secret_key from env, but kwargs take precedence

@@ -179,6 +179,20 @@ session:
   cookie_domain: $SESSION_COOKIE_DOMAIN  # From environment variable
 ```
 
+### Theme
+
+Set the default theme for your site:
+
+```yaml
+theme: my-theme  # Default theme from themes/ directory
+```
+
+This specifies which theme from the `themes/` directory to use by default. The theme set via the admin UI (stored in the database) takes priority over this value.
+
+The `app.yaml` theme acts as a fallback when the database is unavailable (e.g., before migrations have run or during a database outage), ensuring your site still renders with the intended visual identity instead of bare defaults.
+
+**Priority order**: DB setting > `app.yaml` theme > no theme (Skrift defaults)
+
 ## Environment-Specific Configuration
 
 Different environments need different settings. Skrift uses the `SKRIFT_ENV` variable to select the right config file:

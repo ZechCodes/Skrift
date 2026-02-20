@@ -105,6 +105,8 @@ auth:
 session:
   cookie_domain: null
 
+theme: my-theme  # default theme (overridden by admin UI)
+
 controllers:
   - skrift.controllers.auth:AuthController
   - skrift.controllers.web:WebController
