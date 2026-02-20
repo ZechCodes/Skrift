@@ -128,6 +128,7 @@ async def run_async_migrations() -> None:
         if schema:
             await connection.execute(sa.text(f"SET search_path TO {schema}"))
         await connection.run_sync(do_run_migrations)
+        await connection.commit()
 
     await connectable.dispose()
 
