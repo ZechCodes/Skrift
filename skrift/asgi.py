@@ -721,9 +721,18 @@ def create_app() -> ASGIApp:
 
     from skrift.controllers.notifications import NotificationsController
     from skrift.controllers.notification_webhook import NotificationsWebhookController
+    from skrift.controllers.oauth2 import OAuth2Controller
     from skrift.auth import sync_roles_to_database
     from skrift.lib.notification_backends import InMemoryBackend, load_backend
     from skrift.lib.notifications import notifications as notification_service
+
+    # OAuth2 controller — only registered when clients are configured
+    oauth2_handlers: list = []
+    if settings.oauth2.clients:
+        oauth2_handlers.append(OAuth2Controller)
+        # Exempt token endpoint from CSRF since it's called by external clients
+        if settings.csrf is not None:
+            settings.csrf.exclude.append("/oauth/token")
 
     # Webhook controller — only registered when a secret is configured
     webhook_handlers: list = []
@@ -766,7 +775,7 @@ def create_app() -> ASGIApp:
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
-        route_handlers=[NotificationsController, *webhook_handlers, *controllers],
+        route_handlers=[NotificationsController, *oauth2_handlers, *webhook_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,

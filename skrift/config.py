@@ -167,8 +167,31 @@ class DummyProviderConfig(BaseModel):
     pass
 
 
+class SkriftProviderConfig(BaseModel):
+    """Skrift OAuth provider config (points at a remote Skrift OAuth2 server)."""
+
+    server_url: str
+    client_id: str
+    client_secret: str = ""
+    scopes: list[str] = ["openid", "profile", "email"]
+
+
 # Union type for provider configs - dummy has no required fields
-ProviderConfig = OAuthProviderConfig | DummyProviderConfig
+ProviderConfig = OAuthProviderConfig | DummyProviderConfig | SkriftProviderConfig
+
+
+class OAuth2ClientConfig(BaseModel):
+    """A registered OAuth2 client (spoke site)."""
+
+    client_id: str
+    client_secret: str = ""
+    redirect_uris: list[str] = []
+
+
+class OAuth2Config(BaseModel):
+    """OAuth2 Authorization Server configuration."""
+
+    clients: list[OAuth2ClientConfig] = []
 
 
 class SecurityHeadersConfig(BaseModel):
@@ -290,6 +313,8 @@ class AuthConfig(BaseModel):
         """Parse a provider config, using the appropriate model based on provider name."""
         if name == "dummy":
             return DummyProviderConfig(**config)
+        if name == "skrift":
+            return SkriftProviderConfig(**config)
         return OAuthProviderConfig(**config)
 
     def __init__(self, **data):
@@ -326,6 +351,9 @@ class Settings(BaseSettings):
 
     # Auth config (loaded from app.yaml)
     auth: AuthConfig = AuthConfig()
+
+    # OAuth2 Authorization Server config (loaded from app.yaml)
+    oauth2: OAuth2Config = OAuth2Config()
 
     # Session config (loaded from app.yaml)
     session: SessionConfig = SessionConfig()
@@ -433,6 +461,12 @@ def get_settings() -> Settings:
 
     if "logfire" in app_config:
         kwargs["logfire"] = LogfireConfig(**app_config["logfire"])
+
+    if "oauth2" in app_config:
+        oauth2_data = app_config["oauth2"]
+        kwargs["oauth2"] = OAuth2Config(
+            clients=[OAuth2ClientConfig(**c) for c in oauth2_data.get("clients", [])]
+        )
 
     if "page_types" in app_config:
         kwargs["page_types"] = [PageTypeConfig(**pt) for pt in app_config["page_types"]]
