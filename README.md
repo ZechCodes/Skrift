@@ -1,5 +1,9 @@
 # Skrift
 
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg?style=flat-square)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+[![Built with Litestar](https://img.shields.io/badge/Built%20with-Litestar-blue.svg?style=flat-square)](https://litestar.dev/)
+
 A modern Litestar-powered content management framework with multi-provider OAuth authentication, role-based access control, and WordPress-like template resolution.
 
 ## Features
