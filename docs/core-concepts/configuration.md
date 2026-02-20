@@ -193,6 +193,23 @@ The `app.yaml` theme acts as a fallback when the database is unavailable (e.g., 
 
 **Priority order**: DB setting > `app.yaml` theme > no theme (Skrift defaults)
 
+### Multi-Subdomain Sites
+
+Serve multiple subdomains from a single deployment with shared auth and database:
+
+```yaml
+domain: example.com
+
+sites:
+  blog:
+    subdomain: blog
+    controllers:
+      - controllers.blog:BlogController
+    theme: blog-theme
+```
+
+Requires `session.cookie_domain: .example.com` and `auth.allowed_redirect_domains: ["*.example.com"]` for cross-subdomain sessions and login redirects. See [Multi-Subdomain Sites](../guides/multisite.md) for the full guide.
+
 ## Environment-Specific Configuration
 
 Different environments need different settings. Skrift uses the `SKRIFT_ENV` variable to select the right config file:

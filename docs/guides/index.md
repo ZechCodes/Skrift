@@ -106,6 +106,14 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Notifications](notifications.md)
 
+-   :material-web:{ .lg .middle } **Multi-Subdomain Sites**
+
+    ---
+
+    Serve multiple subdomains from one deployment with shared auth and database.
+
+    [:octicons-arrow-right-24: Multi-Subdomain Sites](multisite.md)
+
 </div>
 
 ## Guide Overview
@@ -123,6 +131,7 @@ Step-by-step guides for building and customizing your Skrift site.
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |
 | [Observability](observability.md) | Tracing & logging | None |
 | [Notifications](notifications.md) | Real-time notifications | Python basics |
+| [Multi-Subdomain Sites](multisite.md) | Subdomain architecture | Python, ASGI |
 
 ## What You Can Build
 

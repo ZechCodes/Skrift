@@ -262,6 +262,15 @@ class LogfireConfig(BaseModel):
     console: bool = False
 
 
+class SiteConfig(BaseModel):
+    """Configuration for a subdomain site."""
+
+    subdomain: str
+    controllers: list[str] = []
+    theme: str = ""
+    page_types: list[PageTypeConfig] = []
+
+
 class NotificationsConfig(BaseModel):
     """Notification backend configuration."""
 
@@ -307,6 +316,10 @@ class Settings(BaseSettings):
     debug: bool = False
     secret_key: str
     theme: str = ""
+    domain: str = ""
+
+    # Subdomain sites (loaded from app.yaml)
+    sites: dict[str, SiteConfig] = {}
 
     # Database config (loaded from app.yaml)
     db: DatabaseConfig = DatabaseConfig()
@@ -426,6 +439,14 @@ def get_settings() -> Settings:
 
     if "theme" in app_config:
         kwargs["theme"] = app_config["theme"]
+
+    if "domain" in app_config:
+        kwargs["domain"] = app_config["domain"]
+
+    if "sites" in app_config:
+        kwargs["sites"] = {
+            name: SiteConfig(**cfg) for name, cfg in app_config["sites"].items()
+        }
 
     # Create Settings with YAML nested configs
     # BaseSettings will still load debug/secret_key from env, but kwargs take precedence

@@ -161,6 +161,24 @@ def load_controllers() -> list:
     return controllers
 
 
+def load_site_controllers(specs: list[str]) -> list:
+    """Load controllers from explicit import specs for a subdomain site.
+
+    Unlike load_controllers(), this does not read app.yaml and does not
+    auto-expand AdminController.
+    """
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+
+    controllers = []
+    for spec in specs:
+        module_path, class_name = spec.split(":")
+        module = importlib.import_module(module_path)
+        controllers.append(getattr(module, class_name))
+    return controllers
+
+
 def _load_middleware_factory(spec: str):
     """Import a single middleware factory from a module:name spec.
 
@@ -495,11 +513,86 @@ class AppDispatcher:
         await send({"type": "http.response.body", "body": body})
 
 
-def create_app() -> Litestar:
+def _build_site_app(
+    settings,
+    site_name: str,
+    site_config,
+    db_config: SQLAlchemyAsyncConfig,
+    session_config,
+    csrf_config,
+    security_middleware: list,
+    rate_limit_middleware: list,
+    user_middleware: list,
+    static_url,
+    themes_dir: Path,
+    site_static_dir: Path,
+    package_static_dir: Path,
+) -> ASGIApp:
+    """Build a lightweight Litestar app for a subdomain site.
+
+    Shares the database engine, session config, CSRF config, and middleware
+    with the primary app. Gets its own controllers and template directories.
+    """
+    from skrift.app_factory import get_template_directories_for_theme
+    from skrift.forms import Form, csrf_field as _csrf_field
+
+    controllers = load_site_controllers(site_config.controllers)
+
+    theme = site_config.theme or settings.theme
+
+    template_dirs = get_template_directories_for_theme(theme)
+    engine_callback = build_template_engine_callback(
+        extra_globals={
+            "site_name": lambda _n=site_name: _n,
+            "site_tagline": get_cached_site_tagline,
+            "site_copyright_holder": get_cached_site_copyright_holder,
+            "site_copyright_start_year": get_cached_site_copyright_start_year,
+            "active_theme": lambda _t=theme: _t,
+            "themes_available": lambda: False,
+            "Form": Form,
+            "csrf_field": _csrf_field,
+            "static_url": static_url,
+            "theme_url": ThemeStaticURL(static_url, lambda _t=theme: _t),
+            "login_url": lambda: f"https://{settings.domain}/auth/login",
+        },
+    )
+    template_config = create_template_config(template_dirs, engine_callback)
+
+    site_app = Litestar(
+        route_handlers=controllers,
+        plugins=[SQLAlchemyPlugin(config=db_config)],
+        middleware=[
+            DefineMiddleware(SessionCleanupMiddleware),
+            *security_middleware,
+            *rate_limit_middleware,
+            session_config.middleware,
+            *user_middleware,
+        ],
+        template_config=template_config,
+        compression_config=CompressionConfig(backend="gzip"),
+        csrf_config=csrf_config,
+        exception_handlers=EXCEPTION_HANDLERS,
+        debug=settings.debug,
+    )
+
+    from skrift.middleware.static import StaticFilesMiddleware
+    return StaticFilesMiddleware(
+        site_app,
+        themes_dir=themes_dir,
+        site_static_dir=site_static_dir,
+        package_static_dir=package_static_dir,
+    )
+
+
+def create_app() -> ASGIApp:
     """Create and configure the main Litestar application.
 
     This app has all routes for normal operation. It is used by the dispatcher
     after setup is complete.
+
+    When ``domain`` and ``sites`` are configured in app.yaml, the returned app
+    is a :class:`~skrift.middleware.site_dispatch.SiteDispatcher` that routes
+    subdomain requests to lightweight per-site Litestar apps.
     """
     # CRITICAL: Check for dummy auth in production BEFORE anything else
     from skrift.setup.providers import validate_no_dummy_auth_in_production
@@ -684,12 +777,42 @@ def create_app() -> Litestar:
     )
     app.state.webhook_secret = settings.notifications.webhook_secret
     from skrift.middleware.static import StaticFilesMiddleware
-    return StaticFilesMiddleware(
+    primary_asgi = StaticFilesMiddleware(
         observability.instrument_app(app),
         themes_dir=themes_dir,
         site_static_dir=site_static_dir,
         package_static_dir=package_static_dir,
     )
+
+    # Subdomain site dispatch — only when domain and sites are configured
+    if settings.sites and settings.domain:
+        from skrift.middleware.site_dispatch import SiteDispatcher
+
+        site_apps = {}
+        for name, site_cfg in settings.sites.items():
+            site_apps[site_cfg.subdomain] = _build_site_app(
+                settings=settings,
+                site_name=name,
+                site_config=site_cfg,
+                db_config=db_config,
+                session_config=session_config,
+                csrf_config=csrf_config,
+                security_middleware=security_middleware,
+                rate_limit_middleware=rate_limit_middleware,
+                user_middleware=user_middleware,
+                static_url=static_url,
+                themes_dir=themes_dir,
+                site_static_dir=site_static_dir,
+                package_static_dir=package_static_dir,
+            )
+
+        return SiteDispatcher(
+            primary_app=primary_asgi,
+            site_apps=site_apps,
+            domain=settings.domain,
+        )
+
+    return primary_asgi
 
 
 def create_setup_app() -> Litestar:
