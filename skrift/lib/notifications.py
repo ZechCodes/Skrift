@@ -1,22 +1,24 @@
 """Real-time notification service for Skrift CMS.
 
-Provides session-scoped and user-scoped notifications delivered via
-Server-Sent Events (SSE). Notifications persist in their backend
-queues until explicitly dismissed via the DELETE endpoint.
+Provides source-based notifications delivered via Server-Sent Events (SSE).
+Sources form a DAG: ``global`` -> ``user:alice`` -> ``session:abc``.
+Custom sources (e.g., ``blog:tech``) can be declared; users subscribe to them.
 
 The backend is pluggable via app.yaml — see notification_backends.py.
 
 Usage:
-    from skrift.lib.notifications import notify_session, notify_user
+    from skrift.lib.notifications import notify_session, notify_user, notify_source
 
     await notify_session(nid, "generic", title="Page published", message="Now live.")
     await notify_user(user_id, "generic", title="New comment", message="On your post.")
+    await notify_source("blog:tech", "new_post", title="New post published")
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -65,84 +67,129 @@ class Notification:
         return cls(type="dismissed", id=notification_id, payload={})
 
 
-class ConnectionManager:
-    """Manages SSE connection queues and local notification delivery.
+def _parse_source_key(source_key: str) -> tuple[str, str | None]:
+    """Derive ``(scope, scope_id)`` from a source_key for hook backwards compat.
 
-    Per-replica — each process has its own set of active connections.
+    - ``"session:abc"``  -> ``("session", "abc")``
+    - ``"user:alice"``   -> ``("user", "alice")``
+    - ``"global"``       -> ``("broadcast", None)``
+    - ``"blog:tech"``    -> ``("blog", "tech")``
+    """
+    if source_key == "global":
+        return ("broadcast", None)
+    if ":" in source_key:
+        scope, scope_id = source_key.split(":", 1)
+        return (scope, scope_id)
+    return (source_key, None)
+
+
+class SourceRegistry:
+    """In-memory subscription DAG and listener registry.
+
+    Replaces ``ConnectionManager``. Pure synchronous data structure (no ``await``),
+    safe under single-threaded asyncio.
+
+    The graph has two edge directions:
+    - ``_subscriptions[child] = {parents}`` — upward edges (child subscribes to parent)
+    - ``_subscribers[parent] = {children}`` — downward edges (reverse index)
+
+    Publishing to a source cascades **downstream** (toward listeners).
     """
 
     def __init__(self) -> None:
-        self._connections: dict[str, list[asyncio.Queue]] = {}
-        self._connection_user_ids: dict[str, str | None] = {}
+        self._listeners: dict[str, set[asyncio.Queue]] = {}
+        self._subscriptions: dict[str, set[str]] = {}  # child -> {parents}
+        self._subscribers: dict[str, set[str]] = {}    # parent -> {children}
 
-    def register(self, nid: str, user_id: str | None) -> asyncio.Queue:
-        """Register a new SSE connection and return its queue."""
-        q: asyncio.Queue = asyncio.Queue()
-        self._connections.setdefault(nid, []).append(q)
-        self._connection_user_ids[nid] = user_id
-        return q
+    def add_listener(self, source_key: str, queue: asyncio.Queue) -> None:
+        self._listeners.setdefault(source_key, set()).add(queue)
 
-    def unregister(self, nid: str, q: asyncio.Queue) -> None:
-        """Remove a connection on disconnect."""
-        conns = self._connections.get(nid, [])
-        try:
-            conns.remove(q)
-        except ValueError:
-            pass
-        if not conns:
-            self._connections.pop(nid, None)
-            self._connection_user_ids.pop(nid, None)
+    def remove_listener(self, source_key: str, queue: asyncio.Queue) -> None:
+        listeners = self._listeners.get(source_key)
+        if listeners:
+            listeners.discard(queue)
+            if not listeners:
+                del self._listeners[source_key]
 
-    def push_to_session(self, nid: str, notification: Notification) -> None:
-        """Push a notification to all connections for a session."""
-        for q in self._connections.get(nid, []):
-            q.put_nowait(notification)
+    def has_listeners(self, source_key: str) -> bool:
+        return bool(self._listeners.get(source_key))
 
-    def push_to_user(self, user_id: str, notification: Notification) -> None:
-        """Push a notification to all connections for a user."""
-        for sid, uid in self._connection_user_ids.items():
-            if uid == user_id:
-                for q in self._connections.get(sid, []):
-                    q.put_nowait(notification)
+    def subscribe(self, child: str, parent: str) -> None:
+        """Add an edge: child subscribes to parent (idempotent)."""
+        self._subscriptions.setdefault(child, set()).add(parent)
+        self._subscribers.setdefault(parent, set()).add(child)
 
-    def push_to_user_except(self, user_id: str, exclude_nid: str, notification: Notification) -> None:
-        """Push to all connections for a user except the given session."""
-        for sid, uid in self._connection_user_ids.items():
-            if uid == user_id and sid != exclude_nid:
-                for q in self._connections.get(sid, []):
-                    q.put_nowait(notification)
+    def unsubscribe(self, child: str, parent: str) -> None:
+        """Remove an edge (idempotent)."""
+        subs = self._subscriptions.get(child)
+        if subs:
+            subs.discard(parent)
+            if not subs:
+                del self._subscriptions[child]
+        rev = self._subscribers.get(parent)
+        if rev:
+            rev.discard(child)
+            if not rev:
+                del self._subscribers[parent]
 
-    def push_to_all(self, notification: Notification) -> None:
-        """Push a notification to all active connections."""
-        for queues in self._connections.values():
-            for q in queues:
+    def unsubscribe_all(self, child: str) -> None:
+        """Remove all upstream edges for a child (session teardown)."""
+        parents = self._subscriptions.pop(child, set())
+        for parent in parents:
+            rev = self._subscribers.get(parent)
+            if rev:
+                rev.discard(child)
+                if not rev:
+                    del self._subscribers[parent]
+
+    def resolve_downstream(self, source_key: str) -> set[str]:
+        """BFS following ``_subscribers`` edges — find all downstream targets."""
+        visited: set[str] = set()
+        queue: deque[str] = deque([source_key])
+        while queue:
+            node = queue.popleft()
+            if node in visited:
+                continue
+            visited.add(node)
+            for child in self._subscribers.get(node, ()):
+                if child not in visited:
+                    queue.append(child)
+        return visited
+
+    def resolve_upstream(self, source_key: str) -> set[str]:
+        """BFS following ``_subscriptions`` edges — find all upstream sources."""
+        visited: set[str] = set()
+        queue: deque[str] = deque([source_key])
+        while queue:
+            node = queue.popleft()
+            if node in visited:
+                continue
+            visited.add(node)
+            for parent in self._subscriptions.get(node, ()):
+                if parent not in visited:
+                    queue.append(parent)
+        return visited
+
+    def push(self, source_key: str, notification: Notification) -> None:
+        """Resolve downstream targets and push to all listeners on those targets."""
+        targets = self.resolve_downstream(source_key)
+        for target in targets:
+            for q in self._listeners.get(target, ()):
                 q.put_nowait(notification)
-
-    def push_to_scope(self, scope: str, scope_id: str, notification: Notification) -> None:
-        """Push a notification to the appropriate scope."""
-        if scope == "session":
-            self.push_to_session(scope_id, notification)
-        elif scope == "user":
-            self.push_to_user(scope_id, notification)
-
-    def find_session_for_user(self, user_id: str) -> str | None:
-        """Find any session ID belonging to the given user."""
-        for sid, uid in self._connection_user_ids.items():
-            if uid == user_id:
-                return sid
-        return None
 
 
 class NotificationService:
     """Manages notification storage, delivery, and cross-replica fanout.
 
     Storage and cross-replica fanout are delegated to a pluggable backend.
-    Local SSE connection management is delegated to ConnectionManager.
+    Local SSE connection management is delegated to SourceRegistry.
     """
 
     def __init__(self) -> None:
-        self._cm = ConnectionManager()
+        self._registry = SourceRegistry()
         self._backend: NotificationBackend | None = None
+        self._publisher_id: str = str(uuid4())
+        self._loaded_user_subs: set[str] = set()
 
     def set_backend(self, backend: NotificationBackend) -> None:
         self._backend = backend
@@ -155,8 +202,10 @@ class NotificationService:
             self._backend.on_remote_message(self._handle_remote)
         return self._backend
 
-    async def _send(self, scope: str, scope_id: str, notification: Notification) -> None:
-        """Shared implementation for send_to_session and send_to_user."""
+    async def _send(self, source_key: str, notification: Notification) -> None:
+        """Unified send: store, push locally via graph, fanout to replicas."""
+        scope, scope_id = _parse_source_key(source_key)
+
         notification = await hooks.apply_filters(NOTIFICATION_PRE_SEND, notification, scope, scope_id)
         if notification is None:
             return
@@ -164,14 +213,14 @@ class NotificationService:
         backend = self._get_backend()
 
         if notification.mode != NotificationMode.EPHEMERAL:
-            old_id = await backend.store(scope, scope_id, notification)
+            old_id = await backend.store(source_key, notification)
             if old_id is not None:
-                self._cm.push_to_scope(scope, scope_id, Notification.dismissed(old_id))
+                self._registry.push(source_key, Notification.dismissed(old_id))
 
-        self._cm.push_to_scope(scope, scope_id, notification)
+        self._registry.push(source_key, notification)
 
         await backend.publish({
-            "a": "s", "sc": scope, "sid": scope_id,
+            "a": "s", "sk": source_key, "pid": self._publisher_id,
             "n": notification.to_dict(),
         })
 
@@ -179,26 +228,36 @@ class NotificationService:
 
     async def send_to_session(self, nid: str, notification: Notification) -> None:
         """Store a notification in the session queue and push to active connections."""
-        await self._send("session", nid, notification)
+        await self._send(f"session:{nid}", notification)
 
     async def send_to_user(self, user_id: str, notification: Notification) -> None:
         """Store a notification in the user queue and push to all connections for this user."""
-        await self._send("user", user_id, notification)
+        await self._send(f"user:{user_id}", notification)
 
     async def broadcast(self, notification: Notification) -> None:
-        """Push an ephemeral notification to ALL active connections. Not stored — won't replay on reconnect."""
+        """Push an ephemeral notification to ALL active connections. Not stored."""
         notification = await hooks.apply_filters(NOTIFICATION_PRE_SEND, notification, "broadcast", None)
         if notification is None:
             return
 
-        self._cm.push_to_all(notification)
+        self._registry.push("global", notification)
 
         await self._get_backend().publish({
-            "a": "b",
+            "a": "s", "sk": "global", "pid": self._publisher_id,
             "n": notification.to_dict(),
         })
 
         await hooks.do_action(NOTIFICATION_SENT, notification, "broadcast", None)
+
+    async def send(self, source_key: str, notification: Notification) -> None:
+        """Publish to any source key."""
+        await self._send(source_key, notification)
+
+    @staticmethod
+    def _subscriber_key_for(nid: str, user_id: str | None) -> str:
+        if user_id:
+            return f"user:{user_id}"
+        return f"session:{nid}"
 
     async def dismiss(
         self,
@@ -208,13 +267,14 @@ class NotificationService:
         *,
         group: str | None = None,
     ) -> bool:
-        """Remove a notification from queues and push a dismissed event.
+        """Record a per-subscriber dismissal and push a dismissed event.
 
         Lookup by *notification_id* (UUID) or *group* key — supply one.
-        Returns True if a notification was found and removed.
+        Returns True if a notification was found and dismissed.
         Raises NotDismissibleError if the notification is timeseries mode.
         """
         backend = self._get_backend()
+        subscriber_key = self._subscriber_key_for(nid, user_id)
         dismissed_id: UUID | None = None
 
         if notification_id is not None:
@@ -223,26 +283,27 @@ class NotificationService:
                 raise NotDismissibleError(
                     f"Cannot dismiss timeseries notification {notification_id}"
                 )
-            await backend.remove(notification_id)
-            dismissed_id = notification_id
+            source_key = await backend.dismiss_for_subscriber(subscriber_key, notification_id)
+            if source_key is not None:
+                dismissed_id = notification_id
         elif group is not None:
-            old_id = await backend.remove_by_group("session", nid, group)
-            if old_id:
-                dismissed_id = old_id
-            if user_id:
-                old_id = await backend.remove_by_group("user", user_id, group)
-                if old_id:
-                    dismissed_id = old_id
+            for key in self._storage_keys_for(nid, user_id):
+                found_id = await backend.find_by_group(key, group)
+                if found_id is not None:
+                    await backend.dismiss_for_subscriber(subscriber_key, found_id)
+                    dismissed_id = found_id
 
         if dismissed_id is not None:
             dismissed = Notification.dismissed(dismissed_id)
-            self._cm.push_to_session(nid, dismissed)
+
+            # Push only to the dismisser's sessions, not the source
+            self._registry.push(f"session:{nid}", dismissed)
             if user_id:
-                self._cm.push_to_user_except(user_id, nid, dismissed)
+                self._registry.push(f"user:{user_id}", dismissed)
 
             await backend.publish({
-                "a": "d", "sc": "session", "sid": nid,
-                "uid": user_id,
+                "a": "d", "sub": subscriber_key,
+                "pid": self._publisher_id,
                 "nid": str(dismissed_id),
             })
 
@@ -254,66 +315,116 @@ class NotificationService:
         self, nid: str, user_id: str | None
     ) -> list[Notification]:
         """Return all queued notifications sorted oldest-first."""
+        keys = self._storage_keys_for(nid, user_id)
         backend = self._get_backend()
-        session_notifs = await backend.get_queued("session", nid)
-        user_notifs = await backend.get_queued("user", user_id) if user_id else []
-        merged: dict[UUID, Notification] = {}
-        for n in session_notifs + user_notifs:
-            merged[n.id] = n
-        return sorted(merged.values(), key=lambda n: n.created_at)
+        results = await backend.get_queued_multi(keys)
+        if not results:
+            return results
+        subscriber_key = self._subscriber_key_for(nid, user_id)
+        dismissed = await backend.get_dismissed_ids(subscriber_key, [n.id for n in results])
+        if dismissed:
+            results = [n for n in results if n.id not in dismissed]
+        return results
 
     async def get_since(
         self, nid: str, user_id: str | None, since: float
     ) -> list[Notification]:
         """Return timeseries notifications created after *since* timestamp."""
+        keys = self._storage_keys_for(nid, user_id)
         backend = self._get_backend()
-        session_notifs = await backend.get_since("session", nid, since)
-        user_notifs = await backend.get_since("user", user_id, since) if user_id else []
-        merged: dict[UUID, Notification] = {}
-        for n in session_notifs + user_notifs:
-            merged[n.id] = n
-        return sorted(merged.values(), key=lambda n: n.created_at)
+        results = await backend.get_since_multi(keys, since)
+        if not results:
+            return results
+        subscriber_key = self._subscriber_key_for(nid, user_id)
+        dismissed = await backend.get_dismissed_ids(subscriber_key, [n.id for n in results])
+        if dismissed:
+            results = [n for n in results if n.id not in dismissed]
+        return results
 
-    def register_connection(
+    def _storage_keys_for(self, nid: str, user_id: str | None) -> list[str]:
+        """Compute the set of source_keys to query for stored notifications.
+
+        Uses the upstream graph from ``session:{nid}`` but excludes ``global``
+        (ephemeral-only source).
+        """
+        session_key = f"session:{nid}"
+        upstream = self._registry.resolve_upstream(session_key)
+        # Always include the direct keys even without graph edges
+        upstream.add(session_key)
+        if user_id:
+            upstream.add(f"user:{user_id}")
+        upstream.discard("global")
+        return list(upstream)
+
+    async def register_connection(
         self, nid: str, user_id: str | None
     ) -> asyncio.Queue:
-        """Register a new SSE connection and return its queue."""
-        return self._cm.register(nid, user_id)
+        """Register a new SSE connection and return its queue.
+
+        Sets up ephemeral graph edges and loads persistent subscriptions.
+        """
+        session_key = f"session:{nid}"
+        q: asyncio.Queue = asyncio.Queue()
+
+        # Ephemeral edges: session -> global, session -> user, user -> global
+        self._registry.subscribe(session_key, "global")
+        if user_id:
+            user_key = f"user:{user_id}"
+            self._registry.subscribe(session_key, user_key)
+            self._registry.subscribe(user_key, "global")
+
+            # Load persistent subscriptions for this user (once per process)
+            if user_key not in self._loaded_user_subs:
+                self._loaded_user_subs.add(user_key)
+                backend = self._get_backend()
+                persistent = await backend.get_persistent_subscriptions(user_key)
+                for source in persistent:
+                    self._registry.subscribe(user_key, source)
+
+        self._registry.add_listener(session_key, q)
+        return q
 
     def unregister_connection(self, nid: str, q: asyncio.Queue) -> None:
         """Remove a connection on disconnect."""
-        self._cm.unregister(nid, q)
+        session_key = f"session:{nid}"
+        self._registry.remove_listener(session_key, q)
+
+        # If no more listeners on this session, tear down ephemeral edges
+        if not self._registry.has_listeners(session_key):
+            self._registry.unsubscribe_all(session_key)
+
+    async def subscribe(self, subscriber_key: str, source_key: str) -> None:
+        """Add a persistent subscription (DB + local graph)."""
+        await self._get_backend().add_subscription(subscriber_key, source_key)
+        self._registry.subscribe(subscriber_key, source_key)
+
+    async def unsubscribe(self, subscriber_key: str, source_key: str) -> None:
+        """Remove a persistent subscription (DB + local graph)."""
+        await self._get_backend().remove_subscription(subscriber_key, source_key)
+        self._registry.unsubscribe(subscriber_key, source_key)
 
     async def _handle_remote(self, message: dict) -> None:
         """Process a message received from another replica via pub/sub."""
+        # Self-echo prevention
+        if message.get("pid") == self._publisher_id:
+            return
+
         action = message.get("a")
+        source_key = message.get("sk", "")
 
         if action == "s":
-            # Send notification — push to matching local connections
-            scope = message.get("sc")
-            scope_id = message.get("sid")
             notification = _notification_from_wire(message.get("n", {}))
-
-            self._cm.push_to_scope(scope, scope_id, notification)
+            self._registry.push(source_key, notification)
 
         elif action == "d":
-            # Dismiss
             dismissed_id = UUID(message["nid"])
             dismissed = Notification.dismissed(dismissed_id)
-            sid = message.get("sid", "")
-            uid = message.get("uid")
-
-            self._cm.push_to_session(sid, dismissed)
-            if uid:
-                self._cm.push_to_user_except(uid, sid, dismissed)
-
-        elif action == "b":
-            # Broadcast to all local connections
-            notification = _notification_from_wire(
-                message.get("n", {}),
-                default_mode=NotificationMode.EPHEMERAL,
-            )
-            self._cm.push_to_all(notification)
+            sub = message.get("sub")
+            if sub:
+                self._registry.push(sub, dismissed)
+            else:
+                # Rolling deploy compat: old replicas send "sk" instead of "sub"
+                self._registry.push(source_key, dismissed)
 
 
 def _notification_from_wire(
@@ -375,6 +486,30 @@ async def notify_broadcast(type: str, *, group: str | None = None, **payload) ->
     return n
 
 
+async def notify_source(
+    source_key: str,
+    type: str,
+    *,
+    group: str | None = None,
+    mode: NotificationMode = NotificationMode.QUEUED,
+    **payload,
+) -> Notification:
+    """Convenience: publish a notification to any source key."""
+    n = Notification(type=type, payload=payload, group=group, mode=mode)
+    await notifications.send(source_key, n)
+    return n
+
+
+async def subscribe_source(subscriber_key: str, source_key: str) -> None:
+    """Add a persistent subscription."""
+    await notifications.subscribe(subscriber_key, source_key)
+
+
+async def unsubscribe_source(subscriber_key: str, source_key: str) -> None:
+    """Remove a persistent subscription."""
+    await notifications.unsubscribe(subscriber_key, source_key)
+
+
 async def dismiss_session_group(nid: str, group: str) -> bool:
     """Dismiss the notification with *group* from the session queue."""
     return await notifications.dismiss(nid, None, group=group)
@@ -382,9 +517,16 @@ async def dismiss_session_group(nid: str, group: str) -> bool:
 
 async def dismiss_user_group(user_id: str, group: str) -> bool:
     """Dismiss the notification with *group* from the user queue (all sessions)."""
-    # Find any session belonging to this user to anchor the dismiss event push.
-    anchor_nid = notifications._cm.find_session_for_user(user_id)
-    return await notifications.dismiss(anchor_nid or "", user_id, group=group)
+    # Find any session subscribed to this user to anchor the dismiss event push.
+    user_key = f"user:{user_id}"
+    # Look for a session that subscribes to this user
+    children = notifications._registry._subscribers.get(user_key, set())
+    anchor_nid = ""
+    for child in children:
+        if child.startswith("session:"):
+            anchor_nid = child.removeprefix("session:")
+            break
+    return await notifications.dismiss(anchor_nid, user_id, group=group)
 
 
 def _ensure_nid(request) -> str:

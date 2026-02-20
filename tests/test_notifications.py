@@ -1,4 +1,6 @@
-"""Tests for the notification service group key feature and notification modes."""
+"""Tests for the notification service, SourceRegistry, and source/subscription model."""
+
+import asyncio
 
 import pytest
 
@@ -8,11 +10,15 @@ from skrift.lib.notifications import (
     Notification,
     NotificationMode,
     NotificationService,
+    SourceRegistry,
     dismiss_session_group,
     dismiss_user_group,
     notify_broadcast,
     notify_session,
+    notify_source,
     notify_user,
+    subscribe_source,
+    unsubscribe_source,
 )
 
 
@@ -20,6 +26,116 @@ from skrift.lib.notifications import (
 def svc():
     """Create a fresh NotificationService for each test."""
     return NotificationService()
+
+
+# ===========================================================================
+# SourceRegistry
+# ===========================================================================
+
+
+class TestSourceRegistry:
+    """Test the in-memory subscription DAG and listener registry."""
+
+    def test_subscribe_and_resolve_downstream(self):
+        reg = SourceRegistry()
+        reg.subscribe("session:abc", "user:alice")
+        reg.subscribe("user:alice", "global")
+
+        downstream = reg.resolve_downstream("global")
+        assert downstream == {"global", "user:alice", "session:abc"}
+
+    def test_resolve_downstream_single_node(self):
+        reg = SourceRegistry()
+        assert reg.resolve_downstream("session:abc") == {"session:abc"}
+
+    def test_resolve_upstream(self):
+        reg = SourceRegistry()
+        reg.subscribe("session:abc", "user:alice")
+        reg.subscribe("user:alice", "global")
+        reg.subscribe("user:alice", "blog:tech")
+
+        upstream = reg.resolve_upstream("session:abc")
+        assert upstream == {"session:abc", "user:alice", "global", "blog:tech"}
+
+    def test_unsubscribe(self):
+        reg = SourceRegistry()
+        reg.subscribe("session:abc", "user:alice")
+        reg.unsubscribe("session:abc", "user:alice")
+
+        assert reg.resolve_downstream("user:alice") == {"user:alice"}
+
+    def test_unsubscribe_all(self):
+        reg = SourceRegistry()
+        reg.subscribe("session:abc", "user:alice")
+        reg.subscribe("session:abc", "global")
+        reg.unsubscribe_all("session:abc")
+
+        assert reg.resolve_downstream("user:alice") == {"user:alice"}
+        assert reg.resolve_downstream("global") == {"global"}
+
+    def test_push_cascades(self):
+        reg = SourceRegistry()
+        q1: asyncio.Queue = asyncio.Queue()
+        q2: asyncio.Queue = asyncio.Queue()
+
+        reg.add_listener("session:abc", q1)
+        reg.add_listener("session:def", q2)
+        reg.subscribe("session:abc", "user:alice")
+        reg.subscribe("session:def", "user:alice")
+        reg.subscribe("user:alice", "global")
+
+        n = Notification(type="test")
+        reg.push("user:alice", n)
+
+        assert q1.get_nowait().id == n.id
+        assert q2.get_nowait().id == n.id
+
+    def test_push_to_global_cascades(self):
+        reg = SourceRegistry()
+        q: asyncio.Queue = asyncio.Queue()
+        reg.add_listener("session:abc", q)
+        reg.subscribe("session:abc", "global")
+
+        n = Notification(type="broadcast")
+        reg.push("global", n)
+
+        assert q.get_nowait().id == n.id
+
+    def test_push_with_custom_source(self):
+        reg = SourceRegistry()
+        q: asyncio.Queue = asyncio.Queue()
+        reg.add_listener("session:abc", q)
+        reg.subscribe("session:abc", "user:alice")
+        reg.subscribe("user:alice", "blog:tech")
+
+        n = Notification(type="new_post")
+        reg.push("blog:tech", n)
+
+        assert q.get_nowait().id == n.id
+
+    def test_has_listeners(self):
+        reg = SourceRegistry()
+        q: asyncio.Queue = asyncio.Queue()
+        assert reg.has_listeners("session:abc") is False
+        reg.add_listener("session:abc", q)
+        assert reg.has_listeners("session:abc") is True
+        reg.remove_listener("session:abc", q)
+        assert reg.has_listeners("session:abc") is False
+
+    def test_idempotent_subscribe(self):
+        reg = SourceRegistry()
+        reg.subscribe("a", "b")
+        reg.subscribe("a", "b")
+        assert reg.resolve_downstream("b") == {"b", "a"}
+
+    def test_idempotent_unsubscribe(self):
+        reg = SourceRegistry()
+        reg.unsubscribe("a", "b")  # no-op, shouldn't raise
+
+
+# ===========================================================================
+# NotificationMode
+# ===========================================================================
 
 
 class TestNotificationMode:
@@ -56,6 +172,11 @@ class TestNotificationMode:
         assert d["mode"] == "ephemeral"
 
 
+# ===========================================================================
+# Ephemeral mode
+# ===========================================================================
+
+
 class TestEphemeralMode:
     """Test that ephemeral notifications are not stored."""
 
@@ -77,7 +198,7 @@ class TestEphemeralMode:
 
     @pytest.mark.asyncio
     async def test_ephemeral_pushed_to_live_connections(self, svc):
-        q = svc.register_connection("s1", None)
+        q = await svc.register_connection("s1", None)
         n = Notification(type="generic", mode=NotificationMode.EPHEMERAL, payload={"msg": "hi"})
         await svc.send_to_session("s1", n)
 
@@ -91,6 +212,11 @@ class TestEphemeralMode:
 
         since = await svc.get_since("s1", None, 0.0)
         assert len(since) == 0
+
+
+# ===========================================================================
+# Timeseries mode
+# ===========================================================================
 
 
 class TestTimeseriesMode:
@@ -150,6 +276,11 @@ class TestTimeseriesMode:
         since = await svc.get_since("_none_", "u1", 0.0)
         assert len(since) == 1
         assert since[0].id == n.id
+
+
+# ===========================================================================
+# Convenience functions mode param
+# ===========================================================================
 
 
 class TestConvenienceFunctionsModeParam:
@@ -218,6 +349,11 @@ class TestConvenienceFunctionsModeParam:
             mod.notifications = original
 
 
+# ===========================================================================
+# Notification group field
+# ===========================================================================
+
+
 class TestNotificationGroupField:
     """Test the group field on the Notification dataclass."""
 
@@ -247,6 +383,11 @@ class TestNotificationGroupField:
         assert d["type"] == "generic"
 
 
+# ===========================================================================
+# Send-to-session group replacement
+# ===========================================================================
+
+
 class TestSendToSessionGroup:
     """Test group replacement in send_to_session."""
 
@@ -264,7 +405,7 @@ class TestSendToSessionGroup:
 
     @pytest.mark.asyncio
     async def test_pushes_dismissed_event_for_old(self, svc):
-        q = svc.register_connection("s1", None)
+        q = await svc.register_connection("s1", None)
 
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
         await svc.send_to_session("s1", n1)
@@ -307,7 +448,7 @@ class TestSendToSessionGroup:
 
     @pytest.mark.asyncio
     async def test_no_dismissed_when_no_previous_group(self, svc):
-        q = svc.register_connection("s1", None)
+        q = await svc.register_connection("s1", None)
 
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
         await svc.send_to_session("s1", n1)
@@ -316,6 +457,11 @@ class TestSendToSessionGroup:
         msg = q.get_nowait()
         assert msg.id == n1.id
         assert q.empty()
+
+
+# ===========================================================================
+# Send-to-user group replacement
+# ===========================================================================
 
 
 class TestSendToUserGroup:
@@ -335,8 +481,8 @@ class TestSendToUserGroup:
 
     @pytest.mark.asyncio
     async def test_pushes_dismissed_to_all_user_sessions(self, svc):
-        q1 = svc.register_connection("s1", "u1")
-        q2 = svc.register_connection("s2", "u1")
+        q1 = await svc.register_connection("s1", "u1")
+        q2 = await svc.register_connection("s2", "u1")
 
         n1 = Notification(type="generic", group="deploy", payload={"step": "1"})
         await svc.send_to_user("u1", n1)
@@ -367,6 +513,11 @@ class TestSendToUserGroup:
 
         queued = await svc.get_queued("_none_", "u1")
         assert len(queued) == 2
+
+
+# ===========================================================================
+# Convenience functions
+# ===========================================================================
 
 
 class TestConvenienceFunctions:
@@ -431,6 +582,11 @@ class TestConvenienceFunctions:
             mod.notifications = original
 
 
+# ===========================================================================
+# Dismiss by group
+# ===========================================================================
+
+
 class TestDismissByGroup:
     """Test dismiss(group=...) on NotificationService."""
 
@@ -456,7 +612,7 @@ class TestDismissByGroup:
 
     @pytest.mark.asyncio
     async def test_dismiss_by_group_pushes_dismissed_event(self, svc):
-        q = svc.register_connection("s1", None)
+        q = await svc.register_connection("s1", None)
 
         n = Notification(type="generic", group="deploy", payload={"step": "1"})
         await svc.send_to_session("s1", n)
@@ -470,8 +626,8 @@ class TestDismissByGroup:
 
     @pytest.mark.asyncio
     async def test_dismiss_by_group_pushes_to_other_user_sessions(self, svc):
-        q1 = svc.register_connection("s1", "u1")
-        q2 = svc.register_connection("s2", "u1")
+        q1 = await svc.register_connection("s1", "u1")
+        q2 = await svc.register_connection("s2", "u1")
 
         n = Notification(type="generic", group="deploy", payload={"step": "1"})
         await svc.send_to_user("u1", n)
@@ -529,6 +685,11 @@ class TestDismissByGroup:
         assert await svc.dismiss("s1", None) is False
 
 
+# ===========================================================================
+# Dismiss group convenience
+# ===========================================================================
+
+
 class TestDismissGroupConvenience:
     """Test dismiss_session_group and dismiss_user_group convenience functions."""
 
@@ -568,7 +729,7 @@ class TestDismissGroupConvenience:
         original = mod.notifications
         mod.notifications = svc
         try:
-            q = svc.register_connection("s1", "u1")
+            q = await svc.register_connection("s1", "u1")
 
             n = Notification(type="generic", group="deploy", payload={"step": "1"})
             await svc.send_to_user("u1", n)
@@ -594,6 +755,11 @@ class TestDismissGroupConvenience:
             assert await dismiss_user_group("u1", "nope") is False
         finally:
             mod.notifications = original
+
+
+# ===========================================================================
+# Hooks
+# ===========================================================================
 
 
 class TestNotificationHooks:
@@ -647,7 +813,7 @@ class TestNotificationHooks:
 
         hooks.add_filter(NOTIFICATION_PRE_SEND, modify)
 
-        q = svc.register_connection("s1", None)
+        q = await svc.register_connection("s1", None)
         n = Notification(type="generic", mode=NotificationMode.EPHEMERAL, payload={"msg": "hi"})
         await svc.broadcast(n)
 
@@ -661,7 +827,7 @@ class TestNotificationHooks:
 
         hooks.add_filter(NOTIFICATION_PRE_SEND, suppress)
 
-        q = svc.register_connection("s1", None)
+        q = await svc.register_connection("s1", None)
         n = Notification(type="generic", payload={"msg": "hi"})
         await svc.send_to_session("s1", n)
 
@@ -687,7 +853,7 @@ class TestNotificationHooks:
 
         hooks.add_filter(NOTIFICATION_PRE_SEND, suppress)
 
-        q = svc.register_connection("s1", None)
+        q = await svc.register_connection("s1", None)
         n = Notification(type="generic", mode=NotificationMode.EPHEMERAL, payload={"msg": "hi"})
         await svc.broadcast(n)
 
@@ -815,3 +981,314 @@ class TestNotificationHooks:
 
         await svc.dismiss("s1", None, group="nonexistent")
         assert fired == []
+
+
+# ===========================================================================
+# Source/subscription model
+# ===========================================================================
+
+
+class TestSourceSubscriptionModel:
+    """Test the new source/subscription features of NotificationService."""
+
+    @pytest.mark.asyncio
+    async def test_custom_source_cascades_to_subscribed_user(self, svc):
+        """Publishing to blog:tech cascades to user:alice → session:abc."""
+        q = await svc.register_connection("abc", "alice")
+
+        # Subscribe user:alice to blog:tech (persistent in InMemory)
+        await svc.subscribe("user:alice", "blog:tech")
+
+        n = Notification(type="new_post", mode=NotificationMode.EPHEMERAL)
+        await svc.send("blog:tech", n)
+
+        msg = q.get_nowait()
+        assert msg.id == n.id
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_stops_cascade(self, svc):
+        q = await svc.register_connection("abc", "alice")
+
+        await svc.subscribe("user:alice", "blog:tech")
+        await svc.unsubscribe("user:alice", "blog:tech")
+
+        n = Notification(type="new_post", mode=NotificationMode.EPHEMERAL)
+        await svc.send("blog:tech", n)
+
+        assert q.empty()
+
+    @pytest.mark.asyncio
+    async def test_get_queued_includes_upstream_sources(self, svc):
+        """get_queued should pull from all upstream storage keys."""
+        await svc.register_connection("abc", "alice")
+        await svc.subscribe("user:alice", "blog:tech")
+
+        n = Notification(type="stored_post", group=None)
+        await svc.send("blog:tech", n)
+
+        queued = await svc.get_queued("abc", "alice")
+        assert len(queued) == 1
+        assert queued[0].id == n.id
+
+    @pytest.mark.asyncio
+    async def test_global_broadcast_reaches_all_sessions(self, svc):
+        q1 = await svc.register_connection("s1", None)
+        q2 = await svc.register_connection("s2", "user1")
+
+        n = Notification(type="alert", mode=NotificationMode.EPHEMERAL)
+        await svc.broadcast(n)
+
+        assert q1.get_nowait().id == n.id
+        assert q2.get_nowait().id == n.id
+
+    @pytest.mark.asyncio
+    async def test_user_notification_reaches_all_user_sessions(self, svc):
+        q1 = await svc.register_connection("s1", "alice")
+        q2 = await svc.register_connection("s2", "alice")
+
+        n = Notification(type="user_msg", mode=NotificationMode.EPHEMERAL)
+        await svc.send_to_user("alice", n)
+
+        assert q1.get_nowait().id == n.id
+        assert q2.get_nowait().id == n.id
+
+    @pytest.mark.asyncio
+    async def test_session_teardown_cleans_edges(self, svc):
+        q = await svc.register_connection("abc", "alice")
+        svc.unregister_connection("abc", q)
+
+        # Session should no longer receive notifications
+        n = Notification(type="test", mode=NotificationMode.EPHEMERAL)
+        await svc.send_to_user("alice", n)
+
+        assert q.empty()
+
+    @pytest.mark.asyncio
+    async def test_notify_source_convenience(self):
+        svc = NotificationService()
+
+        from skrift.lib import notifications as mod
+        original = mod.notifications
+        mod.notifications = svc
+        try:
+            q = await svc.register_connection("abc", "alice")
+            await svc.subscribe("user:alice", "blog:tech")
+
+            n = await notify_source("blog:tech", "new_post", mode=NotificationMode.EPHEMERAL, title="New Post")
+            assert n.type == "new_post"
+            assert n.payload == {"title": "New Post"}
+
+            msg = q.get_nowait()
+            assert msg.id == n.id
+        finally:
+            mod.notifications = original
+
+    @pytest.mark.asyncio
+    async def test_subscribe_source_convenience(self):
+        svc = NotificationService()
+
+        from skrift.lib import notifications as mod
+        original = mod.notifications
+        mod.notifications = svc
+        try:
+            q = await svc.register_connection("abc", "alice")
+            await subscribe_source("user:alice", "blog:tech")
+
+            n = Notification(type="post", mode=NotificationMode.EPHEMERAL)
+            await svc.send("blog:tech", n)
+
+            msg = q.get_nowait()
+            assert msg.id == n.id
+
+            await unsubscribe_source("user:alice", "blog:tech")
+
+            n2 = Notification(type="post2", mode=NotificationMode.EPHEMERAL)
+            await svc.send("blog:tech", n2)
+
+            assert q.empty()
+        finally:
+            mod.notifications = original
+
+    @pytest.mark.asyncio
+    async def test_persistent_subs_loaded_on_connect(self, svc):
+        """Persistent subscriptions from InMemoryBackend are loaded on first connect."""
+        backend = svc._get_backend()
+        await backend.add_subscription("user:alice", "blog:tech")
+
+        q = await svc.register_connection("abc", "alice")
+
+        # Now blog:tech should cascade
+        n = Notification(type="post", mode=NotificationMode.EPHEMERAL)
+        await svc.send("blog:tech", n)
+
+        msg = q.get_nowait()
+        assert msg.id == n.id
+
+    @pytest.mark.asyncio
+    async def test_self_echo_prevention(self, svc):
+        """Messages with the same publisher_id should be ignored."""
+        q = await svc.register_connection("s1", None)
+
+        # Simulate a remote message from the same publisher
+        await svc._handle_remote({
+            "a": "s",
+            "sk": "session:s1",
+            "pid": svc._publisher_id,
+            "n": Notification(type="echo").to_dict(),
+        })
+
+        assert q.empty()
+
+    @pytest.mark.asyncio
+    async def test_remote_message_from_other_replica(self, svc):
+        """Messages from different publisher_id should be delivered."""
+        q = await svc.register_connection("s1", None)
+
+        n = Notification(type="remote")
+        await svc._handle_remote({
+            "a": "s",
+            "sk": "session:s1",
+            "pid": "other-replica-id",
+            "n": n.to_dict(),
+        })
+
+        msg = q.get_nowait()
+        assert msg.id == n.id
+
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_finds_custom_source(self, svc):
+        q = await svc.register_connection("abc", "alice")
+        await svc.subscribe("user:alice", "blog:tech")
+
+        n = Notification(type="post", group="latest", payload={"title": "Hi"})
+        await svc.send("blog:tech", n)
+        q.get_nowait()  # drain
+
+        assert await svc.dismiss("abc", "alice", group="latest") is True
+
+        # Dismissed event pushed through graph
+        dismissed = q.get_nowait()
+        assert dismissed.type == "dismissed"
+        assert dismissed.id == n.id
+
+        # Storage is cleared for dismisser
+        queued = await svc.get_queued("abc", "alice")
+        assert queued == []
+
+
+# ===========================================================================
+# Per-subscriber dismissals
+# ===========================================================================
+
+
+class TestPerSubscriberDismissals:
+    """Test that dismiss is per-subscriber, not global."""
+
+    @pytest.mark.asyncio
+    async def test_dismiss_does_not_remove_for_other_subscribers(self, svc):
+        """Alice dismisses a shared notification, Bob still sees it."""
+        # Both subscribe to blog:tech
+        await svc.register_connection("alice-s", "alice")
+        await svc.subscribe("user:alice", "blog:tech")
+        await svc.register_connection("bob-s", "bob")
+        await svc.subscribe("user:bob", "blog:tech")
+
+        n = Notification(type="post", payload={"title": "Hello"})
+        await svc.send("blog:tech", n)
+
+        # Alice dismisses
+        assert await svc.dismiss("alice-s", "alice", n.id) is True
+
+        # Alice sees nothing
+        alice_queued = await svc.get_queued("alice-s", "alice")
+        assert alice_queued == []
+
+        # Bob still sees it
+        bob_queued = await svc.get_queued("bob-s", "bob")
+        assert len(bob_queued) == 1
+        assert bob_queued[0].id == n.id
+
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_per_subscriber(self, svc):
+        """Group dismiss is also per-subscriber."""
+        await svc.register_connection("alice-s", "alice")
+        await svc.subscribe("user:alice", "blog:tech")
+        await svc.register_connection("bob-s", "bob")
+        await svc.subscribe("user:bob", "blog:tech")
+
+        n = Notification(type="post", group="latest", payload={"title": "Hello"})
+        await svc.send("blog:tech", n)
+
+        # Alice dismisses by group
+        assert await svc.dismiss("alice-s", "alice", group="latest") is True
+
+        alice_queued = await svc.get_queued("alice-s", "alice")
+        assert alice_queued == []
+
+        bob_queued = await svc.get_queued("bob-s", "bob")
+        assert len(bob_queued) == 1
+        assert bob_queued[0].id == n.id
+
+    @pytest.mark.asyncio
+    async def test_session_only_dismiss(self, svc):
+        """Anonymous session dismiss with no user_id."""
+        n = Notification(type="alert", payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        assert await svc.dismiss("s1", None, n.id) is True
+        assert await svc.get_queued("s1", None) == []
+
+    @pytest.mark.asyncio
+    async def test_dismiss_event_only_reaches_dismisser_sessions(self, svc):
+        """Alice's dismiss doesn't push a dismissed event to Bob's queue."""
+        q_alice = await svc.register_connection("alice-s", "alice")
+        await svc.subscribe("user:alice", "blog:tech")
+        q_bob = await svc.register_connection("bob-s", "bob")
+        await svc.subscribe("user:bob", "blog:tech")
+
+        n = Notification(type="post", payload={"title": "Hello"})
+        await svc.send("blog:tech", n)
+
+        # Drain send events
+        q_alice.get_nowait()
+        q_bob.get_nowait()
+
+        await svc.dismiss("alice-s", "alice", n.id)
+
+        # Alice gets dismissed event
+        dismissed = q_alice.get_nowait()
+        assert dismissed.type == "dismissed"
+        assert dismissed.id == n.id
+
+        # Bob's queue should be empty (no spurious dismissed event)
+        assert q_bob.empty()
+
+    @pytest.mark.asyncio
+    async def test_dismiss_idempotent(self, svc):
+        """Dismissing the same notification twice returns True both times."""
+        n = Notification(type="alert", payload={"msg": "hi"})
+        await svc.send_to_session("s1", n)
+
+        assert await svc.dismiss("s1", None, n.id) is True
+        assert await svc.dismiss("s1", None, n.id) is True
+
+    @pytest.mark.asyncio
+    async def test_group_replacement_on_store_still_deletes(self, svc):
+        """store() group replacement physically deletes (producer-side)."""
+        n1 = Notification(type="post", group="latest", payload={"step": "1"})
+        n2 = Notification(type="post", group="latest", payload={"step": "2"})
+
+        await svc.send("blog:tech", n1)
+        await svc.send("blog:tech", n2)
+
+        # Only n2 should be in storage — group replacement deletes n1
+        backend = svc._get_backend()
+        stored = await backend.get_queued_multi(["blog:tech"])
+        assert len(stored) == 1
+        assert stored[0].id == n2.id
+
+    def test_subscriber_key_derivation(self):
+        from skrift.lib.notifications import NotificationService
+
+        assert NotificationService._subscriber_key_for("s1", "alice") == "user:alice"
+        assert NotificationService._subscriber_key_for("s1", None) == "session:s1"

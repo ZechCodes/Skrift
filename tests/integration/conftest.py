@@ -78,6 +78,8 @@ def pg_session_maker(pg_engine):
 @pytest.fixture(autouse=True)
 async def clean_tables(pg_session_maker):
     async with pg_session_maker() as session:
+        await session.execute(text("DELETE FROM dismissed_notifications"))
+        await session.execute(text("DELETE FROM notification_subscriptions"))
         await session.execute(text("DELETE FROM stored_notifications"))
         await session.commit()
 
