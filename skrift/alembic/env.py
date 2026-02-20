@@ -3,6 +3,7 @@
 import asyncio
 from logging.config import fileConfig
 
+import sqlalchemy as sa
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
@@ -88,6 +89,8 @@ def run_migrations_offline() -> None:
     )
 
     with context.begin_transaction():
+        if schema:
+            context.execute(f"SET search_path TO {schema}")
         context.run_migrations()
 
 
@@ -121,6 +124,9 @@ async def run_async_migrations() -> None:
     )
 
     async with connectable.connect() as connection:
+        schema = get_schema()
+        if schema:
+            await connection.execute(sa.text(f"SET search_path TO {schema}"))
         await connection.run_sync(do_run_migrations)
 
     await connectable.dispose()
