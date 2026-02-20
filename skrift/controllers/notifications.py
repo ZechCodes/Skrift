@@ -31,7 +31,7 @@ class NotificationsController(Controller):
                 pass
 
         async def generate() -> AsyncGenerator[ServerSentEventMessage, None]:
-            q = notifications.register_connection(nid, user_id)
+            q = await notifications.register_connection(nid, user_id)
             try:
                 # Flush phase: yield all queued notifications
                 for n in await notifications.get_queued(nid, user_id):

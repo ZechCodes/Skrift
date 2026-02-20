@@ -250,7 +250,7 @@ class TestWebhookDispatch:
 
     @pytest.mark.asyncio
     async def test_broadcast_target(self, webhook_client, auth_headers, notification_svc):
-        q = notification_svc.register_connection("s1", None)
+        q = await notification_svc.register_connection("s1", None)
 
         resp = webhook_client.post(
             "/notifications/webhook",
