@@ -1154,3 +1154,23 @@ class TestSourceSubscriptionModel:
 
         msg = q.get_nowait()
         assert msg.id == n.id
+
+    @pytest.mark.asyncio
+    async def test_dismiss_by_group_finds_custom_source(self, svc):
+        q = await svc.register_connection("abc", "alice")
+        await svc.subscribe("user:alice", "blog:tech")
+
+        n = Notification(type="post", group="latest", payload={"title": "Hi"})
+        await svc.send("blog:tech", n)
+        q.get_nowait()  # drain
+
+        assert await svc.dismiss("abc", "alice", group="latest") is True
+
+        # Dismissed event pushed through graph
+        dismissed = q.get_nowait()
+        assert dismissed.type == "dismissed"
+        assert dismissed.id == n.id
+
+        # Storage is cleared
+        queued = await svc.get_queued("abc", "alice")
+        assert queued == []

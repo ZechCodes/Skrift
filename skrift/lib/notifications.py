@@ -280,18 +280,11 @@ class NotificationService:
             dismiss_source_key = await backend.remove(notification_id)
             dismissed_id = notification_id
         elif group is not None:
-            # Try session scope first, then user scope
-            session_key = f"session:{nid}"
-            old_id = await backend.remove_by_group(session_key, group)
-            if old_id:
-                dismissed_id = old_id
-                dismiss_source_key = session_key
-            if user_id:
-                user_key = f"user:{user_id}"
-                old_id = await backend.remove_by_group(user_key, group)
+            for key in self._storage_keys_for(nid, user_id):
+                old_id = await backend.remove_by_group(key, group)
                 if old_id:
                     dismissed_id = old_id
-                    dismiss_source_key = user_key
+                    dismiss_source_key = key
 
         if dismissed_id is not None:
             dismissed = Notification.dismissed(dismissed_id)
