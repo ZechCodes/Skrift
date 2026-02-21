@@ -241,6 +241,7 @@ class SecurityHeadersConfig(BaseModel):
 class SessionConfig(BaseModel):
     """Session cookie configuration."""
 
+    cookie_name: str = "session"
     cookie_domain: str | None = None  # None = exact host only
     max_age: int = 86400  # 1 day in seconds
 

@@ -669,6 +669,7 @@ def create_app() -> ASGIApp:
         max_age=settings.session.max_age,
         secure=not settings.debug,
         cookie_domain=settings.session.cookie_domain,
+        cookie_name=settings.session.cookie_name,
     )
 
     # Security headers middleware

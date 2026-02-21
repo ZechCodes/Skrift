@@ -36,11 +36,13 @@ def create_session_config(
     max_age: int = 86400,
     secure: bool = False,
     cookie_domain: str | None = None,
+    cookie_name: str = "session",
 ) -> CookieBackendConfig:
     """Create a cookie-backed session config."""
     session_secret = hashlib.sha256(secret_key.encode()).digest()
     return CookieBackendConfig(
         secret=session_secret,
+        key=cookie_name,
         max_age=max_age,
         httponly=True,
         secure=secure,
