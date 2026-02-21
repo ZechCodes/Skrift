@@ -7,6 +7,8 @@ from skrift.db.models import Setting
 
 # In-memory cache for site settings (avoids DB queries on every page render)
 _site_settings_cache: dict[str, str] = {}
+# Per-subdomain overrides: subdomain → {key → value}
+_per_site_cache: dict[str, dict[str, str]] = {}
 
 
 async def get_setting(
@@ -124,6 +126,16 @@ async def delete_setting(
 # Site setting keys
 SITE_NAME_KEY = "site_name"
 SITE_TAGLINE_KEY = "site_tagline"
+
+# Keys that can be overridden per subdomain
+PER_SITE_KEYS = frozenset({SITE_NAME_KEY, SITE_TAGLINE_KEY})
+
+
+def site_scoped_key(subdomain: str, key: str) -> str:
+    """Build a namespaced DB key for a per-subdomain setting."""
+    return f"site:{subdomain}:{key}"
+
+
 SITE_COPYRIGHT_HOLDER_KEY = "site_copyright_holder"
 SITE_COPYRIGHT_START_YEAR_KEY = "site_copyright_start_year"
 SITE_BASE_URL_KEY = "site_base_url"
@@ -167,16 +179,30 @@ async def load_site_settings_cache(db_session: AsyncSession) -> None:
     Call this on application startup to populate the cache.
     If the settings table doesn't exist yet (before migration), uses defaults.
 
+    Also loads per-subdomain overrides (keys matching ``site:*:*``).
+
     Args:
         db_session: Database session
     """
-    global _site_settings_cache
+    global _site_settings_cache, _per_site_cache
     try:
         _site_settings_cache = await get_site_settings(db_session)
+
+        # Load all per-site overrides
+        all_settings = await get_settings(db_session)
+        per_site: dict[str, dict[str, str]] = {}
+        for db_key, value in all_settings.items():
+            if db_key.startswith("site:") and value:
+                parts = db_key.split(":", 2)
+                if len(parts) == 3:
+                    _, subdomain, setting_key = parts
+                    per_site.setdefault(subdomain, {})[setting_key] = value
+        _per_site_cache = per_site
     except Exception:
         # Table might not exist yet (before migration), leave cache empty so
         # the next access retries instead of being stuck on cached defaults.
         _site_settings_cache.clear()
+        _per_site_cache.clear()
 
 
 def invalidate_site_settings_cache() -> None:
@@ -184,8 +210,9 @@ def invalidate_site_settings_cache() -> None:
 
     Call this when settings are modified to ensure fresh values are loaded.
     """
-    global _site_settings_cache
+    global _site_settings_cache, _per_site_cache
     _site_settings_cache.clear()
+    _per_site_cache.clear()
 
 
 def site_settings_cache_loaded() -> bool:
@@ -241,3 +268,53 @@ def get_cached_site_theme() -> str:
         return get_settings().theme
     except Exception:
         return ""
+
+
+# --- Per-subdomain accessors ---
+
+
+def get_cached_site_setting(key: str, subdomain: str | None = None) -> str:
+    """Get a cached setting, checking per-site override first then global."""
+    if subdomain:
+        override = _per_site_cache.get(subdomain, {}).get(key)
+        if override:
+            return override
+    return _get_cached_setting(key)
+
+
+def get_cached_site_name_for(subdomain: str | None = None) -> str:
+    """Get the cached site name, with per-subdomain override support."""
+    return get_cached_site_setting(SITE_NAME_KEY, subdomain)
+
+
+def get_cached_site_tagline_for(subdomain: str | None = None) -> str:
+    """Get the cached site tagline, with per-subdomain override support."""
+    return get_cached_site_setting(SITE_TAGLINE_KEY, subdomain)
+
+
+# --- Per-subdomain DB functions ---
+
+
+async def get_site_settings_for_subdomain(
+    db_session: AsyncSession, subdomain: str
+) -> dict[str, str]:
+    """Get settings for a subdomain, merging per-site overrides over global defaults.
+
+    Returns a dict with the same shape as ``get_site_settings()`` but with
+    ``site_name`` and ``site_tagline`` replaced by per-site values when present.
+    """
+    global_settings = await get_site_settings(db_session)
+
+    for key in PER_SITE_KEYS:
+        scoped = await get_setting(db_session, site_scoped_key(subdomain, key))
+        if scoped is not None:
+            global_settings[key] = scoped
+
+    return global_settings
+
+
+async def set_site_setting_for_subdomain(
+    db_session: AsyncSession, subdomain: str, key: str, value: str
+) -> None:
+    """Save a per-subdomain setting override."""
+    await set_setting(db_session, site_scoped_key(subdomain, key), value)
