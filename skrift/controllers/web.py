@@ -3,7 +3,7 @@ from uuid import UUID
 
 from litestar import Controller, Request, get
 from litestar.exceptions import NotFoundException
-from litestar.response import Template as TemplateResponse
+from litestar.response import Response, Template as TemplateResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,12 +54,8 @@ class WebController(Controller):
     @get("/{path:path}")
     async def view_page(
         self, request: "Request", db_session: AsyncSession, path: str
-    ) -> TemplateResponse:
+    ) -> TemplateResponse | Response:
         """View a page by path with WP-like template resolution."""
-        user_ctx = await self._get_user_context(request, db_session)
-        flash = request.session.pop("flash", None)
-        theme_name = await self._resolve_theme(request)
-
         # Split path into slugs (e.g., "services/web" -> ["services", "web"])
         slugs = [s for s in path.split("/") if s]
 
@@ -74,6 +70,16 @@ class WebController(Controller):
         )
         if not page:
             raise NotFoundException(f"Page '{path}' not found")
+
+        if "text/markdown" in request.headers.get("accept", ""):
+            return Response(
+                content=page.content,
+                media_type="text/markdown",
+            )
+
+        user_ctx = await self._get_user_context(request, db_session)
+        flash = request.session.pop("flash", None)
+        theme_name = await self._resolve_theme(request)
 
         # Get SEO metadata
         site_name = get_cached_site_name()

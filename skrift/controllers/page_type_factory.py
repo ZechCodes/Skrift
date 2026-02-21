@@ -7,7 +7,7 @@ from uuid import UUID
 
 from litestar import Controller, Request, get
 from litestar.exceptions import NotFoundException
-from litestar.response import Template as TemplateResponse
+from litestar.response import Response, Template as TemplateResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -103,11 +103,7 @@ def create_public_page_type_controller(
         @get("/{slug:str}")
         async def view_page(
             self, request: Request, db_session: AsyncSession, slug: str
-        ) -> TemplateResponse:
-            user_ctx = await self._get_user_context(request, db_session)
-            flash = request.session.pop("flash", None)
-            theme_name = await self._resolve_theme(request)
-
+        ) -> TemplateResponse | Response:
             page = await page_service.get_page_by_slug(
                 db_session,
                 slug,
@@ -116,6 +112,16 @@ def create_public_page_type_controller(
             )
             if not page:
                 raise NotFoundException(f"{label} '{slug}' not found")
+
+            if "text/markdown" in request.headers.get("accept", ""):
+                return Response(
+                    content=page.content,
+                    media_type="text/markdown",
+                )
+
+            user_ctx = await self._get_user_context(request, db_session)
+            flash = request.session.pop("flash", None)
+            theme_name = await self._resolve_theme(request)
 
             site_name = get_cached_site_name()
             base_url = get_cached_site_base_url() or str(request.base_url).rstrip("/")

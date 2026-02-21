@@ -341,6 +341,34 @@ class CustomPageController(Controller):
         )
 ```
 
+## Content Negotiation
+
+Controllers can return different formats based on the `Accept` header. Skrift's built-in page views already support this — requesting `Accept: text/markdown` returns raw markdown instead of rendered HTML:
+
+```bash
+curl -H "Accept: text/markdown" http://localhost:8080/about
+```
+
+Use the same pattern in your own controllers:
+
+```python
+from litestar.response import Response, Template as TemplateResponse
+
+class ArticleController(Controller):
+    path = "/articles"
+
+    @get("/{slug:str}")
+    async def view(
+        self, request: Request, db_session: AsyncSession, slug: str
+    ) -> TemplateResponse | Response:
+        article = await get_article(db_session, slug)
+
+        if "text/markdown" in request.headers.get("accept", ""):
+            return Response(content=article.content, media_type="text/markdown")
+
+        return TemplateResponse("article.html", context={"article": article})
+```
+
 ## Testing Controllers
 
 ```python

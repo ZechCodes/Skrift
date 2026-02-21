@@ -171,6 +171,10 @@ class MyModel(Base):
 
 Sessions injected via `db_session: AsyncSession` parameter in handlers.
 
+### Content Negotiation
+
+Page views support `Accept: text/markdown` — returns raw `page.content` instead of rendered HTML. Works for all page types (WebController and page type factory routes).
+
 ## Creating a Controller
 
 ```python
