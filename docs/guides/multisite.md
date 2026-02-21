@@ -204,7 +204,26 @@ No `sites:` key in `app.yaml` = existing single-site behavior, completely unchan
 
 ## Development
 
-For local development, use `/etc/hosts` or a local DNS tool to point subdomains to localhost:
+### Option 1: `--subdomain` flag (recommended)
+
+Use the `--subdomain` CLI option to serve a single subdomain site on its own port — no `/etc/hosts` changes needed:
+
+```bash
+# Primary site on default port
+skrift serve --reload --port 8080
+
+# Blog subdomain on a separate port
+skrift serve --reload --subdomain blog --port 8081
+
+# Docs subdomain on another port
+skrift serve --reload --subdomain docs --port 8082
+```
+
+All HTTP requests are routed to the specified subdomain's app regardless of the `Host` header, so `localhost:8081` behaves exactly like `blog.example.com` would in production.
+
+### Option 2: Local DNS
+
+Alternatively, use `/etc/hosts` or a local DNS tool to point subdomains to localhost:
 
 ```
 # /etc/hosts

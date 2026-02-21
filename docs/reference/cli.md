@@ -29,6 +29,7 @@ skrift serve [OPTIONS]
 | `--reload` | `false` | Enable auto-reload for development |
 | `--workers` | `1` | Number of worker processes |
 | `--log-level` | `info` | Logging level (`debug`, `info`, `warning`, `error`) |
+| `--subdomain` | - | Serve only this subdomain site (for local multi-site testing) |
 
 **Examples:**
 
@@ -41,10 +42,16 @@ skrift serve --host 0.0.0.0 --workers 4
 
 # Debug mode with verbose logging
 skrift serve --reload --log-level debug
+
+# Serve only the blog subdomain on a separate port
+skrift serve --subdomain blog --port 8081
 ```
 
 !!! note
     When `--reload` is enabled, `--workers` is ignored (forced to 1) since auto-reload doesn't work with multiple workers.
+
+!!! tip "Local Multi-Site Testing"
+    Use `--subdomain` to test individual subdomain sites on separate ports without configuring `/etc/hosts` or local DNS. All HTTP requests are routed to the specified subdomain's app regardless of the `Host` header. Requires `sites` to be configured in `app.yaml`.
 
 ---
 

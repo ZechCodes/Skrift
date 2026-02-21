@@ -135,6 +135,7 @@ middleware:
 
 ```bash
 skrift serve --reload --port 8080
+skrift serve --subdomain blog --port 8081  # serve single subdomain site
 skrift secret --write .env
 skrift db upgrade head
 skrift db downgrade -1

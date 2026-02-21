@@ -81,6 +81,7 @@ dispatcher = SiteDispatcher(
     primary_app=primary_asgi,
     site_apps={"blog": blog_app, "docs": docs_app},
     domain="example.com",
+    force_subdomain="",  # set via --subdomain CLI flag
 )
 ```
 
@@ -92,9 +93,10 @@ dispatcher = SiteDispatcher(
 ### Dispatch logic
 
 1. Non-HTTP scopes (websocket, lifespan) → primary app
-2. Extract host, compute subdomain
-3. If subdomain matches a site app → route to it, set `scope["state"]["site_name"]`
-4. Otherwise → route to primary app, set `scope["state"]["site_name"] = ""`
+2. If `force_subdomain` is set → use it directly (skips Host header extraction)
+3. Otherwise extract host, compute subdomain
+4. If subdomain matches a site app → route to it, set `scope["state"]["site_name"]`
+5. Otherwise → route to primary app, set `scope["state"]["site_name"] = ""`
 
 ### Lifespan forwarding
 
@@ -136,7 +138,10 @@ Creates a lightweight Litestar app for a subdomain site. Receives shared configs
 At the end of `create_app()`, after building the primary app:
 
 ```python
-if settings.sites and settings.domain:
+forced_subdomain = os.environ.get("SKRIFT_SUBDOMAIN", "")
+need_dispatch = (settings.sites or subdomain_page_types) and (settings.domain or forced_subdomain)
+
+if need_dispatch:
     site_apps = {}
     for name, site_cfg in settings.sites.items():
         site_apps[site_cfg.subdomain] = _build_site_app(...)
@@ -144,11 +149,14 @@ if settings.sites and settings.domain:
     return SiteDispatcher(
         primary_app=primary_asgi,
         site_apps=site_apps,
-        domain=settings.domain,
+        domain=settings.domain or "localhost",
+        force_subdomain=forced_subdomain,
     )
 
 return primary_asgi  # no sites configured — single-site behavior
 ```
+
+The `SKRIFT_SUBDOMAIN` env var is set by the `--subdomain` CLI flag. When set, `SiteDispatcher` routes all HTTP requests to that subdomain's app regardless of the `Host` header.
 
 ## Auth Flow from Subdomain
 
@@ -174,9 +182,19 @@ No code changes needed in auth — `allowed_redirect_domains: ["*.example.com"]`
 | `static_url(path)` | Same hasher as primary |
 | `theme_url(path)` | Resolves via site's theme |
 
+## Local Development with `--subdomain`
+
+Use the `--subdomain` CLI option to serve a single subdomain site on its own port:
+
+```bash
+skrift serve --subdomain blog --port 8081
+```
+
+All HTTP requests to `localhost:8081` are routed to the blog subdomain's app. No `/etc/hosts` or local DNS changes needed. Run multiple instances on different ports to test all subdomains simultaneously.
+
 ## Backward Compatibility
 
-No `sites:` key = existing single-site behavior. `SiteDispatcher` is only instantiated when both `domain` and `sites` are configured.
+No `sites:` key = existing single-site behavior. `SiteDispatcher` is only instantiated when both `domain` and `sites` are configured (or when `--subdomain` is used).
 
 ## Project Structure
 
