@@ -118,6 +118,7 @@ class PageTypeConfig(BaseModel):
     plural: str      # "posts"
     icon: str = "file-text"
     nav_order: int = 20
+    subdomain: str = ""  # When set, type is served on this subdomain only
 
 
 DEFAULT_PAGE_TYPES = [
