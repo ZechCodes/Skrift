@@ -685,6 +685,7 @@ def create_app() -> ASGIApp:
                     csp_value=csp_value,
                     csp_nonce=settings.security_headers.csp_nonce,
                     debug=settings.debug,
+                    cache_authenticated=settings.security_headers.cache_authenticated,
                 )
             ]
 
@@ -747,6 +748,7 @@ def create_app() -> ASGIApp:
     from skrift.controllers.notifications import NotificationsController
     from skrift.controllers.notification_webhook import NotificationsWebhookController
     from skrift.controllers.oauth2 import OAuth2Controller
+    from skrift.controllers.sitemap import SitemapController
     from skrift.auth import sync_roles_to_database
     from skrift.lib.notification_backends import InMemoryBackend, load_backend
     from skrift.lib.notifications import notifications as notification_service
@@ -848,6 +850,27 @@ def create_app() -> ASGIApp:
                 themes_dir=themes_dir,
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
+                page_types=subdomain_page_types.pop(site_cfg.subdomain, []),
+            )
+
+        # Auto-create apps for subdomains referenced only by page types
+        for subdomain, pts in subdomain_page_types.items():
+            auto_cfg = SiteConfig(subdomain=subdomain)
+            site_apps[subdomain] = _build_site_app(
+                settings=settings,
+                site_name=subdomain,
+                site_config=auto_cfg,
+                db_config=db_config,
+                session_config=session_config,
+                csrf_config=csrf_config,
+                security_middleware=security_middleware,
+                rate_limit_middleware=rate_limit_middleware,
+                user_middleware=user_middleware,
+                static_url=static_url,
+                themes_dir=themes_dir,
+                site_static_dir=site_static_dir,
+                package_static_dir=package_static_dir,
+                page_types=pts,
             )
 
         return SiteDispatcher(

@@ -125,6 +125,12 @@ class SettingsAdminController(Controller):
                 db_session, setting_service.SITE_COPYRIGHT_START_YEAR_KEY, site_copyright_start_year
             )
 
+            # Save robots.txt custom content
+            robots_txt = data.get("robots_txt", "").strip()
+            await setting_service.set_setting(
+                db_session, setting_service.ROBOTS_TXT_KEY, robots_txt
+            )
+
             # Save theme selection if themes are available
             if themes_available():
                 site_theme = data.get("site_theme", "").strip()

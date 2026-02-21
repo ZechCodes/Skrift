@@ -211,6 +211,10 @@ class SecurityHeadersConfig(BaseModel):
     referrer_policy: str | None = "strict-origin-when-cross-origin"
     permissions_policy: str | None = "camera=(), microphone=(), geolocation=()"
     cross_origin_opener_policy: str | None = "same-origin"
+    cross_origin_resource_policy: str | None = "same-site"
+    cross_origin_embedder_policy: str | None = None
+    x_xss_protection: str | None = "0"
+    cache_authenticated: str | None = "no-store"
 
     def build_headers(self, debug: bool = False) -> list[tuple[bytes, bytes]]:
         """Build pre-encoded header pairs, excluding disabled headers and CSP.
@@ -225,6 +229,9 @@ class SecurityHeadersConfig(BaseModel):
             "referrer-policy": self.referrer_policy,
             "permissions-policy": self.permissions_policy,
             "cross-origin-opener-policy": self.cross_origin_opener_policy,
+            "cross-origin-resource-policy": self.cross_origin_resource_policy,
+            "cross-origin-embedder-policy": self.cross_origin_embedder_policy,
+            "x-xss-protection": self.x_xss_protection,
         }
 
         # HSTS only in production (not debug mode)
@@ -381,6 +388,9 @@ class Settings(BaseSettings):
     # Page types config (loaded from app.yaml)
     page_types: list[PageTypeConfig] = list(DEFAULT_PAGE_TYPES)
 
+    # Security contact for /.well-known/security.txt (RFC 9116)
+    security_contact: str = ""
+
 
 def clear_settings_cache() -> None:
     """Clear the settings cache to force reload."""
@@ -478,6 +488,9 @@ def get_settings() -> Settings:
 
     if "domain" in app_config:
         kwargs["domain"] = app_config["domain"]
+
+    if "security_contact" in app_config:
+        kwargs["security_contact"] = app_config["security_contact"]
 
     if "sites" in app_config:
         kwargs["sites"] = {

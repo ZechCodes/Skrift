@@ -144,6 +144,9 @@ SITE_THEME_KEY = "site_theme"
 # Setup wizard key
 SETUP_COMPLETED_AT_KEY = "setup_completed_at"
 
+# Robots.txt custom content key
+ROBOTS_TXT_KEY = "robots_txt"
+
 # Default values
 SITE_DEFAULTS = {
     SITE_NAME_KEY: "My Site",
@@ -152,6 +155,7 @@ SITE_DEFAULTS = {
     SITE_COPYRIGHT_START_YEAR_KEY: "",
     SITE_BASE_URL_KEY: "",
     SITE_THEME_KEY: "",
+    ROBOTS_TXT_KEY: "",
 }
 
 
@@ -318,3 +322,8 @@ async def set_site_setting_for_subdomain(
 ) -> None:
     """Save a per-subdomain setting override."""
     await set_setting(db_session, site_scoped_key(subdomain, key), value)
+
+
+def get_cached_robots_txt() -> str:
+    """Get the cached robots.txt custom content (empty string = use default)."""
+    return _get_cached_setting(ROBOTS_TXT_KEY)

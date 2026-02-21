@@ -39,12 +39,14 @@ class SecurityHeadersMiddleware:
         csp_value: str | None = None,
         csp_nonce: bool = True,
         debug: bool = False,
+        cache_authenticated: str | None = None,
     ) -> None:
         self.app = app
         self.headers = headers
         self.csp_value = csp_value
         self.csp_nonce = csp_nonce
         self.debug = debug
+        self.cache_authenticated = cache_authenticated
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -79,6 +81,12 @@ class SecurityHeadersMiddleware:
                     extra = [(k, v) for k, v in self.headers if k.lower() not in existing]
                     if csp_header and csp_header[0] not in existing:
                         extra.append(csp_header)
+                    if (
+                        self.cache_authenticated
+                        and b"cache-control" not in existing
+                        and scope.get("session", {}).get("user_id")
+                    ):
+                        extra.append((b"cache-control", self.cache_authenticated.encode()))
                     message["headers"] = list(message.get("headers", [])) + extra
                 await send(message)
 

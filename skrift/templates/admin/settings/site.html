@@ -40,6 +40,10 @@
     <input type="number" id="site_copyright_start_year" name="site_copyright_start_year" value="{{ settings.site_copyright_start_year }}" min="1900" max="2100">
     <small class="sk-text-muted">If different from current year, will show a range (e.g., 2020-2026)</small>
 
+    <label for="robots_txt">robots.txt</label>
+    <textarea id="robots_txt" name="robots_txt" rows="6" placeholder="User-agent: *&#10;Allow: /&#10;&#10;Sitemap: https://example.com/sitemap.xml">{{ settings.robots_txt }}</textarea>
+    <small class="sk-text-muted">Custom robots.txt content. Leave empty to use the default.</small>
+
     {% if theme_data %}
     <label for="site_theme">Theme</label>
     <select id="site_theme" name="site_theme">
