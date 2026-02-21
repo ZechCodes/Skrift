@@ -22,6 +22,10 @@ class TestSecurityHeadersConfig:
         assert b"referrer-policy" in names
         assert b"permissions-policy" in names
         assert b"cross-origin-opener-policy" in names
+        assert b"cross-origin-resource-policy" in names
+        assert b"x-xss-protection" in names
+        # COEP is None by default, so should NOT be present
+        assert b"cross-origin-embedder-policy" not in names
 
     def test_default_csp_includes_form_action_and_base_uri(self):
         """Default CSP string includes form-action 'self' and base-uri 'self'."""
@@ -81,6 +85,34 @@ class TestSecurityHeadersConfig:
             assert isinstance(name, bytes)
             assert isinstance(value, bytes)
 
+    def test_cross_origin_resource_policy_default(self):
+        """Default CORP header is same-site."""
+        config = SecurityHeadersConfig()
+        headers = config.build_headers(debug=False)
+        header_dict = dict(headers)
+        assert header_dict[b"cross-origin-resource-policy"] == b"same-site"
+
+    def test_cross_origin_embedder_policy_default_off(self):
+        """COEP is None (off) by default."""
+        config = SecurityHeadersConfig()
+        headers = config.build_headers(debug=False)
+        names = {name for name, _ in headers}
+        assert b"cross-origin-embedder-policy" not in names
+
+    def test_cross_origin_embedder_policy_when_set(self):
+        """COEP is included when explicitly set."""
+        config = SecurityHeadersConfig(cross_origin_embedder_policy="require-corp")
+        headers = config.build_headers(debug=False)
+        header_dict = dict(headers)
+        assert header_dict[b"cross-origin-embedder-policy"] == b"require-corp"
+
+    def test_x_xss_protection_default(self):
+        """X-XSS-Protection defaults to '0' (disabled)."""
+        config = SecurityHeadersConfig()
+        headers = config.build_headers(debug=False)
+        header_dict = dict(headers)
+        assert header_dict[b"x-xss-protection"] == b"0"
+
     def test_all_headers_disabled_returns_empty(self):
         """Setting all non-CSP headers to None returns empty list."""
         config = SecurityHeadersConfig(
@@ -91,6 +123,9 @@ class TestSecurityHeadersConfig:
             referrer_policy=None,
             permissions_policy=None,
             cross_origin_opener_policy=None,
+            cross_origin_resource_policy=None,
+            cross_origin_embedder_policy=None,
+            x_xss_protection=None,
         )
         headers = config.build_headers(debug=False)
         assert headers == []
@@ -450,6 +485,122 @@ class TestCSPNonce:
 
         assert "csp_nonce" in captured_state
         assert len(captured_state["csp_nonce"]) > 0
+
+
+class TestCacheControlAuthenticated:
+    """Tests for Cache-Control: no-store on authenticated responses."""
+
+    @pytest.fixture
+    def captured_messages(self):
+        return []
+
+    def _make_send(self, captured):
+        async def send(message):
+            captured.append(message)
+        return send
+
+    @pytest.mark.asyncio
+    async def test_cache_control_added_for_authenticated_user(self, captured_messages):
+        """Cache-Control: no-store is added when user has an active session."""
+        async def app(scope, receive, send):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/html")],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], cache_authenticated="no-store"
+        )
+        scope = {
+            "type": "http", "method": "GET", "path": "/",
+            "session": {"user_id": 42},
+        }
+
+        await middleware(scope, None, self._make_send(captured_messages))
+
+        header_dict = dict(captured_messages[0]["headers"])
+        assert header_dict[b"cache-control"] == b"no-store"
+
+    @pytest.mark.asyncio
+    async def test_cache_control_not_added_for_anonymous(self, captured_messages):
+        """Cache-Control is not added for unauthenticated requests."""
+        async def app(scope, receive, send):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/html")],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], cache_authenticated="no-store"
+        )
+        scope = {"type": "http", "method": "GET", "path": "/"}
+
+        await middleware(scope, None, self._make_send(captured_messages))
+
+        names = {k for k, _ in captured_messages[0]["headers"]}
+        assert b"cache-control" not in names
+
+    @pytest.mark.asyncio
+    async def test_cache_control_not_added_when_disabled(self, captured_messages):
+        """Cache-Control is not added when cache_authenticated is None."""
+        async def app(scope, receive, send):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/html")],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], cache_authenticated=None
+        )
+        scope = {
+            "type": "http", "method": "GET", "path": "/",
+            "session": {"user_id": 42},
+        }
+
+        await middleware(scope, None, self._make_send(captured_messages))
+
+        names = {k for k, _ in captured_messages[0]["headers"]}
+        assert b"cache-control" not in names
+
+    @pytest.mark.asyncio
+    async def test_cache_control_does_not_overwrite_existing(self, captured_messages):
+        """Existing Cache-Control header from route is not overwritten."""
+        async def app(scope, receive, send):
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"cache-control", b"max-age=3600")],
+            })
+            await send({"type": "http.response.body", "body": b"OK"})
+
+        middleware = SecurityHeadersMiddleware(
+            app, headers=[], cache_authenticated="no-store"
+        )
+        scope = {
+            "type": "http", "method": "GET", "path": "/",
+            "session": {"user_id": 42},
+        }
+
+        await middleware(scope, None, self._make_send(captured_messages))
+
+        header_dict = dict(captured_messages[0]["headers"])
+        assert header_dict[b"cache-control"] == b"max-age=3600"
+
+    def test_cache_authenticated_config_default(self):
+        """cache_authenticated defaults to 'no-store'."""
+        config = SecurityHeadersConfig()
+        assert config.cache_authenticated == "no-store"
+
+    def test_cache_authenticated_config_disabled(self):
+        """cache_authenticated can be set to None to disable."""
+        config = SecurityHeadersConfig(cache_authenticated=None)
+        assert config.cache_authenticated is None
 
 
 class TestSecurityHeadersConfigFromYAML:

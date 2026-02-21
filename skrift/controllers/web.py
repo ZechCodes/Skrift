@@ -68,7 +68,9 @@ class WebController(Controller):
 
         # Fetch page from database
         page = await page_service.get_page_by_slug(
-            db_session, page_slug, published_only=not request.session.get(SESSION_USER_ID)
+            db_session, page_slug,
+            published_only=not request.session.get(SESSION_USER_ID),
+            page_type="page",
         )
         if not page:
             raise NotFoundException(f"Page '{path}' not found")

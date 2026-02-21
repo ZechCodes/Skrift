@@ -1,15 +1,16 @@
-"""Sitemap and robots.txt controller for SEO."""
+"""Sitemap, robots.txt, and security.txt controller for SEO and security."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from litestar import Controller, Request, get
+from litestar.exceptions import NotFoundException
 from litestar.response import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.services import page_service
-from skrift.db.services.setting_service import get_cached_site_base_url
+from skrift.db.services.setting_service import get_cached_site_base_url, get_cached_robots_txt
 from skrift.lib.hooks import hooks, SITEMAP_PAGE, SITEMAP_URLS, ROBOTS_TXT
 
 
@@ -105,7 +106,12 @@ class SitemapController(Controller):
         base_url = _get_base_url(request)
         sitemap_url = f"{base_url}/sitemap.xml"
 
-        content = f"""User-agent: *
+        # Use admin-configured content when set, otherwise use default
+        custom = get_cached_robots_txt()
+        if custom:
+            content = custom
+        else:
+            content = f"""User-agent: *
 Allow: /
 
 Sitemap: {sitemap_url}
@@ -113,6 +119,27 @@ Sitemap: {sitemap_url}
 
         # Apply robots_txt filter for customization
         content = await hooks.apply_filters(ROBOTS_TXT, content)
+
+        return Response(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+        )
+
+    @get("/.well-known/security.txt")
+    async def security_txt(self, request: Request) -> Response:
+        """Serve security.txt per RFC 9116."""
+        from skrift.config import get_settings
+
+        contact = get_settings().security_contact
+        if not contact:
+            raise NotFoundException()
+
+        expires = (datetime.now(timezone.utc) + timedelta(days=365)).strftime(
+            "%Y-%m-%dT%H:%M:%S+00:00"
+        )
+
+        content = f"Contact: {contact}\nExpires: {expires}\n"
 
         return Response(
             content=content,

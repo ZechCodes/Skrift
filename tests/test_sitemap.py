@@ -1,4 +1,4 @@
-"""Tests for the sitemap and robots.txt controller."""
+"""Tests for the sitemap, robots.txt, and security.txt controller."""
 
 import pytest
 from datetime import datetime, UTC
@@ -6,6 +6,56 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 from skrift.controllers.sitemap import SitemapController, SitemapEntry
 from skrift.lib.hooks import hooks
+
+
+class TestSecurityTxt:
+    """Test the security.txt route."""
+
+    @pytest.mark.asyncio
+    async def test_security_txt_returns_404_when_no_contact(self):
+        """When security_contact is empty, security.txt returns 404."""
+        from litestar.exceptions import NotFoundException
+
+        controller = SitemapController(owner=MagicMock())
+        request = MagicMock()
+
+        with patch("skrift.config.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(security_contact="")
+            with pytest.raises(NotFoundException):
+                await controller.security_txt.fn(controller, request)
+
+    @pytest.mark.asyncio
+    async def test_security_txt_returns_content_when_configured(self):
+        """When security_contact is set, security.txt returns RFC 9116 content."""
+        controller = SitemapController(owner=MagicMock())
+        request = MagicMock()
+
+        with patch("skrift.config.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                security_contact="mailto:security@example.com"
+            )
+            response = await controller.security_txt.fn(controller, request)
+
+        body = response.content.decode() if isinstance(response.content, bytes) else response.content
+        assert "Contact: mailto:security@example.com" in body
+        assert "Expires:" in body
+
+    @pytest.mark.asyncio
+    async def test_security_txt_expires_is_rfc3339(self):
+        """Expires field should be in RFC 3339 format."""
+        controller = SitemapController(owner=MagicMock())
+        request = MagicMock()
+
+        with patch("skrift.config.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                security_contact="mailto:test@example.com"
+            )
+            response = await controller.security_txt.fn(controller, request)
+
+        body = response.content.decode() if isinstance(response.content, bytes) else response.content
+        # RFC 3339 format: YYYY-MM-DDTHH:MM:SS+00:00
+        import re
+        assert re.search(r"Expires: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00", body)
 
 
 @pytest.fixture
@@ -128,6 +178,43 @@ class TestSitemapFilters:
 
         assert len(result) == 2
         assert result[1].loc == "https://example.com/custom"
+
+
+class TestRobotsTxtDbSetting:
+    """Test robots.txt DB configurability."""
+
+    @pytest.mark.asyncio
+    async def test_robots_uses_default_when_db_empty(self, clean_hooks):
+        """When no custom robots.txt is in DB, the default is used."""
+        with (
+            patch("skrift.controllers.sitemap.get_cached_robots_txt", return_value=""),
+            patch("skrift.controllers.sitemap.get_cached_site_base_url", return_value="https://example.com"),
+        ):
+            request = MagicMock()
+            request.base_url = "https://example.com/"
+            db_session = AsyncMock()
+            controller = SitemapController(owner=MagicMock())
+
+            response = await controller.robots.fn(controller, request, db_session)
+
+            body = response.content.decode() if isinstance(response.content, bytes) else response.content
+            assert "User-agent: *" in body
+            assert "Sitemap: https://example.com/sitemap.xml" in body
+
+    @pytest.mark.asyncio
+    async def test_robots_uses_custom_when_db_set(self, clean_hooks):
+        """When custom robots.txt is in DB, it is used instead of default."""
+        custom_content = "User-agent: Googlebot\nDisallow: /private/"
+        with patch("skrift.controllers.sitemap.get_cached_robots_txt", return_value=custom_content):
+            controller = SitemapController(owner=MagicMock())
+            request = MagicMock()
+            db_session = AsyncMock()
+
+            response = await controller.robots.fn(controller, request, db_session)
+
+            body = response.content.decode() if isinstance(response.content, bytes) else response.content
+            assert "User-agent: Googlebot" in body
+            assert "Disallow: /private/" in body
 
 
 class TestRobotsTxtFilters:

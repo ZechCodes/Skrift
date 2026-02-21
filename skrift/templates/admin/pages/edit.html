@@ -40,7 +40,7 @@
         <summary>SEO Settings</summary>
         <fieldset>
             <label for="meta_description">Meta Description</label>
-            <textarea id="meta_description" name="meta_description" rows="3" maxlength="320" placeholder="Brief description for search engines (max 320 chars)">{{ page.meta_description if page else '' }}</textarea>
+            <textarea id="meta_description" name="meta_description" rows="3" maxlength="320" placeholder="Brief description for search engines (max 320 chars)">{{ page.meta_description or '' if page else '' }}</textarea>
 
             <label for="meta_robots">Meta Robots</label>
             <select id="meta_robots" name="meta_robots">
@@ -51,13 +51,13 @@
             </select>
 
             <label for="og_title">OpenGraph Title</label>
-            <input type="text" id="og_title" name="og_title" value="{{ page.og_title if page else '' }}" placeholder="Custom title for social sharing (uses page title if empty)">
+            <input type="text" id="og_title" name="og_title" value="{{ page.og_title or '' if page else '' }}" placeholder="Custom title for social sharing (uses page title if empty)">
 
             <label for="og_description">OpenGraph Description</label>
-            <textarea id="og_description" name="og_description" rows="2" placeholder="Custom description for social sharing">{{ page.og_description if page else '' }}</textarea>
+            <textarea id="og_description" name="og_description" rows="2" placeholder="Custom description for social sharing">{{ page.og_description or '' if page else '' }}</textarea>
 
             <label for="og_image">OpenGraph Image URL</label>
-            <input type="url" id="og_image" name="og_image" value="{{ page.og_image if page else '' }}" placeholder="https://example.com/image.jpg">
+            <input type="url" id="og_image" name="og_image" value="{{ page.og_image or '' if page else '' }}" placeholder="https://example.com/image.jpg">
         </fieldset>
     </details>
 

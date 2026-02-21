@@ -161,6 +161,13 @@ def load_controllers() -> list:
             for pt in page_types:
                 controllers.append(create_page_type_controller(pt))
 
+            # Public controllers for custom types served on primary domain
+            from skrift.controllers.page_type_factory import create_public_page_type_controller
+
+            for pt in page_types:
+                if pt.name != "page" and not pt.subdomain:
+                    controllers.append(create_public_page_type_controller(pt))
+
     return controllers
 
 
@@ -530,6 +537,7 @@ def _build_site_app(
     themes_dir: Path,
     site_static_dir: Path,
     package_static_dir: Path,
+    page_types: list | None = None,
 ) -> ASGIApp:
     """Build a lightweight Litestar app for a subdomain site.
 
@@ -540,6 +548,12 @@ def _build_site_app(
     from skrift.forms import Form, csrf_field as _csrf_field
 
     controllers = load_site_controllers(site_config.controllers)
+
+    if page_types:
+        from skrift.controllers.page_type_factory import create_public_page_type_controller
+
+        for pt in page_types:
+            controllers.append(create_public_page_type_controller(pt, for_subdomain=True))
 
     theme = site_config.theme or settings.theme
 
@@ -655,6 +669,7 @@ def create_app() -> ASGIApp:
         max_age=settings.session.max_age,
         secure=not settings.debug,
         cookie_domain=settings.session.cookie_domain,
+        cookie_name=settings.session.cookie_name,
     )
 
     # Security headers middleware
@@ -670,6 +685,7 @@ def create_app() -> ASGIApp:
                     csp_value=csp_value,
                     csp_nonce=settings.security_headers.csp_nonce,
                     debug=settings.debug,
+                    cache_authenticated=settings.security_headers.cache_authenticated,
                 )
             ]
 
@@ -732,6 +748,7 @@ def create_app() -> ASGIApp:
     from skrift.controllers.notifications import NotificationsController
     from skrift.controllers.notification_webhook import NotificationsWebhookController
     from skrift.controllers.oauth2 import OAuth2Controller
+    from skrift.controllers.sitemap import SitemapController
     from skrift.auth import sync_roles_to_database
     from skrift.lib.notification_backends import InMemoryBackend, load_backend
     from skrift.lib.notifications import notifications as notification_service
@@ -785,7 +802,7 @@ def create_app() -> ASGIApp:
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
-        route_handlers=[NotificationsController, *oauth2_handlers, *webhook_handlers, *controllers],
+        route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *webhook_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
@@ -803,9 +820,19 @@ def create_app() -> ASGIApp:
         package_static_dir=package_static_dir,
     )
 
-    # Subdomain site dispatch — only when domain and sites are configured
-    if settings.sites and settings.domain:
+    # Build subdomain → page_types mapping from config
+    from skrift.config import load_page_types_from_yaml
+    all_page_types = load_page_types_from_yaml()
+    subdomain_page_types: dict[str, list] = {}
+    for pt in all_page_types:
+        if pt.subdomain:
+            subdomain_page_types.setdefault(pt.subdomain, []).append(pt)
+
+    # Subdomain site dispatch — when domain is set and sites or page type subdomains exist
+    need_dispatch = (settings.sites or subdomain_page_types) and settings.domain
+    if need_dispatch:
         from skrift.middleware.site_dispatch import SiteDispatcher
+        from skrift.config import SiteConfig
 
         site_apps = {}
         for name, site_cfg in settings.sites.items():
@@ -823,6 +850,27 @@ def create_app() -> ASGIApp:
                 themes_dir=themes_dir,
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
+                page_types=subdomain_page_types.pop(site_cfg.subdomain, []),
+            )
+
+        # Auto-create apps for subdomains referenced only by page types
+        for subdomain, pts in subdomain_page_types.items():
+            auto_cfg = SiteConfig(subdomain=subdomain)
+            site_apps[subdomain] = _build_site_app(
+                settings=settings,
+                site_name=subdomain,
+                site_config=auto_cfg,
+                db_config=db_config,
+                session_config=session_config,
+                csrf_config=csrf_config,
+                security_middleware=security_middleware,
+                rate_limit_middleware=rate_limit_middleware,
+                user_middleware=user_middleware,
+                static_url=static_url,
+                themes_dir=themes_dir,
+                site_static_dir=site_static_dir,
+                package_static_dir=package_static_dir,
+                page_types=pts,
             )
 
         return SiteDispatcher(
