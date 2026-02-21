@@ -8,7 +8,21 @@
     <p>Configure your site's name, tagline, and other metadata</p>
 </hgroup>
 
+{% if sites_list %}
+<label for="site_selector">Site</label>
+<select id="site_selector" onchange="window.location.href='/admin/settings?site=' + this.value">
+    {% for site in sites_list %}
+    <option value="{{ site.key }}"{% if site.key == selected_site %} selected{% endif %}>{{ site.label }}</option>
+    {% endfor %}
+</select>
+<small class="sk-text-muted">Select which site to configure</small>
+{% endif %}
+
 <form method="post" action="/admin/settings">
+    {% if sites_list %}
+    <input type="hidden" name="_site" value="{{ selected_site }}">
+    {% endif %}
+
     <label for="site_name">Site Name</label>
     <input type="text" id="site_name" name="site_name" value="{{ settings.site_name }}" required>
     <small class="sk-text-muted">The name displayed in the header and browser title</small>
@@ -17,6 +31,7 @@
     <input type="text" id="site_tagline" name="site_tagline" value="{{ settings.site_tagline }}">
     <small class="sk-text-muted">A short description or slogan for your site</small>
 
+    {% if not selected_site %}
     <label for="site_copyright_holder">Copyright Holder</label>
     <input type="text" id="site_copyright_holder" name="site_copyright_holder" value="{{ settings.site_copyright_holder }}">
     <small class="sk-text-muted">Name displayed in the copyright notice (defaults to site name if empty)</small>
@@ -36,6 +51,7 @@
         {% endfor %}
     </select>
     <small class="sk-text-muted">Select a theme to change your site's appearance</small>
+    {% endif %}
     {% endif %}
 
     <div class="sk-form-actions">

@@ -49,6 +49,8 @@ from skrift.db.services.setting_service import (
     load_site_settings_cache,
     get_cached_site_name,
     get_cached_site_tagline,
+    get_cached_site_name_for,
+    get_cached_site_tagline_for,
     get_cached_site_copyright_holder,
     get_cached_site_copyright_start_year,
     get_cached_site_theme,
@@ -544,8 +546,8 @@ def _build_site_app(
     template_dirs = get_template_directories_for_theme(theme)
     engine_callback = build_template_engine_callback(
         extra_globals={
-            "site_name": lambda _n=site_name: _n,
-            "site_tagline": get_cached_site_tagline,
+            "site_name": lambda _sub=site_config.subdomain: get_cached_site_name_for(_sub),
+            "site_tagline": lambda _sub=site_config.subdomain: get_cached_site_tagline_for(_sub),
             "site_copyright_holder": get_cached_site_copyright_holder,
             "site_copyright_start_year": get_cached_site_copyright_start_year,
             "active_theme": lambda _t=theme: _t,
