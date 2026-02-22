@@ -103,6 +103,26 @@ You can also use HTML directly with the built-in CSS framework classes:
 
 See the [CSS Framework Reference](../reference/css-framework.md) for available styles.
 
+## Markdown Content Negotiation
+
+Page views support content negotiation via the `Accept` header. When a client requests `text/markdown`, the raw markdown content is returned instead of the rendered HTML page:
+
+```bash
+# Returns rendered HTML page (default)
+curl http://localhost:8080/about
+
+# Returns raw markdown content
+curl -H "Accept: text/markdown" http://localhost:8080/about
+```
+
+This works for all page types — both standard pages (`/about`, `/contact`) and custom page types (`/post/hello-world`). The response uses `Content-Type: text/markdown`.
+
+This is useful for:
+
+- **API consumers** that need raw content for processing or display in their own UI
+- **CLI tools** that want to fetch page content without HTML wrapping
+- **Editor integrations** that need the source markdown for editing
+
 ## Next Steps
 
 - [Markdown Content](markdown-content.md) - Full Markdown syntax guide

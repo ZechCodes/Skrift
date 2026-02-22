@@ -28,13 +28,22 @@ def cli():
     type=click.Choice(["debug", "info", "warning", "error"]),
     help="Logging level",
 )
-def serve(host, port, reload, workers, log_level):
+@click.option(
+    "--subdomain",
+    default=None,
+    help="Serve only this subdomain site (for local multi-site testing)",
+)
+def serve(host, port, reload, workers, log_level, subdomain):
     """Run the Skrift server."""
     import asyncio
     import signal
 
     from hypercorn.asyncio import serve as hypercorn_serve
     from hypercorn.config import Config
+
+    if subdomain:
+        os.environ["SKRIFT_SUBDOMAIN"] = subdomain
+        click.echo(f"Serving subdomain '{subdomain}' on {host}:{port}")
 
     config = Config()
     config.application_path = "skrift.asgi:app"

@@ -829,7 +829,15 @@ def create_app() -> ASGIApp:
             subdomain_page_types.setdefault(pt.subdomain, []).append(pt)
 
     # Subdomain site dispatch — when domain is set and sites or page type subdomains exist
-    need_dispatch = (settings.sites or subdomain_page_types) and settings.domain
+    forced_subdomain = os.environ.get("SKRIFT_SUBDOMAIN", "")
+    need_dispatch = (settings.sites or subdomain_page_types) and (settings.domain or forced_subdomain)
+
+    if forced_subdomain and not need_dispatch:
+        raise SystemExit(
+            f"--subdomain '{forced_subdomain}' requires sites or page type subdomains "
+            f"to be configured in app.yaml"
+        )
+
     if need_dispatch:
         from skrift.middleware.site_dispatch import SiteDispatcher
         from skrift.config import SiteConfig
@@ -873,10 +881,19 @@ def create_app() -> ASGIApp:
                 page_types=pts,
             )
 
+        if forced_subdomain:
+            if forced_subdomain not in site_apps:
+                available = ", ".join(sorted(site_apps.keys())) or "(none)"
+                raise SystemExit(
+                    f"Subdomain '{forced_subdomain}' not found. "
+                    f"Available subdomains: {available}"
+                )
+
         return SiteDispatcher(
             primary_app=primary_asgi,
             site_apps=site_apps,
-            domain=settings.domain,
+            domain=settings.domain or "localhost",
+            force_subdomain=forced_subdomain,
         )
 
     return primary_asgi

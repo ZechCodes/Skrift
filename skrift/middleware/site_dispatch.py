@@ -56,10 +56,12 @@ class SiteDispatcher:
         primary_app: ASGIApp,
         site_apps: dict[str, ASGIApp],
         domain: str,
+        force_subdomain: str = "",
     ) -> None:
         self.primary_app = primary_app
         self.site_apps = site_apps
         self.domain = domain.lower()
+        self.force_subdomain = force_subdomain
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
@@ -70,8 +72,11 @@ class SiteDispatcher:
             await self.primary_app(scope, receive, send)
             return
 
-        host = _extract_host(scope)
-        subdomain = _get_subdomain(host, self.domain)
+        if self.force_subdomain:
+            subdomain = self.force_subdomain
+        else:
+            host = _extract_host(scope)
+            subdomain = _get_subdomain(host, self.domain)
 
         scope.setdefault("state", {})
 

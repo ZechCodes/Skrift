@@ -135,6 +135,7 @@ middleware:
 
 ```bash
 skrift serve --reload --port 8080
+skrift serve --subdomain blog --port 8081  # serve single subdomain site
 skrift secret --write .env
 skrift db upgrade head
 skrift db downgrade -1
@@ -169,6 +170,10 @@ class MyModel(Base):
 | `StoredNotification` | `stored_notifications` | Persistent notifications with `mode` column (Redis/PgNotify backends) |
 
 Sessions injected via `db_session: AsyncSession` parameter in handlers.
+
+### Content Negotiation
+
+Page views support `Accept: text/markdown` — returns raw `page.content` instead of rendered HTML. Works for all page types (WebController and page type factory routes).
 
 ## Creating a Controller
 
