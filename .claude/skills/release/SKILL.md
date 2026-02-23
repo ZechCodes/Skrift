@@ -107,6 +107,7 @@ Then switch back to the main branch and pull.
 
 1. Create a release with `gh release create v<new-version>` using a body that mirrors the PR's change categories but written for end-users (concise, no internal jargon).
 2. Print the release URL for the user.
+3. Creating the GitHub release automatically publishes the package to PyPI via a trusted publisher GitHub Actions workflow — no manual publish step is needed.
 
 ---
 
