@@ -6,8 +6,8 @@ from mdit_py_plugins.footnote import footnote_plugin
 
 def create_markdown_renderer() -> MarkdownIt:
     """Create a configured markdown renderer with standard plugins."""
-    md = MarkdownIt("commonmark", {"typographer": True, "html": False})
-    md.enable("table")
+    md = MarkdownIt("js-default", {"typographer": True, "html": False})
+    md.disable("linkify")
     footnote_plugin(md)
     return md
 

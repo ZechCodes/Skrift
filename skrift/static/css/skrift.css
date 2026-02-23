@@ -730,11 +730,14 @@ th {
 
 /* --- Markdown content tables --- */
 
+.page-content,
+.page-body {
+    overflow-x: auto;
+}
+
 .page-content table,
 .page-body table {
     margin: var(--sk-space-lg) 0;
-    overflow-x: auto;
-    display: block;
 }
 
 .page-content th,
