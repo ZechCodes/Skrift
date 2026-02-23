@@ -42,13 +42,14 @@ def get_config_path() -> Path:
     return Path.cwd() / f"app.{env}.yaml"
 
 
-def interpolate_env_vars(value, strict: bool = True):
+def interpolate_env_vars(value, strict: bool = True, _path: str = ""):
     """Recursively replace $VAR_NAME with os.environ values.
 
     Args:
         value: The value to interpolate
         strict: If True, raise an error when env var is not set.
                 If False, return the original $VAR_NAME reference.
+        _path: Internal — dot-separated YAML key path for error messages.
     """
     if isinstance(value, str):
 
@@ -57,15 +58,25 @@ def interpolate_env_vars(value, strict: bool = True):
             val = os.environ.get(var)
             if val is None:
                 if strict:
-                    raise ValueError(f"Environment variable ${var} not set")
+                    location = f" (in {_path})" if _path else ""
+                    raise ValueError(
+                        f"Environment variable ${var} is not set{location}.\n"
+                        f"  Hint: Set it in your .env file or shell environment."
+                    )
                 return match.group(0)  # Return original $VAR_NAME
             return val
 
         return ENV_VAR_PATTERN.sub(replace, value)
     elif isinstance(value, dict):
-        return {k: interpolate_env_vars(v, strict) for k, v in value.items()}
+        return {
+            k: interpolate_env_vars(v, strict, f"{_path}.{k}" if _path else k)
+            for k, v in value.items()
+        }
     elif isinstance(value, list):
-        return [interpolate_env_vars(item, strict) for item in value]
+        return [
+            interpolate_env_vars(item, strict, f"{_path}[{i}]")
+            for i, item in enumerate(value)
+        ]
     return value
 
 
@@ -439,9 +450,11 @@ def get_settings() -> Settings:
         app_config = load_app_config()
     except FileNotFoundError:
         return Settings()
-    except ValueError:
-        # Missing environment variables - return base settings
-        return Settings()
+    except ValueError as e:
+        config_path = get_config_path()
+        raise SystemExit(
+            f"Failed to load {config_path.name}: {e}"
+        ) from e
 
     # Build nested configs from YAML - pass directly to Settings to avoid
     # model_copy issues with nested BaseModel instances in Pydantic v2
