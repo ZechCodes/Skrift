@@ -123,6 +123,40 @@ class TestRenderMarkdownTables:
         assert 'style="text-align:center"' in result
         assert 'style="text-align:right"' in result
 
+    def test_table_with_inline_formatting(self):
+        """Inline markdown formatting works inside table cells."""
+        markdown = """| Feature | Status |
+|---------|--------|
+| **Bold** | `code` |
+| *Italic* | [link](http://example.com) |"""
+        result = render_markdown(markdown)
+        assert "<table>" in result
+        assert "<strong>Bold</strong>" in result
+        assert "<code>code</code>" in result
+        assert "<em>Italic</em>" in result
+        assert '<a href="http://example.com"' in result
+
+    def test_table_after_paragraph(self):
+        """Table renders correctly after a paragraph."""
+        markdown = """Here is a comparison:
+
+| A | B |
+|---|---|
+| 1 | 2 |"""
+        result = render_markdown(markdown)
+        assert "<p>" in result
+        assert "<table>" in result
+
+
+class TestRenderMarkdownStrikethrough:
+    """Tests for strikethrough rendering."""
+
+    def test_strikethrough(self):
+        """Strikethrough text is rendered."""
+        result = render_markdown("~~deleted text~~")
+        assert "<s>" in result
+        assert "deleted text" in result
+
 
 class TestRenderMarkdownFootnotes:
     """Tests for footnote rendering."""

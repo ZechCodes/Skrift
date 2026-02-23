@@ -728,6 +728,31 @@ th {
     background-color: var(--sk-color-warm);
 }
 
+/* --- Markdown content tables --- */
+
+.page-content,
+.page-body {
+    overflow-x: auto;
+}
+
+.page-content table,
+.page-body table {
+    margin: var(--sk-space-lg) 0;
+}
+
+.page-content th,
+.page-body th {
+    text-transform: none;
+    letter-spacing: normal;
+    color: inherit;
+    border: 1px solid var(--sk-color-border);
+}
+
+.page-content td,
+.page-body td {
+    border: 1px solid var(--sk-color-border);
+}
+
 /* ========================================
    Horizontal Rule
    ======================================== */
