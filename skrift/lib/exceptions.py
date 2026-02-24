@@ -9,6 +9,7 @@ from litestar.status_codes import HTTP_500_INTERNAL_SERVER_ERROR
 from skrift.auth.session_keys import SESSION_USER_EMAIL, SESSION_USER_ID, SESSION_USER_NAME, SESSION_USER_PICTURE_URL
 from skrift.config import get_settings
 from skrift.db.services.setting_service import get_cached_site_name
+from skrift.lib import observability
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,12 @@ def http_exception_handler(request: Request, exc: HTTPException) -> Response:
 
 def internal_server_error_handler(request: Request, exc: Exception) -> Response:
     """Handle unexpected exceptions with HTML for browsers, JSON for APIs."""
+    if not observability.exception(
+        "Unhandled exception on {method} {path}",
+        method=request.method,
+        path=request.url.path,
+    ):
+        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return _render_error_response(
         request, HTTP_500_INTERNAL_SERVER_ERROR,
         "An unexpected error occurred.", json_detail="Internal Server Error",

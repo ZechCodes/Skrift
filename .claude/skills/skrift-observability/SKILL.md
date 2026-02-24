@@ -65,6 +65,7 @@ All observability goes through a thin facade that guards on a module-level `_log
 | `info(msg, **kwargs)` | Structured log at info level, or no-op. |
 | `error(msg, **kwargs)` | Structured log at error level, or no-op. |
 | `warning(msg, **kwargs)` | Structured log at warning level, or no-op. |
+| `exception(msg, **kwargs)` | Log exception with traceback. Returns `True` if logged, `False` if unavailable. |
 | `get_logfire()` | Return raw `logfire` module or `None` for advanced usage. |
 | `is_available()` | `True` if logfire is installed and configured. |
 
