@@ -166,7 +166,14 @@ def _run_alembic(project_root: Path, args: list[str]) -> None:
     else:
         version_locations = skrift_versions
 
-    # Rewrite "upgrade head" → "upgrade heads" when multiple locations exist
+    # Rewrite "upgrade head" → "upgrade heads" when multiple locations exist.
+    #
+    # Known limitation (Alembic <=1.18): when user migrations use depends_on
+    # to reference Skrift revision IDs across version locations, "upgrade heads"
+    # can raise "RevisionError: Requested revision X overlaps with other
+    # requested revisions Y" if the depended-on revision is already applied.
+    # Workaround: run "skrift db upgrade <specific_revision>" for the new
+    # location's head instead of relying on "upgrade heads".
     if user_versions.is_dir() and len(args) >= 2:
         if args[0] == "upgrade" and args[1] == "head":
             args = list(args)
