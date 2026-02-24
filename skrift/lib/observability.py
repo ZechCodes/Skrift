@@ -99,3 +99,11 @@ def error(msg: str, **kwargs: Any) -> None:
 def warning(msg: str, **kwargs: Any) -> None:
     if is_available():
         _logfire.warn(msg, **kwargs)
+
+
+def exception(msg: str, **kwargs: Any) -> bool:
+    """Log an exception with traceback via logfire. Returns True if logged, False if unavailable."""
+    if is_available():
+        _logfire.exception(msg, **kwargs)
+        return True
+    return False
