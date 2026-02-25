@@ -221,6 +221,24 @@ Different environments need different settings. Skrift uses the `SKRIFT_ENV` var
 | `staging` | `app.staging.yaml` | Staging environment |
 | `test` | `app.test.yaml` | Automated testing |
 
+### Config File Override (`-f` flag)
+
+You can bypass `SKRIFT_ENV` entirely and point Skrift at any config file:
+
+```bash
+skrift -f my-custom-config.yaml serve --reload
+```
+
+The `-f` flag applies to all subcommands (`serve`, `db`, etc.) and takes precedence over `SKRIFT_ENV`.
+
+If the config file contains an `environment` key, Skrift sets `SKRIFT_ENV` accordingly so the rest of the system (logfire defaults, etc.) sees the correct environment:
+
+```yaml
+environment: staging
+db:
+  url: $DATABASE_URL
+```
+
 ### Why This Matters for Security
 
 This separation prevents common security mistakes:

@@ -134,10 +134,14 @@ All commands support these global options:
 
 | Option | Description |
 |--------|-------------|
+| `-f`, `--config-file` | Path to config file (overrides `SKRIFT_ENV`-based resolution) |
 | `--version` | Show the version and exit |
 | `--help` | Show help message and exit |
 
 ```bash
+# Use a specific config file
+skrift -f dev-app.yaml serve --reload
+
 # Show version
 skrift --version
 
@@ -147,6 +151,17 @@ skrift serve --help
 skrift secret --help
 skrift db --help
 ```
+
+!!! tip "Config File Override"
+    The `-f` flag overrides the `SKRIFT_ENV`-based config file selection. This is useful for testing different configurations without changing environment variables. The config file can also set the environment via an `environment` key:
+
+    ```yaml
+    environment: staging
+    db:
+      url: $DATABASE_URL
+    ```
+
+    When present, this sets `SKRIFT_ENV` so the rest of the system (logfire defaults, etc.) sees the correct environment.
 
 ## Quick Start
 
