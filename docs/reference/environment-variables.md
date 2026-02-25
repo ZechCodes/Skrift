@@ -82,6 +82,8 @@ Controls which configuration file Skrift loads.
 | `dev` | `app.dev.yaml` |
 | `staging` | `app.staging.yaml` |
 
+This can be overridden entirely with the `-f` CLI flag (e.g., `skrift -f custom.yaml serve`). If the config file itself contains an `environment` key, Skrift sets `SKRIFT_ENV` to that value so the rest of the system sees the correct environment.
+
 See [Configuration](../core-concepts/configuration.md) for details.
 
 ## Database URL Format

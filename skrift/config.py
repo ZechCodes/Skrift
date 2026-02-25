@@ -20,6 +20,15 @@ ENV_VAR_PATTERN = re.compile(r"\$([A-Z_][A-Z0-9_]*)")
 SKRIFT_ENV = "SKRIFT_ENV"
 DEFAULT_ENVIRONMENT = "production"
 
+# Override for config file path (set via CLI -f flag)
+_config_path_override: Path | None = None
+
+
+def set_config_path(path: Path) -> None:
+    """Set an explicit config file path, overriding environment-based resolution."""
+    global _config_path_override
+    _config_path_override = path
+
 
 def get_environment() -> str:
     """Get the current environment name, normalized to lowercase.
@@ -31,11 +40,14 @@ def get_environment() -> str:
 
 
 def get_config_path() -> Path:
-    """Get the path to the environment-specific config file.
+    """Get the path to the config file.
 
-    Production -> app.yaml
-    Other envs -> app.{env}.yaml (e.g., app.dev.yaml)
+    If set_config_path() was called, returns that path.
+    Otherwise: production -> app.yaml, other envs -> app.{env}.yaml
     """
+    if _config_path_override is not None:
+        return _config_path_override
+
     env = get_environment()
     if env == "production":
         return Path.cwd() / "app.yaml"
@@ -455,6 +467,11 @@ def get_settings() -> Settings:
         raise SystemExit(
             f"Failed to load {config_path.name}: {e}"
         ) from e
+
+    # If the config file specifies an environment, propagate it so the rest
+    # of the system (logfire defaults, etc.) sees the correct value.
+    if "environment" in app_config:
+        os.environ[SKRIFT_ENV] = app_config["environment"]
 
     # Build nested configs from YAML - pass directly to Settings to avoid
     # model_copy issues with nested BaseModel instances in Pydantic v2

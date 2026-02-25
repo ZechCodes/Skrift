@@ -12,9 +12,19 @@ import click
 
 @click.group()
 @click.version_option(package_name="skrift")
-def cli():
+@click.option(
+    "-f",
+    "--config-file",
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True),
+    default=None,
+    help="Path to config file (overrides SKRIFT_ENV-based resolution).",
+)
+def cli(config_file):
     """Skrift - A lightweight async Python CMS."""
-    pass
+    if config_file:
+        from skrift.config import set_config_path
+
+        set_config_path(Path(config_file))
 
 
 @cli.command()
