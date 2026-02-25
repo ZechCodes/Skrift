@@ -66,6 +66,14 @@
             return this._status;
         }
 
+        get lastSeen() {
+            return this._lastTimestamp;
+        }
+
+        set lastSeen(timestamp) {
+            this._lastTimestamp = timestamp;
+        }
+
         _setStatus(status) {
             if (this._status === status) return;
             this._status = status;
