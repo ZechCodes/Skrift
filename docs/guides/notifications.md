@@ -199,6 +199,24 @@ Default mode configurations:
 | timeseries | `false` | `8000` ms |
 | ephemeral | `false` | `5000` ms |
 
+### Last Seen Timestamp
+
+The `lastSeen` property exposes the timestamp used for timeseries replay on reconnect. The client updates it automatically as notifications arrive, but you can read or set it manually:
+
+```javascript
+// Read the current value (Unix timestamp or null)
+const ts = window.__skriftNotifications.lastSeen;
+
+// Set to "now" — skip old timeseries notifications on next reconnect
+window.__skriftNotifications.lastSeen = Date.now() / 1000;
+
+// Persist across page loads
+localStorage.setItem("lastSeen", window.__skriftNotifications.lastSeen);
+// ...on next page load:
+const saved = localStorage.getItem("lastSeen");
+if (saved) window.__skriftNotifications.lastSeen = parseFloat(saved);
+```
+
 ### Connection Behavior
 
 - Auto-connects on page load and `window.focus`, disconnects on `window.blur` (opt out with `persistConnection: true`)

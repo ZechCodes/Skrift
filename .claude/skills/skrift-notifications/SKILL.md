@@ -269,7 +269,7 @@ During the Live phase, group-based replacement sends a `"dismissed"` event for t
 - Max visible toasts: 3 (desktop) / 2 (mobile); excess queued
 - Dispatches `sk:notification` CustomEvent (cancelable) for every notification
 - Only renders `"generic"` type as toast; custom types handled via event listeners
-- Global instance: `window.__skriftNotifications` (exposes `.status` getter)
+- Global instance: `window.__skriftNotifications` (exposes `.status` and `.lastSeen` getters/setters)
 
 ### Custom Event Handling (Client-Side)
 
