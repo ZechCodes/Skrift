@@ -52,14 +52,8 @@ def app_yaml_exists() -> bool:
     return get_config_path().exists()
 
 
-def get_database_url_from_yaml() -> str | None:
-    """Try to get the database URL from app.yaml, returning None if not configured.
-
-    If the URL is an env var reference that isn't set, falls back to checking
-    for local SQLite database files.
-    """
-    import yaml
-
+def _load_db_config_from_yaml() -> dict | None:
+    """Load the db section from app.yaml, returning None if not available."""
     config_path = get_config_path()
     if not config_path.exists():
         return None
@@ -71,27 +65,77 @@ def get_database_url_from_yaml() -> str | None:
         if not config or "db" not in config:
             return None
 
-        db_url = config["db"].get("url")
-        if not db_url:
-            return None
-
-        # If it's an env var reference, try to resolve it
-        if db_url.startswith("$"):
-            env_var = db_url[1:]
-            resolved = os.environ.get(env_var)
-            if resolved:
-                return resolved
-
-            # Fallback: check for local SQLite database files
-            for db_file in ["./app.db", "./data.db", "./skrift.db"]:
-                if Path(db_file).exists():
-                    return f"sqlite+aiosqlite:///{db_file}"
-
-            return None
-
-        return db_url
+        return config["db"]
     except Exception:
         return None
+
+
+def get_database_url_from_yaml() -> str | None:
+    """Try to get the database URL from app.yaml, returning None if not configured.
+
+    If the URL is an env var reference that isn't set, falls back to checking
+    for local SQLite database files.
+    """
+    db_config = _load_db_config_from_yaml()
+    if not db_config:
+        return None
+
+    db_url = db_config.get("url")
+    if not db_url:
+        return None
+
+    # If it's an env var reference, try to resolve it
+    if db_url.startswith("$"):
+        env_var = db_url[1:]
+        resolved = os.environ.get(env_var)
+        if resolved:
+            return resolved
+
+        # Fallback: check for local SQLite database files
+        for db_file in ["./app.db", "./data.db", "./skrift.db"]:
+            if Path(db_file).exists():
+                return f"sqlite+aiosqlite:///{db_file}"
+
+        return None
+
+    return db_url
+
+
+def get_database_schema_from_yaml() -> str | None:
+    """Get the database schema from app.yaml, returning None if not configured."""
+    db_config = _load_db_config_from_yaml()
+    if not db_config:
+        return None
+
+    schema = db_config.get("schema")
+    if not schema:
+        return None
+
+    # Resolve env var references
+    if isinstance(schema, str) and schema.startswith("$"):
+        return os.environ.get(schema[1:])
+
+    return schema
+
+
+def create_setup_engine(db_url: str):
+    """Create an async engine with schema configuration applied.
+
+    This mirrors the schema setup from the main app's create_app() to ensure
+    setup operations target the correct database schema.
+    """
+    from skrift.db.models import Base
+
+    schema = get_database_schema_from_yaml()
+    kwargs: dict = {}
+
+    if schema and "sqlite" not in db_url:
+        Base.metadata.schema = schema
+        kwargs["execution_options"] = {
+            "schema_translate_map": {None: schema},
+        }
+
+    return create_async_engine(db_url, **kwargs)
 
 
 async def can_connect_to_database() -> tuple[bool, str | None]:
@@ -105,7 +149,7 @@ async def can_connect_to_database() -> tuple[bool, str | None]:
         return False, "Database URL not configured"
 
     try:
-        engine = create_async_engine(db_url)
+        engine = create_setup_engine(db_url)
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         await engine.dispose()
@@ -230,7 +274,7 @@ async def is_site_configured() -> bool:
 
     engine = None
     try:
-        engine = create_async_engine(db_url)
+        engine = create_setup_engine(db_url)
         from sqlalchemy.ext.asyncio import async_sessionmaker
 
         async_session = async_sessionmaker(engine, expire_on_commit=False)
@@ -260,7 +304,7 @@ async def is_theme_configured() -> bool:
 
     engine = None
     try:
-        engine = create_async_engine(db_url)
+        engine = create_setup_engine(db_url)
         from sqlalchemy.ext.asyncio import async_sessionmaker
 
         async_session = async_sessionmaker(engine, expire_on_commit=False)

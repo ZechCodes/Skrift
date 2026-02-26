@@ -971,17 +971,28 @@ def create_setup_app() -> Litestar:
     db_config: SQLAlchemyAsyncConfig | None = None
 
     if db_url:
+        # Database schema configuration (mirrors create_app)
+        from skrift.setup.state import get_database_schema_from_yaml
+        db_schema = get_database_schema_from_yaml()
+        if db_schema and "sqlite" not in db_url:
+            Base.metadata.schema = db_schema
+
         # Database is configured, add SQLAlchemy plugin
         if "sqlite" in db_url:
             engine_config = EngineConfig(echo=False)
         else:
-            engine_config = EngineConfig(
+            engine_kwargs: dict[str, Any] = dict(
                 pool_size=5,
                 max_overflow=10,
                 pool_timeout=30,
                 pool_pre_ping=True,
                 echo=False,
             )
+            if db_schema:
+                engine_kwargs["execution_options"] = {
+                    "schema_translate_map": {None: db_schema},
+                }
+            engine_config = EngineConfig(**engine_kwargs)
 
         db_config = SQLAlchemyAsyncConfig(
             connection_string=db_url,
@@ -1023,9 +1034,10 @@ def create_setup_app() -> Litestar:
 
 async def check_setup_in_db(db_url: str) -> bool:
     """Check if setup is complete by querying the database directly."""
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from skrift.setup.state import create_setup_engine
 
-    engine = create_async_engine(db_url)
+    engine = create_setup_engine(db_url)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
     try:
