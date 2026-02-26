@@ -1,6 +1,7 @@
 """Alembic environment configuration for async SQLAlchemy migrations."""
 
 import asyncio
+import logging
 from logging.config import fileConfig
 
 import sqlalchemy as sa
@@ -44,6 +45,8 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+logger = logging.getLogger("alembic.env")
+
 # Target metadata for 'autogenerate' support
 target_metadata = Base.metadata
 
@@ -54,6 +57,11 @@ def get_url() -> str:
         settings = get_settings()
         return settings.db.url
     except Exception:
+        logger.warning(
+            "Failed to load database URL from settings (missing env vars?), "
+            "falling back to alembic.ini sqlalchemy.url",
+            exc_info=True,
+        )
         # Fall back to alembic.ini config if settings can't be loaded
         return config.get_main_option("sqlalchemy.url", "")
 
@@ -64,6 +72,11 @@ def get_schema() -> str | None:
         settings = get_settings()
         return settings.db.db_schema
     except Exception:
+        logger.warning(
+            "Failed to load database schema from settings, "
+            "proceeding without schema",
+            exc_info=True,
+        )
         return None
 
 
