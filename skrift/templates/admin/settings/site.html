@@ -5,8 +5,18 @@
 {% block admin_content %}
 <hgroup>
     <h1>Site Settings</h1>
-    <p>Configure your site's name, tagline, and other metadata</p>
+    <p>Configure your site's name, tagline, and other metadata &middot; <a href="#" id="details-link" class="sk-text-muted">Details</a></p>
 </hgroup>
+
+<dialog id="system-info-dialog" class="sk-dialog">
+    <div class="sk-dialog-header">
+        <h3>System Details</h3>
+        <button type="button" class="sk-dialog-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="sk-dialog-body" id="system-info-content">
+        <p class="sk-text-muted">Loading...</p>
+    </div>
+</dialog>
 
 {% if sites_list %}
 <label for="site_selector">Site</label>
@@ -62,4 +72,49 @@
         <button type="submit">Save Settings</button>
     </div>
 </form>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    const dialog = document.getElementById('system-info-dialog');
+    const content = document.getElementById('system-info-content');
+    const link = document.getElementById('details-link');
+    const closeBtn = dialog.querySelector('.sk-dialog-close');
+
+    link.addEventListener('click', function(e) {
+        e.preventDefault();
+        dialog.showModal();
+        content.innerHTML = '<p class="sk-text-muted">Loading...</p>';
+        fetch('/admin/system-info')
+            .then(r => r.json())
+            .then(data => {
+                const shortHead = data.alembic_head.length > 12
+                    ? data.alembic_head.slice(0, 12)
+                    : data.alembic_head;
+                let rows = '';
+                for (const dep of data.dependencies) {
+                    rows += '<tr><td>' + dep.name + '</td><td>' + dep.version + '</td></tr>';
+                }
+                content.innerHTML =
+                    '<table class="sk-admin-table">' +
+                    '<tbody>' +
+                    '<tr><td><strong>Skrift version</strong></td><td>' + data.version + '</td></tr>' +
+                    '<tr><td><strong>Migration head</strong></td><td><code>' + shortHead + '</code></td></tr>' +
+                    '</tbody></table>' +
+                    '<h4 style="margin-top:1rem;margin-bottom:0.5rem;">Dependencies</h4>' +
+                    '<table class="sk-admin-table"><thead><tr><th>Package</th><th>Version</th></tr></thead>' +
+                    '<tbody>' + rows + '</tbody></table>';
+            })
+            .catch(() => {
+                content.innerHTML = '<p style="color:var(--sk-color-danger)">Failed to load system info.</p>';
+            });
+    });
+
+    closeBtn.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', function(e) {
+        if (e.target === dialog) dialog.close();
+    });
+})();
+</script>
 {% endblock %}

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import importlib.metadata
+from pathlib import Path
 from typing import Annotated
 
 from litestar import Controller, Request, get, post
 from litestar.exceptions import HTTPException
-from litestar.response import File, Template as TemplateResponse, Redirect
+from litestar.response import File, Response, Template as TemplateResponse, Redirect
 from litestar.params import Body
 from litestar.enums import RequestEncodingType
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -163,3 +165,45 @@ class SettingsAdminController(Controller):
             raise HTTPException(status_code=404, detail="Screenshot not found")
 
         return File(path=info.screenshot, media_type="image/png")
+
+    @get(
+        "/system-info",
+        guards=[auth_guard, Permission("modify-site")],
+    )
+    async def system_info(self, request: Request) -> Response:
+        """Return system info for the details modal."""
+        from alembic.config import Config as AlembicConfig
+        from alembic.script import ScriptDirectory
+
+        version = importlib.metadata.version("skrift")
+
+        # Get alembic head revision from migration scripts
+        alembic_ini = Path(__file__).resolve().parent.parent / "alembic.ini"
+        alembic_cfg = AlembicConfig(str(alembic_ini))
+        script_dir = ScriptDirectory.from_config(alembic_cfg)
+        heads = script_dir.get_heads()
+        alembic_head = heads[0] if heads else "unknown"
+
+        # Gather installed dependency versions
+        deps: list[dict[str, str]] = []
+        requires = importlib.metadata.requires("skrift") or []
+        for req in requires:
+            # Skip extras-only deps (e.g. "redis ; extra == 'redis'")
+            if "extra ==" in req:
+                continue
+            # Extract package name (before any version specifier)
+            pkg_name = req.split(";")[0].split("[")[0].split(">")[0].split("<")[0].split("=")[0].split("!")[0].split("~")[0].strip()
+            try:
+                pkg_version = importlib.metadata.version(pkg_name)
+            except importlib.metadata.PackageNotFoundError:
+                pkg_version = "not installed"
+            deps.append({"name": pkg_name, "version": pkg_version})
+
+        return Response(
+            content={
+                "version": version,
+                "alembic_head": alembic_head,
+                "dependencies": deps,
+            },
+            media_type="application/json",
+        )
