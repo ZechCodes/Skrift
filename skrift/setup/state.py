@@ -127,7 +127,7 @@ def create_setup_engine(db_url: str):
     This mirrors the schema setup from the main app's create_app() to ensure
     setup operations target the correct database schema.
     """
-    from skrift.db.models import Base
+    from skrift.db.base import Base
 
     schema = get_database_schema_from_yaml()
     kwargs: dict = {}
