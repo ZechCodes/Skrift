@@ -1,0 +1,142 @@
+/* Skrift CMS — Aurora Decorative Layer
+   ======================================== */
+
+/* ========================================
+   Animated Background Orbs
+   ======================================== */
+
+.sk-aurora-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.sk-aurora-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.15;
+    animation: sk-orbFloat 20s ease-in-out infinite;
+}
+
+.sk-aurora-orb:nth-child(1) {
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, var(--sk-emerald), transparent 70%);
+    top: -10%;
+    left: 10%;
+    animation-duration: 22s;
+}
+
+.sk-aurora-orb:nth-child(2) {
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, var(--sk-violet), transparent 70%);
+    top: 20%;
+    right: -5%;
+    animation-duration: 18s;
+    animation-delay: -5s;
+}
+
+.sk-aurora-orb:nth-child(3) {
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, var(--sk-teal), transparent 70%);
+    bottom: 10%;
+    left: 30%;
+    animation-duration: 25s;
+    animation-delay: -10s;
+}
+
+@keyframes sk-orbFloat {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    25% { transform: translate(60px, -40px) scale(1.1); }
+    50% { transform: translate(-30px, 50px) scale(0.95); }
+    75% { transform: translate(-50px, -20px) scale(1.05); }
+}
+
+/* ========================================
+   Glassmorphism
+   ======================================== */
+
+.sk-glass {
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+/* ========================================
+   Gradient Text
+   ======================================== */
+
+.sk-gradient-text {
+    background: var(--sk-gradient-brand);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* ========================================
+   Fade-In Animations
+   ======================================== */
+
+@keyframes sk-fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(16px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.sk-fade-in { animation: sk-fadeInUp 0.5s ease both; }
+.sk-fade-in-1 { animation-delay: 0.05s; }
+.sk-fade-in-2 { animation-delay: 0.1s; }
+.sk-fade-in-3 { animation-delay: 0.15s; }
+.sk-fade-in-4 { animation-delay: 0.2s; }
+.sk-fade-in-5 { animation-delay: 0.25s; }
+
+/* ========================================
+   Scroll Reveal
+   ======================================== */
+
+.sk-reveal {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.sk-reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* ========================================
+   Reduce Motion
+   ======================================== */
+
+@media (prefers-reduced-motion: reduce) {
+    .sk-aurora-orb {
+        animation: none;
+    }
+
+    .sk-fade-in,
+    .sk-fade-in-1,
+    .sk-fade-in-2,
+    .sk-fade-in-3,
+    .sk-fade-in-4,
+    .sk-fade-in-5 {
+        animation: none;
+        opacity: 1;
+    }
+
+    .sk-reveal {
+        opacity: 1;
+        transform: none;
+        transition: none;
+    }
+}
