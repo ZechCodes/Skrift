@@ -13,9 +13,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
       - name: Verify all imports resolve
-        run: >
-          uv run python -c "
-          import pkgutil, importlib;
-          [importlib.import_module(m.name)
-           for m in pkgutil.walk_packages(['skrift'], prefix='skrift.')]"
+        run: uv run python -c "import pkgutil, importlib; [importlib.import_module(m.name) for m in pkgutil.walk_packages(['skrift'], prefix='skrift.')]"
       - run: uv run pytest -m "not integration"
