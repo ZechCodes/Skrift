@@ -516,14 +516,12 @@
 }
 
 .sk-dialog-close {
-    background: none;
-    border: none;
-    font-size: 1.5rem;
+    all: unset;
+    font-size: 1.25rem;
     cursor: pointer;
     color: var(--sk-color-muted);
-    padding: 0;
     line-height: 1;
-    width: auto;
+    padding: 0.25rem;
 }
 
 .sk-dialog-close:hover {
@@ -534,6 +532,30 @@
     padding: 1.25rem 1.375rem;
     max-height: 70vh;
     overflow-y: auto;
+}
+
+.sk-dialog-body .sk-admin-table {
+    margin-top: 0;
+}
+
+.sk-dialog-body .sk-admin-table td,
+.sk-dialog-body .sk-admin-table th {
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+}
+
+.sk-dialog-body .sk-admin-table td:first-child {
+    color: var(--sk-color-muted);
+}
+
+.sk-dialog-body h4 {
+    font-family: var(--sk-font-display);
+    font-size: 1rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--sk-color-muted);
+    margin: 1.25rem 0 0.5rem;
 }
 
 /* ========================================
