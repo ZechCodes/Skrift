@@ -1000,6 +1000,7 @@ def create_setup_app() -> Litestar:
             create_all=False,
             session_config=AsyncSessionConfig(expire_on_commit=False),
             engine_config=engine_config,
+            session_maker_app_state_key="setup_session_maker_class",
         )
         plugins.append(SQLAlchemyPlugin(config=db_config))
 
