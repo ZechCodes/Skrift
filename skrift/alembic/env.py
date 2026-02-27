@@ -1,6 +1,7 @@
 """Alembic environment configuration for async SQLAlchemy migrations."""
 
 import asyncio
+import logging
 from logging.config import fileConfig
 
 import sqlalchemy as sa
@@ -12,9 +13,12 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from skrift.config import get_settings
 from skrift.db.base import Base
 
+logger = logging.getLogger("alembic.env")
+
 # Import all models to ensure they're registered with Base.metadata
 from skrift.db.models.notification import StoredNotification  # noqa: F401
 from skrift.db.models.oauth_account import OAuthAccount  # noqa: F401
+from skrift.db.models.setting import Setting  # noqa: F401
 from skrift.db.models.user import User  # noqa: F401
 from skrift.db.models.page import Page  # noqa: F401
 from skrift.db.models.role import Role, RolePermission  # noqa: F401
@@ -49,20 +53,48 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    """Get database URL from settings or alembic.ini."""
+    """Get database URL from settings, app.yaml, or alembic.ini.
+
+    Tries in order:
+    1. Full settings (requires SECRET_KEY and all env vars)
+    2. Direct app.yaml read (works during setup when SECRET_KEY isn't set)
+    3. alembic.ini fallback (last resort)
+    """
     try:
         settings = get_settings()
         return settings.db.url
+    except BaseException:
+        pass
+
+    # Settings failed (e.g. SECRET_KEY not set during setup).
+    # Read the database URL directly from app.yaml to avoid running
+    # migrations against the wrong database.
+    try:
+        from skrift.setup.state import get_database_url_from_yaml
+        url = get_database_url_from_yaml()
+        if url:
+            logger.info("Using database URL from app.yaml (settings unavailable)")
+            return url
     except Exception:
-        # Fall back to alembic.ini config if settings can't be loaded
-        return config.get_main_option("sqlalchemy.url", "")
+        pass
+
+    fallback = config.get_main_option("sqlalchemy.url", "")
+    logger.warning("Falling back to alembic.ini database URL: %s", fallback)
+    return fallback
 
 
 def get_schema() -> str | None:
-    """Get database schema from settings, if configured."""
+    """Get database schema from settings or app.yaml."""
     try:
         settings = get_settings()
         return settings.db.db_schema
+    except BaseException:
+        pass
+
+    # Fall back to reading schema directly from app.yaml
+    try:
+        from skrift.setup.state import get_database_schema_from_yaml
+        return get_database_schema_from_yaml()
     except Exception:
         return None
 
