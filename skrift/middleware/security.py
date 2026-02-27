@@ -5,7 +5,8 @@ into every HTTP response. Headers already set by a route handler are
 not overwritten, allowing per-route overrides.
 
 When csp_nonce is enabled, 'unsafe-inline' in the style-src directive
-is replaced with a per-request nonce value.
+is replaced with a per-request nonce value, and the nonce is appended
+to the script-src directive to allow nonced inline scripts.
 """
 
 import contextvars
@@ -18,6 +19,7 @@ from litestar.types import ASGIApp, Receive, Scope, Send
 csp_nonce_var: contextvars.ContextVar[str] = contextvars.ContextVar("csp_nonce")
 
 _STYLE_SRC_UNSAFE_INLINE = re.compile(r"(style-src\s[^;]*)'unsafe-inline'")
+_SCRIPT_SRC = re.compile(r"(script-src\s)([^;]*)")
 
 
 class SecurityHeadersMiddleware:
@@ -28,7 +30,7 @@ class SecurityHeadersMiddleware:
         headers: Pre-encoded header pairs as list of (name_bytes, value_bytes).
             Should NOT include CSP (CSP is handled separately via csp_value).
         csp_value: The raw CSP header string (or None to disable CSP).
-        csp_nonce: Whether to replace 'unsafe-inline' in style-src with a nonce.
+        csp_nonce: Whether to inject a nonce into style-src and script-src.
         debug: Whether the application is running in debug mode.
     """
 
@@ -70,6 +72,9 @@ class SecurityHeadersMiddleware:
                 if nonce:
                     csp_str = _STYLE_SRC_UNSAFE_INLINE.sub(
                         rf"\1'nonce-{nonce}'", self.csp_value
+                    )
+                    csp_str = _SCRIPT_SRC.sub(
+                        rf"\1\2 'nonce-{nonce}'", csp_str
                     )
                 else:
                     csp_str = self.csp_value
