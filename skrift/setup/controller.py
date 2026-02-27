@@ -4,11 +4,14 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import secrets
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 from typing import Annotated
 
@@ -201,6 +204,7 @@ class SetupController(Controller):
             # Test connection
             can_connect, error = await can_connect_to_database()
             if not can_connect:
+                logger.warning("Setup database: connection test failed: %s", error)
                 request.session["setup_error"] = f"Connection failed: {error}"
                 return Redirect(path="/setup/database")
 
@@ -209,6 +213,7 @@ class SetupController(Controller):
             return Redirect(path="/setup/configuring")
 
         except Exception as e:
+            logger.error("Setup database: unexpected error saving config: %s", e, exc_info=True)
             request.session["setup_error"] = str(e)
             return Redirect(path="/setup/database")
 
@@ -265,6 +270,7 @@ class SetupController(Controller):
             # Test connection
             can_connect, connection_error = await can_connect_to_database()
             if not can_connect:
+                logger.error("Setup configuring: database connection failed: %s", connection_error)
                 yield json.dumps({
                     "status": "error",
                     "message": f"Database connection failed: {connection_error}",
@@ -283,6 +289,7 @@ class SetupController(Controller):
             success, error = run_migrations_if_needed()
 
             if not success:
+                logger.error("Setup configuring: migration failed: %s", error)
                 yield json.dumps({
                     "status": "error",
                     "message": f"Migration failed: {error}",

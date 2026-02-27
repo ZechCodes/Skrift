@@ -7,6 +7,7 @@ This module implements a two-tier detection strategy:
 Smart step detection: If config is already present, skip to the first incomplete step.
 """
 
+import logging
 import os
 import subprocess
 from enum import Enum
@@ -14,6 +15,8 @@ from pathlib import Path
 import yaml
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+logger = logging.getLogger(__name__)
 
 # Track if migrations have been run this session to avoid running multiple times
 _migrations_run = False
@@ -155,6 +158,7 @@ async def can_connect_to_database() -> tuple[bool, str | None]:
         await engine.dispose()
         return True, None
     except Exception as e:
+        logger.error("Database connection failed: %s", e, exc_info=True)
         return False, str(e)
 
 
@@ -164,7 +168,8 @@ async def is_setup_complete(db_session: AsyncSession) -> bool:
         value = await get_setting(db_session, SETUP_COMPLETED_AT_KEY)
         return value is not None
     except Exception:
-        # Table might not exist yet
+        # Table might not exist yet (pre-migration)
+        logger.debug("Could not check setup_completed_at (table may not exist yet)", exc_info=True)
         return False
 
 
@@ -225,6 +230,7 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
 
     try:
         # Try skrift db first (the correct command)
+        logger.info("Running migrations: skrift db upgrade heads")
         result = subprocess.run(
             ["skrift", "db", "upgrade", "heads"],
             capture_output=True,
@@ -234,12 +240,22 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
         )
         if result.returncode == 0:
             _migrations_run = True
+            logger.info("Migrations completed successfully via skrift db")
             return True, None
-        # If skrift db fails, try alembic directly
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+        # If skrift db fails, log and try alembic directly
+        logger.warning(
+            "skrift db upgrade failed (exit code %d), falling back to alembic. stdout=%s stderr=%s",
+            result.returncode,
+            result.stdout.strip(),
+            result.stderr.strip(),
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("skrift db upgrade timed out after 60s, falling back to alembic")
+    except FileNotFoundError:
+        logger.debug("skrift command not found, falling back to alembic")
 
     try:
+        logger.info("Running migrations: alembic upgrade heads")
         result = subprocess.run(
             ["alembic", "upgrade", "heads"],
             capture_output=True,
@@ -249,13 +265,24 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
         )
         if result.returncode == 0:
             _migrations_run = True
+            logger.info("Migrations completed successfully via alembic")
             return True, None
-        return False, result.stderr
+        error_msg = result.stderr.strip()
+        logger.error(
+            "alembic upgrade failed (exit code %d). stdout=%s stderr=%s",
+            result.returncode,
+            result.stdout.strip(),
+            error_msg,
+        )
+        return False, error_msg
     except subprocess.TimeoutExpired:
+        logger.error("alembic upgrade timed out after 60s")
         return False, "Migration timed out"
     except FileNotFoundError:
+        logger.error("Neither skrift nor alembic commands found on PATH")
         return False, "skrift db command not found"
     except Exception as e:
+        logger.error("Unexpected migration error: %s", e, exc_info=True)
         return False, str(e)
 
 
@@ -283,9 +310,10 @@ async def is_site_configured() -> bool:
                 site_name = await get_setting(session, SITE_NAME_KEY)
                 return site_name is not None
             except Exception:
-                # Table might not exist yet (before migration)
+                logger.debug("Could not check site_name setting (table may not exist yet)", exc_info=True)
                 return False
     except Exception:
+        logger.debug("Could not connect to check site configuration", exc_info=True)
         return False
     finally:
         if engine:
@@ -313,8 +341,10 @@ async def is_theme_configured() -> bool:
                 theme = await get_setting(session, SITE_THEME_KEY)
                 return theme is not None
             except Exception:
+                logger.debug("Could not check site_theme setting (table may not exist yet)", exc_info=True)
                 return False
     except Exception:
+        logger.debug("Could not connect to check theme configuration", exc_info=True)
         return False
     finally:
         if engine:
@@ -347,8 +377,9 @@ async def get_first_incomplete_step() -> SetupStep:
         return SetupStep.DATABASE
 
     # Database is configured and connectable - run migrations to ensure tables exist
-    migration_success, _ = run_migrations_if_needed()
+    migration_success, migration_error = run_migrations_if_needed()
     if not migration_success:
+        logger.error("Setup migrations failed during step detection: %s", migration_error)
         # If migrations fail, go back to database step to show the error
         return SetupStep.DATABASE
 
