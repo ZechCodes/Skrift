@@ -66,9 +66,10 @@ class Template:
 
         search_dirs = get_template_directories_for_theme(theme_name)
 
-        # Search for templates in each directory
-        for template_name in self._candidates():
-            for search_dir in search_dirs:
+        # Search each directory fully (most-specific to least-specific) before
+        # moving to the next, so theme templates always beat package templates.
+        for search_dir in search_dirs:
+            for template_name in self._candidates():
                 template_path = search_dir / template_name
                 if template_path.exists():
                     self._resolved_template = template_name
