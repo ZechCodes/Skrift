@@ -484,6 +484,59 @@
 }
 
 /* ========================================
+   Dialog
+   ======================================== */
+
+.sk-dialog {
+    background: var(--sk-color-surface);
+    border: 1px solid var(--sk-color-border);
+    border-radius: var(--sk-radius-lg);
+    max-width: 36rem;
+    width: 90vw;
+    padding: 0;
+}
+
+.sk-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.4);
+}
+
+.sk-dialog-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.375rem;
+    border-bottom: 1px solid var(--sk-color-border);
+}
+
+.sk-dialog-header h3 {
+    font-family: var(--sk-font-display);
+    font-size: 1.125rem;
+    font-weight: 500;
+    margin: 0;
+}
+
+.sk-dialog-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--sk-color-muted);
+    padding: 0;
+    line-height: 1;
+    width: auto;
+}
+
+.sk-dialog-close:hover {
+    color: var(--sk-color-text);
+}
+
+.sk-dialog-body {
+    padding: 1.25rem 1.375rem;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+/* ========================================
    Dark Theme (System Preference)
    ======================================== */
 
