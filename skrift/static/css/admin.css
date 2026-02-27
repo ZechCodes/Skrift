@@ -6,15 +6,15 @@
    ======================================== */
 
 :root {
-    --sk-admin-sidebar-bg: #1e2a3a;
+    --sk-admin-sidebar-bg: #080D18;
     --sk-admin-sidebar-width: 15.5rem;
     --sk-admin-sidebar-text: #fff;
-    --sk-admin-sidebar-muted: rgba(255, 255, 255, 0.4);
+    --sk-admin-sidebar-muted: rgba(255, 255, 255, 0.3);
     --sk-admin-sidebar-border: rgba(255, 255, 255, 0.08);
     --sk-admin-sidebar-link: rgba(255, 255, 255, 0.45);
     --sk-admin-sidebar-link-hover: rgba(255, 255, 255, 0.8);
-    --sk-admin-sidebar-link-hover-bg: rgba(255, 255, 255, 0.03);
-    --sk-admin-sidebar-active-bg: rgba(59, 108, 231, 0.15);
+    --sk-admin-sidebar-link-hover-bg: var(--sk-color-surface, rgba(255, 255, 255, 0.03));
+    --sk-admin-sidebar-active-bg: rgba(52, 211, 153, 0.06);
 }
 
 /* ========================================
@@ -27,7 +27,7 @@
     min-height: 100vh;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
     .sk-admin {
         grid-template-columns: 1fr;
     }
@@ -46,16 +46,17 @@
     top: 0;
     height: 100vh;
     overflow-y: auto;
+    z-index: 50;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
     .sk-sidebar {
         position: static;
         height: auto;
     }
 }
 
-/* All links inside sidebar should inherit sidebar colors, not accent blue */
+/* All links inside sidebar should inherit sidebar colors */
 .sk-sidebar a {
     color: inherit;
 }
@@ -73,16 +74,29 @@
 .sk-sidebar-brand h1 {
     font-family: var(--sk-font-display);
     font-size: 1.25rem;
-    font-weight: 600;
-    letter-spacing: 0.08em;
+    font-weight: 700;
+    letter-spacing: -0.02em;
     margin-bottom: 0;
-    color: inherit;
+    background: var(--sk-gradient-brand);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 
 .sk-sidebar-brand .sk-sidebar-sub {
     font-size: 1rem;
     color: var(--sk-admin-sidebar-muted);
     margin-top: 0.25rem;
+}
+
+/* Sidebar Section Labels */
+.sk-sidebar-section {
+    font-size: 0.62rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--sk-admin-sidebar-muted);
+    padding: 0.75rem 1.5rem 0.5rem;
 }
 
 /* Sidebar Nav */
@@ -108,7 +122,7 @@
 .sk-sidebar-link.active {
     color: #fff;
     background: var(--sk-admin-sidebar-active-bg);
-    border-left-color: var(--sk-color-accent);
+    border-left-color: var(--sk-color-accent, var(--sk-emerald));
 }
 
 /* Sidebar Footer */
@@ -125,7 +139,7 @@
     width: 2rem;
     height: 2rem;
     border-radius: 0.625rem;
-    background: var(--sk-color-accent);
+    background: var(--sk-gradient-brand);
     color: #fff;
     display: flex;
     align-items: center;
@@ -161,9 +175,11 @@
     padding: 2rem 2.25rem;
     overflow-y: auto;
     min-width: 0;
+    position: relative;
+    z-index: 1;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
     .sk-admin-content {
         padding: 1.5rem 1rem;
     }
@@ -184,7 +200,8 @@
 .sk-admin-header h1 {
     font-family: var(--sk-font-display);
     font-size: 1.5rem;
-    font-weight: 500;
+    font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
 .sk-admin-header .sk-admin-context {
@@ -208,22 +225,49 @@
     margin-bottom: 2rem;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
     .sk-stats {
         grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 600px) {
+    .sk-stats {
+        grid-template-columns: 1fr;
     }
 }
 
 .sk-stat-card {
     background: var(--sk-color-surface);
     border: 1px solid var(--sk-color-border);
-    border-radius: var(--sk-radius-lg);
+    border-radius: 14px;
     padding: 1.25rem 1.375rem;
-    transition: box-shadow var(--sk-transition-normal);
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s;
+}
+
+.sk-stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: var(--sk-gradient-brand);
+    opacity: 0.8;
+    transition: height 0.3s, opacity 0.3s;
 }
 
 .sk-stat-card:hover {
-    box-shadow: 0 0.125rem 0.75rem rgba(0, 0, 0, 0.04);
+    border-color: var(--sk-color-border-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+}
+
+.sk-stat-card:hover::before {
+    height: 4px;
+    opacity: 1;
 }
 
 .sk-stat-label {
@@ -254,7 +298,7 @@
 .sk-panel {
     background: var(--sk-color-surface);
     border: 1px solid var(--sk-color-border);
-    border-radius: var(--sk-radius-lg);
+    border-radius: 14px;
     overflow: hidden;
 }
 
@@ -270,7 +314,8 @@
 .sk-panel-head h3 {
     font-family: var(--sk-font-display);
     font-size: 1rem;
-    font-weight: 500;
+    font-weight: 600;
+    letter-spacing: -0.01em;
     margin-bottom: 0;
 }
 
@@ -295,7 +340,7 @@
 }
 
 .sk-content-row:hover {
-    background: var(--sk-color-warm);
+    background: var(--sk-color-surface-hover);
 }
 
 .sk-content-row-title {
@@ -333,7 +378,7 @@
 }
 
 .sk-pill-published {
-    background: rgba(58, 138, 58, 0.1);
+    background: rgba(52, 211, 153, 0.1);
     color: var(--sk-color-success);
 }
 
@@ -343,8 +388,8 @@
 }
 
 .sk-pill-review {
-    background: rgba(184, 134, 45, 0.1);
-    color: var(--sk-color-warning);
+    background: rgba(139, 92, 246, 0.1);
+    color: var(--sk-violet);
 }
 
 /* ========================================
@@ -386,7 +431,7 @@
     justify-content: space-between;
     padding: 0.4375rem 0;
     font-size: 1rem;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+    border-bottom: 1px solid var(--sk-color-border);
 }
 
 .sk-mini-row:last-child {
@@ -405,7 +450,7 @@
     padding: 0.625rem 0;
     font-size: 1rem;
     color: var(--sk-color-muted);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+    border-bottom: 1px solid var(--sk-color-border);
 }
 
 .sk-activity-item:last-child {
@@ -442,6 +487,7 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--sk-color-muted);
+    background-color: transparent;
 }
 
 /* ========================================
@@ -484,106 +530,12 @@
 }
 
 /* ========================================
-   Dialog
+   Light Theme Overrides
    ======================================== */
 
-.sk-dialog {
-    background: var(--sk-color-surface);
-    border: 1px solid var(--sk-color-border);
-    border-radius: var(--sk-radius-lg);
-    max-width: 36rem;
-    width: 90vw;
-    padding: 0;
-}
-
-.sk-dialog::backdrop {
-    background: rgba(0, 0, 0, 0.4);
-}
-
-.sk-dialog-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem 1.375rem;
-    border-bottom: 1px solid var(--sk-color-border);
-}
-
-.sk-dialog-header h3 {
-    font-family: var(--sk-font-display);
-    font-size: 1.125rem;
-    font-weight: 500;
-    margin: 0;
-}
-
-.sk-dialog-close {
-    all: unset;
-    font-size: 1.25rem;
-    cursor: pointer;
-    color: var(--sk-color-muted);
-    line-height: 1;
-    padding: 0.25rem;
-}
-
-.sk-dialog-close:hover {
-    color: var(--sk-color-text);
-}
-
-.sk-dialog-body {
-    padding: 1.25rem 1.375rem;
-    max-height: 70vh;
-    overflow-y: auto;
-}
-
-.sk-dialog-body .sk-admin-table {
-    margin-top: 0;
-}
-
-.sk-dialog-body .sk-admin-table td,
-.sk-dialog-body .sk-admin-table th {
-    padding: 0.5rem 0.75rem;
-    font-size: 1rem;
-}
-
-.sk-dialog-body .sk-admin-table td:first-child {
-    color: var(--sk-color-muted);
-}
-
-.sk-dialog-body h4 {
-    font-family: var(--sk-font-display);
-    font-size: 1rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--sk-color-muted);
-    margin: 1.25rem 0 0.5rem;
-}
-
-/* ========================================
-   Dark Theme (System Preference)
-   ======================================== */
-
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
     :root {
-        --sk-admin-sidebar-bg: #12151a;
-    }
-
-    .sk-stat-card:hover {
-        box-shadow: 0 0.125rem 0.75rem rgba(0, 0, 0, 0.2);
-    }
-
-    .sk-pill-published {
-        background: rgba(90, 173, 90, 0.15);
-    }
-
-    .sk-pill-review {
-        background: rgba(212, 162, 74, 0.15);
-    }
-
-    .sk-mini-row {
-        border-bottom-color: rgba(255, 255, 255, 0.06);
-    }
-
-    .sk-activity-item {
-        border-bottom-color: rgba(255, 255, 255, 0.06);
+        --sk-admin-sidebar-bg: #0f172a;
+        --sk-admin-sidebar-active-bg: rgba(5, 150, 105, 0.1);
     }
 }
