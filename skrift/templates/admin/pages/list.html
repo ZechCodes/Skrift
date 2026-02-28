@@ -27,7 +27,7 @@
         <tr>
             <td class="sk-text-muted">{{ page.order }}</td>
             <td>
-                <a href="/{{ page.slug }}">{{ page.title }}</a>
+                <a href="{{ admin_type_base }}/{{ page.id }}/edit">{{ page.title }}</a>
             </td>
             <td class="sk-text-muted">/{{ page.slug }}</td>
             <td>
@@ -44,7 +44,7 @@
             </td>
             <td>{{ page.created_at.strftime('%Y-%m-%d') }}</td>
             <td class="sk-actions-cell">
-                <a href="{{ admin_type_base }}/{{ page.id }}/edit" role="button" class="sk-btn-outline sk-btn-small">Edit</a>
+                <a href="/{{ page.slug }}" role="button" class="sk-btn-outline sk-btn-small">View</a>
                 {% if page.is_published %}
                 <form method="post" action="{{ admin_type_base }}/{{ page.id }}/unpublish" class="sk-inline-form">
                     <button type="submit" class="sk-btn-outline sk-btn-small">Unpublish</button>

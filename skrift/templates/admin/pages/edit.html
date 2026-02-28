@@ -2,6 +2,174 @@
 
 {% block title %}{{ "Edit" if page else "New" }} {{ page_type_label }} - Admin - {{ site_name() }}{% endblock %}
 
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .sk-attach-zone {
+        position: relative;
+        border: 1.5px dashed var(--sk-color-border);
+        border-radius: var(--sk-radius-lg);
+        background: var(--sk-color-surface);
+        transition: border-color var(--sk-transition-fast), background var(--sk-transition-fast);
+        min-height: 5rem;
+    }
+    .sk-attach-zone.sk-drag-over {
+        border-color: var(--sk-color-accent);
+        background: rgba(52, 211, 153, .06);
+    }
+    .sk-attach-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: var(--sk-space-sm);
+        padding: var(--sk-space-xl) var(--sk-space-md);
+        color: var(--sk-color-muted);
+        cursor: pointer;
+    }
+    .sk-attach-empty svg { opacity: .45; }
+    .sk-attach-empty span { font-size: .8rem; }
+    .sk-attach-zone:has(.sk-attachment-item) .sk-attach-empty { display: none; }
+    #sk-attachments-list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--sk-space-xs);
+        padding: var(--sk-space-sm);
+    }
+    #sk-attachments-list:empty { padding: 0; }
+    .sk-attachment-item {
+        display: flex;
+        align-items: center;
+        gap: var(--sk-space-sm);
+        padding: var(--sk-space-xs) var(--sk-space-sm);
+        border-radius: var(--sk-radius-md);
+        background: var(--sk-color-surface);
+        transition: background var(--sk-transition-fast);
+    }
+    .sk-attachment-item:hover { background: var(--sk-color-surface-hover); }
+    .sk-attachment-thumb {
+        width: 2.25rem; height: 2.25rem;
+        object-fit: cover;
+        border-radius: var(--sk-radius-sm);
+        flex-shrink: 0;
+    }
+    .sk-attachment-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.25rem; height: 2.25rem;
+        font-size: .6rem; font-weight: 700;
+        background: var(--sk-color-surface-hover);
+        border-radius: var(--sk-radius-sm);
+        flex-shrink: 0;
+        text-transform: uppercase;
+        color: var(--sk-color-text);
+    }
+    .sk-attachment-name {
+        flex: 1; min-width: 0;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        font-size: .8rem;
+    }
+    .sk-attachment-size {
+        font-size: .7rem;
+        color: var(--sk-color-muted);
+        flex-shrink: 0;
+    }
+    .sk-attachment-uploading {
+        pointer-events: none;
+        position: relative;
+        overflow: hidden;
+    }
+    .sk-attachment-uploading > *:not(.sk-attachment-progress) {
+        position: relative;
+        z-index: 1;
+    }
+    .sk-attachment-uploading .sk-attachment-badge {
+        animation: sk-badge-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes sk-badge-pulse {
+        0%, 100% { opacity: .4; }
+        50% { opacity: 1; }
+    }
+    .sk-attachment-progress {
+        position: absolute;
+        inset: 0;
+        width: 0;
+        z-index: 0;
+        background: linear-gradient(90deg,
+            rgba(52, 211, 153, .06),
+            rgba(52, 211, 153, .18),
+            rgba(52, 211, 153, .06),
+            rgba(52, 211, 153, .18),
+            rgba(52, 211, 153, .06));
+        background-size: 200% 100%;
+        animation: sk-shimmer 3s linear infinite;
+        border-radius: var(--sk-radius-md);
+        transition: width 500ms cubic-bezier(.4, 0, .2, 1);
+    }
+    @keyframes sk-shimmer {
+        0% { background-position: 100% 0; }
+        100% { background-position: 0 0; }
+    }
+    .sk-attachment-progress-done {
+        width: 100% !important;
+        opacity: 0;
+        animation: none;
+        transition: opacity 600ms ease 200ms;
+    }
+    .sk-attachment-failed {
+        border: 1px solid var(--sk-color-error);
+    }
+    .sk-attachment-failed .sk-attachment-badge {
+        background: rgba(244, 63, 94, .15);
+        color: var(--sk-color-error);
+    }
+    .sk-attachment-failed .sk-attachment-name {
+        color: var(--sk-color-muted);
+        text-decoration: line-through;
+    }
+    .sk-attachment-remove {
+        all: unset;
+        cursor: pointer;
+        font-size: 1.1rem;
+        line-height: 1;
+        color: var(--sk-color-muted);
+        padding: 0 var(--sk-space-xs);
+        flex-shrink: 0;
+        transition: color var(--sk-transition-fast);
+    }
+    .sk-attachment-remove:hover { color: var(--sk-color-error); }
+    .sk-attachment-error {
+        font-size: .7rem;
+        color: var(--sk-color-error);
+        max-width: 12rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex-shrink: 0;
+        cursor: help;
+    }
+    .sk-attach-footer {
+        display: flex;
+        justify-content: flex-end;
+        padding: 0 var(--sk-space-sm) var(--sk-space-sm);
+    }
+    .sk-attach-footer label { cursor: pointer; }
+    .sk-attach-zone:not(:has(.sk-attachment-item)) .sk-attach-footer { display: none; }
+    .sk-attachment-star {
+        all: unset;
+        cursor: pointer;
+        font-size: 1rem;
+        line-height: 1;
+        color: var(--sk-color-border);
+        padding: 0 var(--sk-space-xs);
+        flex-shrink: 0;
+        transition: color var(--sk-transition-fast), transform var(--sk-transition-fast);
+    }
+    .sk-attachment-star:hover { color: #d4a017; transform: scale(1.15); }
+    .sk-attachment-star.active { color: #eab308; }
+</style>
+{% endblock %}
+
 {% block admin_content %}
 <hgroup>
     <h1>{{ "Edit" if page else "New" }} {{ page_type_label }}</h1>
@@ -61,6 +229,43 @@
         </fieldset>
     </details>
 
+    <input type="hidden" name="featured_asset_id" id="sk-featured-input" value="{{ page.featured_asset_id if page and page.featured_asset_id else '' }}">
+
+    <fieldset class="form-group">
+        <legend>Attachments</legend>
+        <div class="sk-attach-zone" id="sk-attach-zone">
+            <div id="sk-attachments-list">
+                {% for asset in page_assets %}
+                <div class="sk-attachment-item" data-asset-id="{{ asset.id }}">
+                    {% if asset.content_type.startswith("image/") %}
+                    <img src="{{ asset_urls[asset.id | string] | sized('thumb') }}" alt="{{ asset.filename }}" class="sk-attachment-thumb" loading="lazy">
+                    {% endif %}
+                    {% if not asset.content_type.startswith("image/") %}
+                    <span class="sk-attachment-badge">{{ asset.filename.rsplit(".", 1)[-1] | upper if "." in asset.filename else "FILE" }}</span>
+                    {% endif %}
+                    {% if asset.content_type.startswith("image/") %}
+                    <button type="button" class="sk-attachment-star{% if page and page.featured_asset_id and page.featured_asset_id | string == asset.id | string %} active{% endif %}" data-asset-id="{{ asset.id }}" title="Set as featured image">&#9733;</button>
+                    {% endif %}
+                    <span class="sk-attachment-name" title="{{ asset.filename }}">{{ asset.filename }}</span>
+                    <span class="sk-attachment-size">{{ "%.1f" | format(asset.size / 1024) }}KB</span>
+                    <input type="hidden" name="asset_ids" value="{{ asset.id }}">
+                    <button type="button" class="sk-attachment-remove" onclick="this.closest('.sk-attachment-item').remove()">&times;</button>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="sk-attach-empty" id="sk-attach-empty">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <span>Drop files here or click to upload</span>
+            </div>
+            <div class="sk-attach-footer">
+                <label class="sk-btn-outline sk-btn-small" role="button">
+                    Add
+                    <input type="file" id="sk-attachment-upload" hidden multiple>
+                </label>
+            </div>
+        </div>
+    </fieldset>
+
     <div class="sk-form-actions">
         <button type="submit">{{ "Update" if page else "Create" }} {{ page_type_label }}</button>
         <a href="{{ admin_type_base }}" role="button" class="sk-btn-outline">Cancel</a>
@@ -69,4 +274,212 @@
         {% endif %}
     </div>
 </form>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    const zone = document.getElementById("sk-attach-zone");
+    const list = document.getElementById("sk-attachments-list");
+    const empty = document.getElementById("sk-attach-empty");
+    const input = document.getElementById("sk-attachment-upload");
+    if (!zone || !input) return;
+
+    function getCsrfToken() {
+        const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]*)/);
+        return m ? decodeURIComponent(m[1]) : "";
+    }
+
+    function esc(s) {
+        const d = document.createElement("div");
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function formatSize(bytes) {
+        if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + "MB";
+        return (bytes / 1024).toFixed(1) + "KB";
+    }
+
+    const featuredInput = document.getElementById("sk-featured-input");
+
+    function setFeatured(assetId) {
+        featuredInput.value = assetId || "";
+        document.querySelectorAll(".sk-attachment-star").forEach(function(s) {
+            s.classList.toggle("active", s.dataset.assetId === assetId);
+        });
+    }
+
+    function createAttachmentItem(asset) {
+        const div = document.createElement("div");
+        div.className = "sk-attachment-item";
+        div.dataset.assetId = asset.id;
+
+        let preview;
+        const isImage = asset.content_type && asset.content_type.startsWith("image/");
+        if (isImage) {
+            const thumbUrl = asset.url + (asset.url.includes("?") ? "&" : "?") + "size=thumb";
+            preview = '<img src="' + esc(thumbUrl) + '" alt="' + esc(asset.filename) + '" class="sk-attachment-thumb" loading="lazy">';
+        } else {
+            const ext = asset.filename.includes(".") ? asset.filename.split(".").pop().toUpperCase() : "FILE";
+            preview = '<span class="sk-attachment-badge">' + esc(ext) + '</span>';
+        }
+
+        let starHtml = "";
+        if (isImage) {
+            starHtml = '<button type="button" class="sk-attachment-star" data-asset-id="' + esc(asset.id) + '" title="Set as featured image">&#9733;</button>';
+        }
+
+        div.innerHTML = preview + starHtml
+            + '<span class="sk-attachment-name" title="' + esc(asset.filename) + '">' + esc(asset.filename) + '</span>'
+            + '<span class="sk-attachment-size">' + formatSize(asset.size) + '</span>'
+            + '<input type="hidden" name="asset_ids" value="' + esc(asset.id) + '">'
+            + '<button type="button" class="sk-attachment-remove">\u00d7</button>';
+
+        const starBtn = div.querySelector(".sk-attachment-star");
+        if (starBtn) {
+            starBtn.addEventListener("click", function() {
+                if (featuredInput.value === asset.id) {
+                    setFeatured("");
+                } else {
+                    setFeatured(asset.id);
+                }
+            });
+        }
+        div.querySelector(".sk-attachment-remove").addEventListener("click", function() {
+            if (featuredInput.value === asset.id) setFeatured("");
+            div.remove();
+        });
+        return div;
+    }
+
+    function createFailedItem(filename, reason) {
+        const div = document.createElement("div");
+        div.className = "sk-attachment-item sk-attachment-failed";
+        const ext = filename.includes(".") ? filename.split(".").pop().toUpperCase() : "FILE";
+        div.innerHTML =
+            '<span class="sk-attachment-badge">&times;</span>'
+            + '<span class="sk-attachment-name" title="' + esc(filename) + '">' + esc(filename) + '</span>'
+            + '<span class="sk-attachment-error" title="' + esc(reason) + '">' + esc(reason) + '</span>'
+            + '<button type="button" class="sk-attachment-remove">\u00d7</button>';
+        div.querySelector(".sk-attachment-remove").addEventListener("click", function() { div.remove(); });
+        return div;
+    }
+
+    function uploadFile(file) {
+        const placeholder = document.createElement("div");
+        placeholder.className = "sk-attachment-item sk-attachment-uploading";
+        const ext = file.name.includes(".") ? file.name.split(".").pop().toUpperCase() : "FILE";
+        placeholder.innerHTML =
+            '<span class="sk-attachment-badge">' + esc(ext) + '</span>'
+            + '<span class="sk-attachment-name">' + esc(file.name) + '</span>'
+            + '<span class="sk-attachment-size">' + formatSize(file.size) + '</span>'
+            + '<span class="sk-attachment-progress"></span>';
+        list.appendChild(placeholder);
+
+        const bar = placeholder.querySelector(".sk-attachment-progress");
+        const body = new FormData();
+        body.append("data", file);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/admin/media/upload-json");
+        xhr.setRequestHeader("x-csrftoken", getCsrfToken());
+        xhr.timeout = 120000;
+
+        xhr.upload.addEventListener("progress", function(e) {
+            if (e.lengthComputable) {
+                bar.style.width = Math.round((e.loaded / e.total) * 100) + "%";
+            }
+        });
+
+        function fail(reason) {
+            if (placeholder.parentNode) placeholder.replaceWith(createFailedItem(file.name, reason));
+        }
+
+        function succeed(data) {
+            bar.style.width = "100%";
+            bar.classList.add("sk-attachment-progress-done");
+            setTimeout(function() {
+                if (placeholder.parentNode) placeholder.replaceWith(createAttachmentItem(data));
+            }, 500);
+        }
+
+        xhr.addEventListener("load", function() {
+            if (xhr.status === 413) { fail("File too large"); return; }
+            if (xhr.status === 403) { fail("Permission denied"); return; }
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                    succeed(JSON.parse(xhr.responseText));
+                } catch (e) { fail("Invalid server response"); }
+            } else {
+                let msg = "Upload failed (" + xhr.status + ")";
+                try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+                fail(msg);
+            }
+        });
+
+        xhr.addEventListener("error", function() { fail("Network error"); });
+        xhr.addEventListener("timeout", function() { fail("Upload timed out"); });
+        xhr.addEventListener("abort", function() { fail("Upload cancelled"); });
+
+        xhr.send(body);
+    }
+
+    function uploadFiles(files) {
+        for (const file of files) uploadFile(file);
+    }
+
+    /* File input */
+    input.addEventListener("change", function() {
+        if (input.files.length) uploadFiles(input.files);
+        input.value = "";
+    });
+
+    /* Empty state click */
+    empty.addEventListener("click", function() { input.click(); });
+
+    /* Drag and drop */
+    let dragCounter = 0;
+    zone.addEventListener("dragenter", function(e) {
+        e.preventDefault();
+        dragCounter++;
+        zone.classList.add("sk-drag-over");
+    });
+    zone.addEventListener("dragleave", function(e) {
+        e.preventDefault();
+        dragCounter--;
+        if (dragCounter <= 0) { dragCounter = 0; zone.classList.remove("sk-drag-over"); }
+    });
+    zone.addEventListener("dragover", function(e) { e.preventDefault(); });
+    zone.addEventListener("drop", function(e) {
+        e.preventDefault();
+        dragCounter = 0;
+        zone.classList.remove("sk-drag-over");
+        if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+    });
+
+    /* Star toggle for server-rendered attachments */
+    list.addEventListener("click", function(e) {
+        const star = e.target.closest(".sk-attachment-star");
+        if (!star) return;
+        const aid = star.dataset.assetId;
+        if (featuredInput.value === aid) {
+            setFeatured("");
+        } else {
+            setFeatured(aid);
+        }
+    });
+
+    /* Clear featured when removing a server-rendered attachment */
+    list.querySelectorAll(".sk-attachment-remove").forEach(function(btn) {
+        const item = btn.closest(".sk-attachment-item");
+        btn.removeAttribute("onclick");
+        btn.addEventListener("click", function() {
+            const aid = item.dataset.assetId;
+            if (featuredInput.value === aid) setFeatured("");
+            item.remove();
+        });
+    });
+})();
+</script>
 {% endblock %}

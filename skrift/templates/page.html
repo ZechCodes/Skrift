@@ -2,6 +2,332 @@
 
 {% block title %}{{ page.title }} - {{ site_name() }}{% endblock %}
 
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .sk-cover-image {
+        margin: 0 0 1.5rem;
+    }
+    .sk-cover-image img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: var(--sk-radius-lg, 0.5rem);
+    }
+
+    .sk-gallery {
+        margin: 2.5rem 0 1.5rem;
+    }
+    .sk-gallery-grid {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        grid-template-columns: repeat(12, 1fr);
+        grid-auto-rows: 10rem;
+        grid-auto-flow: dense;
+        gap: 0.375rem;
+    }
+    .sk-gallery-item {
+        position: relative;
+        overflow: hidden;
+        border-radius: 0.25rem;
+        background: #0a0a0a;
+        grid-column: span 4;
+        grid-row: span 2;
+    }
+    .sk-gallery-item:nth-child(5n+1) {
+        grid-column: span 6;
+        grid-row: span 3;
+    }
+    .sk-gallery-item:nth-child(5n+4) {
+        grid-column: span 5;
+        grid-row: span 2;
+    }
+    .sk-gallery-item:nth-child(5n+5) {
+        grid-column: span 3;
+        grid-row: span 2;
+    }
+    .sk-gallery-item:first-child {
+        grid-column: span 8;
+        grid-row: span 3;
+    }
+    .sk-gallery-item img,
+    .sk-gallery-item video {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), filter 0.5s ease;
+    }
+    .sk-gallery-item:hover img,
+    .sk-gallery-item:hover video {
+        transform: scale(1.04);
+    }
+    .sk-gallery-overlay {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 50%);
+        opacity: 0;
+        transition: opacity 0.35s ease;
+        display: flex;
+        align-items: flex-end;
+        padding: 1rem;
+        pointer-events: none;
+    }
+    .sk-gallery-item:hover .sk-gallery-overlay {
+        opacity: 1;
+    }
+    .sk-gallery-caption {
+        color: #fff;
+        font-size: 0.75rem;
+        letter-spacing: 0.03em;
+        opacity: 0.9;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+    }
+    .sk-gallery-play {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 3rem;
+        height: 3rem;
+        background: rgba(255,255,255,0.9);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        transition: transform 0.3s ease, background 0.3s ease;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+    }
+    .sk-gallery-play::after {
+        content: "";
+        display: block;
+        width: 0;
+        height: 0;
+        border-style: solid;
+        border-width: 0.5rem 0 0.5rem 0.85rem;
+        border-color: transparent transparent transparent #111;
+        margin-left: 0.15rem;
+    }
+    .sk-gallery-item:hover .sk-gallery-play {
+        transform: translate(-50%, -50%) scale(1.1);
+        background: #fff;
+    }
+    .sk-gallery-item a {
+        display: block;
+        width: 100%;
+        height: 100%;
+        cursor: zoom-in;
+    }
+
+    /* ── Lightbox ── */
+    .sk-lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.3s ease, visibility 0s 0.3s;
+    }
+    .sk-lightbox.sk-lb-open {
+        opacity: 1;
+        visibility: visible;
+        transition: opacity 0.3s ease, visibility 0s;
+    }
+    .sk-lightbox-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.92);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+    }
+    .sk-lightbox-stage {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        padding: 3.5rem 4rem;
+    }
+    .sk-lightbox-media {
+        max-width: 100%;
+        max-height: 100%;
+        transform: scale(0.94);
+        opacity: 0;
+        transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+    }
+    .sk-lb-open .sk-lightbox-media {
+        transform: scale(1) translateX(0);
+        opacity: 1;
+    }
+    .sk-lightbox-media.sk-lb-exit-left  { transform: translateX(-6rem) scale(0.96); opacity: 0; }
+    .sk-lightbox-media.sk-lb-exit-right { transform: translateX(6rem)  scale(0.96); opacity: 0; }
+    .sk-lightbox-media.sk-lb-enter-left  { transform: translateX(6rem)  scale(0.96); opacity: 0; transition: none; }
+    .sk-lightbox-media.sk-lb-enter-right { transform: translateX(-6rem) scale(0.96); opacity: 0; transition: none; }
+    .sk-lightbox-caption {
+        transition: opacity 0.2s ease;
+    }
+    .sk-lightbox-caption.sk-lb-fade { opacity: 0; }
+    .sk-lightbox-media img {
+        display: block;
+        max-width: 100%;
+        max-height: calc(100vh - 8rem);
+        border-radius: 0.25rem;
+        object-fit: contain;
+        box-shadow: 0 8px 60px rgba(0, 0, 0, 0.5);
+    }
+    .sk-lightbox-media video {
+        display: block;
+        max-width: 100%;
+        max-height: calc(100vh - 8rem);
+        border-radius: 0.25rem;
+        box-shadow: 0 8px 60px rgba(0, 0, 0, 0.5);
+    }
+    .sk-lightbox-caption {
+        position: absolute;
+        bottom: 1.25rem;
+        left: 50%;
+        transform: translateX(-50%);
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 0.8rem;
+        letter-spacing: 0.02em;
+        text-align: center;
+        max-width: 32rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        z-index: 2;
+    }
+    .sk-lightbox-counter {
+        position: absolute;
+        top: 1.25rem;
+        left: 50%;
+        transform: translateX(-50%);
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 0.72rem;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.08em;
+        z-index: 2;
+    }
+    .sk-lightbox-close {
+        all: unset;
+        cursor: pointer;
+        position: absolute;
+        top: 1rem;
+        right: 1.25rem;
+        z-index: 3;
+        width: 2.25rem;
+        height: 2.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 1.5rem;
+        border-radius: 50%;
+        transition: color 0.2s ease, background 0.2s ease;
+    }
+    .sk-lightbox-close:hover {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.1);
+    }
+    .sk-lightbox-nav {
+        all: unset;
+        cursor: pointer;
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 3;
+        width: 3rem;
+        height: 3rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: rgba(255, 255, 255, 0.35);
+        border-radius: 50%;
+        transition: color 0.2s ease, background 0.2s ease;
+    }
+    .sk-lightbox-nav:hover {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.08);
+    }
+    .sk-lightbox-nav--prev { left: 0.75rem; }
+    .sk-lightbox-nav--next { right: 0.75rem; }
+    .sk-lightbox-nav svg {
+        width: 1.25rem;
+        height: 1.25rem;
+        stroke: currentColor;
+        stroke-width: 2;
+        fill: none;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+    @media (max-width: 640px) {
+        .sk-lightbox-stage { padding: 3rem 0.5rem; }
+        .sk-lightbox-nav { display: none; }
+    }
+
+    .sk-file-list {
+        list-style: none;
+        padding: 0;
+        margin: 0.75rem 0 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+    .sk-file-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.3rem 0.65rem;
+        font-size: 0.78rem;
+        color: inherit;
+        text-decoration: none;
+        border: 1px solid var(--sk-color-border, #d0d0d0);
+        border-radius: 2rem;
+        transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .sk-file-chip:hover {
+        border-color: var(--sk-color-text, #333);
+        background: var(--sk-color-surface-hover, rgba(0,0,0,0.03));
+    }
+    .sk-file-ext {
+        font-size: 0.6rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        opacity: 0.5;
+        letter-spacing: 0.04em;
+    }
+
+    @media (max-width: 640px) {
+        .sk-gallery-grid {
+            grid-template-columns: repeat(6, 1fr);
+            grid-auto-rows: 8rem;
+        }
+        .sk-gallery-item,
+        .sk-gallery-item:nth-child(5n+1),
+        .sk-gallery-item:nth-child(5n+4),
+        .sk-gallery-item:nth-child(5n+5),
+        .sk-gallery-item:first-child {
+            grid-column: span 3;
+            grid-row: span 2;
+        }
+        .sk-gallery-item:first-child {
+            grid-column: span 6;
+        }
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <article>
     <header>
@@ -13,9 +339,85 @@
         {% endif %}
     </header>
 
+    {% if featured_image_url %}
+    <figure class="sk-cover-image">
+        <img src="{{ featured_image_url | sized('cover') }}" alt="{{ page.featured_asset.alt_text or page.title }}">
+    </figure>
+    {% endif %}
+
     <div class="page-content">
         {{ page.content | markdown | safe }}
     </div>
+
+    {% if asset_urls %}
+    {% set media = [] %}
+    {% set files = [] %}
+    {% for asset in page.assets %}
+        {% if not page.featured_asset or asset.id != page.featured_asset.id %}
+            {% if asset.content_type.startswith("image/") or asset.content_type.startswith("video/") %}
+                {% if media.append(asset) %}{% endif %}
+            {% else %}
+                {% if files.append(asset) %}{% endif %}
+            {% endif %}
+        {% endif %}
+    {% endfor %}
+    {% if media %}
+    <aside class="sk-gallery">
+        <ul class="sk-gallery-grid">
+            {% for asset in media %}
+            <li class="sk-gallery-item">
+                <a href="{{ asset_urls[asset.id | string] }}" data-lb-index="{{ loop.index0 }}">
+                    {% if asset.content_type.startswith("video/") %}
+                    <video src="{{ asset_urls[asset.id | string] }}" preload="metadata" muted loop playsinline></video>
+                    <span class="sk-gallery-play"></span>
+                    {% else %}
+                    <img src="{{ asset_urls[asset.id | string] | sized('medium') }}" alt="{{ asset.alt_text or asset.filename }}" loading="lazy">
+                    {% endif %}
+                    <span class="sk-gallery-overlay"><span class="sk-gallery-caption">{{ asset.alt_text or asset.filename }}</span></span>
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+    </aside>
+
+    <div class="sk-lightbox" id="sk-lightbox" role="dialog" aria-modal="true" aria-label="Media viewer">
+        <div class="sk-lightbox-backdrop"></div>
+        <button class="sk-lightbox-close" aria-label="Close">&times;</button>
+        <button class="sk-lightbox-nav sk-lightbox-nav--prev" aria-label="Previous">
+            <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"></polyline></svg>
+        </button>
+        <button class="sk-lightbox-nav sk-lightbox-nav--next" aria-label="Next">
+            <svg viewBox="0 0 24 24"><polyline points="9 6 15 12 9 18"></polyline></svg>
+        </button>
+        <span class="sk-lightbox-counter" id="sk-lb-counter"></span>
+        <div class="sk-lightbox-stage">
+            <div class="sk-lightbox-media" id="sk-lb-media"></div>
+        </div>
+        <span class="sk-lightbox-caption" id="sk-lb-caption"></span>
+    </div>
+    <script nonce="{{ csp_nonce() }}">
+    var __skLbItems = [
+        {% for asset in media %}
+        { "url": "{{ asset_urls[asset.id | string] }}", "caption": "{{ (asset.alt_text or asset.filename) | e }}", "isVideo": {{ "true" if asset.content_type.startswith("video/") else "false" }} }{{ "," if not loop.last }}
+        {% endfor %}
+    ];
+    </script>
+    {% endif %}
+    {% if files %}
+    <aside class="sk-attachments">
+        <ul class="sk-file-list">
+            {% for asset in files %}
+            <li>
+                <a href="{{ asset_urls[asset.id | string] }}" class="sk-file-chip">
+                    <span class="sk-file-ext">{{ asset.filename.rsplit(".", 1)[-1] if "." in asset.filename else "file" }}</span>
+                    {{ asset.filename }}
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+    </aside>
+    {% endif %}
+    {% endif %}
 
     {% if not page.is_published %}
     <aside class="sk-draft-notice">
@@ -23,4 +425,147 @@
     </aside>
     {% endif %}
 </article>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    var items = window.__skLbItems;
+    if (!items || !items.length) return;
+
+    var lb = document.getElementById("sk-lightbox");
+    var mediaEl = document.getElementById("sk-lb-media");
+    var captionEl = document.getElementById("sk-lb-caption");
+    var counterEl = document.getElementById("sk-lb-counter");
+    var cur = 0;
+
+    var navPrev = lb.querySelector(".sk-lightbox-nav--prev");
+    var navNext = lb.querySelector(".sk-lightbox-nav--next");
+    var showNav = items.length > 1;
+    if (!showNav) {
+        navPrev.style.display = "none";
+        navNext.style.display = "none";
+        counterEl.style.display = "none";
+    }
+
+    var animating = false;
+
+    function stopVideo() {
+        var v = mediaEl.querySelector("video");
+        if (v) { v.pause(); v.src = ""; }
+    }
+
+    function setMedia(item) {
+        mediaEl.innerHTML = "";
+        if (item.isVideo) {
+            var vid = document.createElement("video");
+            vid.src = item.url;
+            vid.controls = true;
+            vid.autoplay = true;
+            vid.playsInline = true;
+            mediaEl.appendChild(vid);
+        } else {
+            var img = document.createElement("img");
+            img.src = item.url;
+            img.alt = item.caption;
+            mediaEl.appendChild(img);
+        }
+    }
+
+    function show(idx, dir) {
+        var next = (idx + items.length) % items.length;
+        if (next === cur && dir) return;
+
+        /* First open or same-index — instant swap, no slide */
+        if (!dir) {
+            cur = next;
+            setMedia(items[cur]);
+            captionEl.textContent = items[cur].caption;
+            if (showNav) counterEl.textContent = (cur + 1) + " / " + items.length;
+            return;
+        }
+
+        if (animating) return;
+        animating = true;
+
+        var exitClass = dir > 0 ? "sk-lb-exit-left" : "sk-lb-exit-right";
+        var enterClass = dir > 0 ? "sk-lb-enter-left" : "sk-lb-enter-right";
+
+        /* Fade out caption */
+        captionEl.classList.add("sk-lb-fade");
+
+        /* Slide current out */
+        mediaEl.classList.add(exitClass);
+
+        setTimeout(function() {
+            stopVideo();
+            cur = next;
+            setMedia(items[cur]);
+            captionEl.textContent = items[cur].caption;
+            if (showNav) counterEl.textContent = (cur + 1) + " / " + items.length;
+
+            /* Position new content at entry side (no transition) */
+            mediaEl.classList.remove(exitClass);
+            mediaEl.classList.add(enterClass);
+
+            /* Force reflow so the browser registers the no-transition position */
+            void mediaEl.offsetWidth;
+
+            /* Slide in (transition re-enabled by removing enter class) */
+            mediaEl.classList.remove(enterClass);
+            captionEl.classList.remove("sk-lb-fade");
+
+            setTimeout(function() { animating = false; }, 350);
+        }, 200);
+    }
+
+    function open(idx) {
+        show(idx);
+        lb.classList.add("sk-lb-open");
+        document.body.style.overflow = "hidden";
+    }
+
+    function close() {
+        lb.classList.remove("sk-lb-open");
+        document.body.style.overflow = "";
+        stopVideo();
+    }
+
+    /* Gallery click handlers */
+    document.querySelectorAll("[data-lb-index]").forEach(function(a) {
+        a.addEventListener("click", function(e) {
+            e.preventDefault();
+            open(parseInt(a.dataset.lbIndex, 10));
+        });
+    });
+
+    /* Close */
+    lb.querySelector(".sk-lightbox-close").addEventListener("click", close);
+    lb.querySelector(".sk-lightbox-backdrop").addEventListener("click", close);
+
+    /* Nav */
+    navPrev.addEventListener("click", function() { show(cur - 1, -1); });
+    navNext.addEventListener("click", function() { show(cur + 1, 1); });
+
+    /* Keyboard */
+    document.addEventListener("keydown", function(e) {
+        if (!lb.classList.contains("sk-lb-open")) return;
+        if (e.key === "Escape") close();
+        else if (e.key === "ArrowLeft" && showNav) show(cur - 1, -1);
+        else if (e.key === "ArrowRight" && showNav) show(cur + 1, 1);
+    });
+
+    /* Touch swipe */
+    var touchX = 0;
+    lb.addEventListener("touchstart", function(e) {
+        touchX = e.changedTouches[0].clientX;
+    }, { passive: true });
+    lb.addEventListener("touchend", function(e) {
+        var dx = e.changedTouches[0].clientX - touchX;
+        if (Math.abs(dx) > 50 && showNav) {
+            show(dx < 0 ? cur + 1 : cur - 1, dx < 0 ? 1 : -1);
+        }
+    }, { passive: true });
+})();
+</script>
 {% endblock %}

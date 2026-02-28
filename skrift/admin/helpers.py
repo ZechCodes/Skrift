@@ -33,6 +33,8 @@ class PageFormData:
     og_description: str | None
     og_image: str | None
     meta_robots: str | None
+    asset_ids: list[str]
+    featured_asset_id: str | None
 
 
 def extract_page_form_data(data: dict) -> PageFormData:
@@ -55,6 +57,18 @@ def extract_page_form_data(data: dict) -> PageFormData:
         except ValueError:
             raise ValueError(f"Invalid publish date format: {publish_at_str}")
 
+    # Parse asset_ids — may be a single string or a list of strings
+    raw_asset_ids = data.get("asset_ids", [])
+    if isinstance(raw_asset_ids, str):
+        asset_ids = [raw_asset_ids] if raw_asset_ids else []
+    elif isinstance(raw_asset_ids, list):
+        asset_ids = [aid for aid in raw_asset_ids if aid]
+    else:
+        asset_ids = []
+
+    featured_raw = data.get("featured_asset_id", "").strip()
+    featured_asset_id = featured_raw if featured_raw else None
+
     return PageFormData(
         title=title,
         slug=slug,
@@ -67,6 +81,8 @@ def extract_page_form_data(data: dict) -> PageFormData:
         og_description=data.get("og_description", "").strip() or None,
         og_image=data.get("og_image", "").strip() or None,
         meta_robots=data.get("meta_robots", "").strip() or None,
+        asset_ids=asset_ids,
+        featured_asset_id=featured_asset_id,
     )
 
 

@@ -26,7 +26,9 @@ from skrift.auth.roles import permissions_for_type
 from skrift.config import PageTypeConfig
 from skrift.db.models import Page
 from skrift.db.services import page_service, revision_service
+from skrift.db.services.asset_service import sync_page_assets
 from skrift.lib.flash import flash_error, flash_success, get_flash_messages
+from skrift.lib.storage import StorageManager
 
 
 def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
@@ -119,6 +121,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 context={
                     "flash_messages": flash_messages,
                     "page": None,
+                    "page_assets": [],
+                    "asset_urls": {},
                     **page_type_ctx,
                     **ctx,
                 },
@@ -147,8 +151,10 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             published_at = datetime.now(UTC) if form.is_published else None
             user_id = UUID(request.session[SESSION_USER_ID])
 
+            featured_id = UUID(form.featured_asset_id) if form.featured_asset_id else None
+
             try:
-                await page_service.create_page(
+                page = await page_service.create_page(
                     db_session,
                     slug=form.slug,
                     title=form.title,
@@ -164,7 +170,12 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                     meta_robots=form.meta_robots,
                     user_id=user_id,
                     page_type=type_name,
+                    featured_asset_id=featured_id,
                 )
+                if form.asset_ids:
+                    await sync_page_assets(
+                        db_session, page.id, [UUID(aid) for aid in form.asset_ids]
+                    )
                 flash_success(request, f"{label} '{form.title}' created successfully!")
                 return Redirect(path=admin_base)
             except Exception as e:
@@ -188,12 +199,21 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 db_session, request, page, perms["edit_own"], perms["manage"]
             )
 
+            # Resolve asset URLs for attached assets
+            storage: StorageManager = request.app.state.storage_manager
+            asset_urls = {}
+            for asset in page.assets:
+                backend = await storage.get(asset.store)
+                asset_urls[str(asset.id)] = await backend.get_url(asset.key)
+
             flash_messages = get_flash_messages(request)
             return TemplateResponse(
                 "admin/pages/edit.html",
                 context={
                     "flash_messages": flash_messages,
                     "page": page,
+                    "page_assets": page.assets,
+                    "asset_urls": asset_urls,
                     **page_type_ctx,
                     **ctx,
                 },
@@ -232,6 +252,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             if form.is_published and not page.is_published:
                 published_at = datetime.now(UTC)
 
+            featured_id = UUID(form.featured_asset_id) if form.featured_asset_id else None
+
             try:
                 await page_service.update_page(
                     db_session,
@@ -249,6 +271,10 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                     og_image=form.og_image,
                     meta_robots=form.meta_robots,
                     page_type=type_name,
+                    featured_asset_id=featured_id,
+                )
+                await sync_page_assets(
+                    db_session, page_id, [UUID(aid) for aid in form.asset_ids]
                 )
                 flash_success(request, f"{label} '{form.title}' updated successfully!")
                 return Redirect(path=admin_base)

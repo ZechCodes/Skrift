@@ -138,6 +138,7 @@ async def create_page(
     og_image: str | None = None,
     meta_robots: str | None = None,
     page_type: str = "page",
+    featured_asset_id: UUID | None = None,
 ) -> Page:
     """Create a new page.
 
@@ -175,6 +176,7 @@ async def create_page(
         og_description=og_description,
         og_image=og_image,
         meta_robots=meta_robots,
+        featured_asset_id=featured_asset_id,
     )
 
     # Fire before_page_save action (is_new=True for creates)
@@ -211,6 +213,7 @@ async def update_page(
     create_revision: bool = True,
     user_id: UUID | None = None,
     page_type: str | None = None,
+    featured_asset_id: UUID | None | object = _UNSET,
 ) -> Page | None:
     """Update an existing page.
 
@@ -276,6 +279,8 @@ async def update_page(
         page.meta_robots = meta_robots
     if page_type is not None:
         page.type = page_type
+    if featured_asset_id is not _UNSET:
+        page.featured_asset_id = featured_asset_id
 
     await db_session.commit()
     await db_session.refresh(page)

@@ -366,6 +366,36 @@ class AuthConfig(BaseModel):
         return f"{self.redirect_base_url}/auth/{provider}/callback"
 
 
+class S3Config(BaseModel):
+    """S3-compatible storage configuration."""
+
+    bucket: str = ""
+    region: str = "us-east-1"
+    prefix: str = ""
+    endpoint_url: str = ""
+    access_key_id: str = ""
+    secret_access_key: str = ""
+    acl: str = "private"
+    public_url: str = ""
+    presign_ttl: int = 3600
+
+
+class StoreConfig(BaseModel):
+    """Configuration for a single storage store."""
+
+    backend: str = "local"
+    local_path: str = "./uploads"
+    max_upload_size: int = 10_485_760  # 10 MB
+    s3: S3Config = S3Config()
+
+
+class StorageConfig(BaseModel):
+    """Top-level storage configuration with named stores."""
+
+    default: str = "default"
+    stores: dict[str, StoreConfig] = {"default": StoreConfig()}
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -407,6 +437,9 @@ class Settings(BaseSettings):
 
     # Logfire observability config (loaded from app.yaml)
     logfire: LogfireConfig = LogfireConfig()
+
+    # Storage config (loaded from app.yaml)
+    storage: StorageConfig = StorageConfig()
 
     # Page types config (loaded from app.yaml)
     page_types: list[PageTypeConfig] = list(DEFAULT_PAGE_TYPES)
@@ -508,6 +541,20 @@ def get_settings() -> Settings:
         oauth2_data = app_config["oauth2"]
         kwargs["oauth2"] = OAuth2Config(
             clients=[OAuth2ClientConfig(**c) for c in oauth2_data.get("clients", [])]
+        )
+
+    if "storage" in app_config:
+        storage_data = app_config["storage"]
+        stores = {}
+        for name, store_data in storage_data.get("stores", {}).items():
+            s3_data = store_data.pop("s3", None)
+            store = StoreConfig(**store_data)
+            if s3_data:
+                store.s3 = S3Config(**s3_data)
+            stores[name] = store
+        kwargs["storage"] = StorageConfig(
+            default=storage_data.get("default", "default"),
+            stores=stores or {"default": StoreConfig()},
         )
 
     if "page_types" in app_config:

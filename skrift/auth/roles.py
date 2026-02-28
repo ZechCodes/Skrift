@@ -59,6 +59,7 @@ AUTHOR = create_role(
     "edit-own-pages",
     "delete-own-pages",
     "create-pages",
+    "upload-media",
     display_name="Author",
     description="Can create and manage own pages",
 )
@@ -68,6 +69,7 @@ EDITOR = create_role(
     "view-drafts",
     "manage-pages",
     "create-pages",
+    "manage-media",
     display_name="Editor",
     description="Can manage all pages and view drafts",
 )
@@ -77,6 +79,7 @@ MODERATOR = create_role(
     "view-drafts",
     "manage-pages",
     "create-pages",
+    "manage-media",
     display_name="Moderator",
     description="Can moderate content and manage pages",
 )

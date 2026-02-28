@@ -22,6 +22,7 @@ from skrift.db.services.setting_service import (
 )
 from skrift.lib.hooks import RESOLVE_THEME, apply_filters
 from skrift.lib.seo import get_page_seo_meta, get_page_og_meta
+from skrift.lib.storage import StorageManager
 from skrift.lib.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
@@ -123,10 +124,25 @@ def create_public_page_type_controller(
             flash = request.session.pop("flash", None)
             theme_name = await self._resolve_theme(request)
 
+            # Resolve asset URLs
+            storage: StorageManager = request.app.state.storage_manager
+            featured_image_url = None
+            asset_urls = {}
+            for asset in page.assets:
+                backend = await storage.get(asset.store)
+                url = await backend.get_url(asset.key)
+                asset_urls[str(asset.id)] = url
+            if page.featured_asset and str(page.featured_asset.id) in asset_urls:
+                featured_image_url = asset_urls[str(page.featured_asset.id)]
+
             site_name = get_cached_site_name()
             base_url = get_cached_site_base_url() or str(request.base_url).rstrip("/")
             seo_meta = await get_page_seo_meta(page, site_name, base_url)
             og_meta = await get_page_og_meta(page, site_name, base_url)
+
+            # Use featured image as og:image fallback
+            if not og_meta.image and featured_image_url:
+                og_meta.image = featured_image_url
 
             template = Template(
                 type_name, slug,
@@ -134,6 +150,8 @@ def create_public_page_type_controller(
                     "page": page,
                     "seo_meta": seo_meta,
                     "og_meta": og_meta,
+                    "featured_image_url": featured_image_url,
+                    "asset_urls": asset_urls,
                 },
             )
             return template.render(

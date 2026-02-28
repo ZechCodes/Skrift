@@ -1,0 +1,75 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Media - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>Media Library</h1>
+    <p>{{ total }} asset{{ "s" if total != 1 else "" }}</p>
+</hgroup>
+
+<div class="sk-media-toolbar">
+    <form method="post" action="/admin/media/upload" enctype="multipart/form-data" class="sk-upload-form">
+        {{ csrf_field() }}
+        <label class="sk-btn sk-btn-primary">
+            Upload File
+            <input type="file" name="data" required onchange="this.form.submit()" hidden>
+        </label>
+    </form>
+
+    {% if store_names | length > 1 %}
+    <div class="sk-store-filter">
+        <a href="/admin/media" class="sk-btn-outline sk-btn-small{% if not current_store %} active{% endif %}">All</a>
+        {% for name in store_names %}
+        <a href="/admin/media?store={{ name }}" class="sk-btn-outline sk-btn-small{% if current_store == name %} active{% endif %}">{{ name }}</a>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+{% if assets %}
+<div class="sk-media-grid">
+    {% for asset in assets %}
+    <div class="sk-media-card">
+        {% if asset.content_type.startswith("image/") %}
+        <div class="sk-media-thumb">
+            <img src="{{ asset_urls[asset.id | string] }}" alt="{{ asset.alt_text or asset.filename }}" loading="lazy">
+        </div>
+        {% else %}
+        <div class="sk-media-thumb sk-media-thumb-file">
+            <span class="sk-media-ext">{{ asset.filename.rsplit(".", 1)[-1] | upper if "." in asset.filename else "FILE" }}</span>
+        </div>
+        {% endif %}
+        <div class="sk-media-info">
+            <div class="sk-media-name" title="{{ asset.filename }}">{{ asset.filename }}</div>
+            <div class="sk-media-meta">
+                {{ "%.1f" | format(asset.size / 1024) }}KB
+                &middot; {{ asset.content_type.split("/")[-1] }}
+            </div>
+        </div>
+        <div class="sk-media-actions">
+            <form method="post" action="/admin/media/{{ asset.id }}/delete" onsubmit="return confirm('Delete {{ asset.filename }}?')">
+                {{ csrf_field() }}
+                <button type="submit" class="sk-btn-outline sk-btn-small sk-btn-danger">Delete</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if total_pages > 1 %}
+<nav class="sk-pagination">
+    {% if page > 1 %}
+    <a href="/admin/media?page={{ page - 1 }}{% if current_store %}&store={{ current_store }}{% endif %}" class="sk-btn-outline sk-btn-small">Previous</a>
+    {% endif %}
+    <span>Page {{ page }} of {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="/admin/media?page={{ page + 1 }}{% if current_store %}&store={{ current_store }}{% endif %}" class="sk-btn-outline sk-btn-small">Next</a>
+    {% endif %}
+</nav>
+{% endif %}
+
+{% else %}
+<p class="sk-no-items">No media assets yet. Upload a file to get started.</p>
+{% endif %}
+{% endblock %}

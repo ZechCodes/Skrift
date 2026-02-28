@@ -309,3 +309,11 @@ NOTIFICATION_SENT = "notification_sent"
 NOTIFICATION_DISMISSED = "notification_dismissed"
 NOTIFICATION_PRE_SEND = "notification_pre_send"
 WEBHOOK_NOTIFICATION_RECEIVED = "webhook_notification_received"
+
+# Storage hooks
+BEFORE_ASSET_UPLOAD = "before_asset_upload"
+AFTER_ASSET_UPLOAD = "after_asset_upload"
+BEFORE_ASSET_DELETE = "before_asset_delete"
+AFTER_ASSET_DELETE = "after_asset_delete"
+ASSET_UPLOAD_KEY = "asset_upload_key"
+ASSET_UPLOAD_DATA = "asset_upload_data"

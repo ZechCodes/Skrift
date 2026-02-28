@@ -364,5 +364,280 @@ def update():
     click.echo(f"\nUpdated {len(installed)} skills. Use /skrift to activate.")
 
 
+@cli.group("storage")
+def storage_group():
+    """Manage asset storage backends."""
+    pass
+
+
+@storage_group.command("stores")
+def storage_stores():
+    """List configured storage stores."""
+    from skrift.config import get_settings
+
+    settings = get_settings()
+    default = settings.storage.default
+
+    for name, cfg in settings.storage.stores.items():
+        marker = " (default)" if name == default else ""
+        if cfg.backend == "local":
+            detail = f"path={cfg.local_path}"
+        elif cfg.backend == "s3":
+            detail = f"bucket={cfg.s3.bucket} region={cfg.s3.region}"
+        else:
+            detail = f"backend={cfg.backend}"
+        max_mb = cfg.max_upload_size / 1_048_576
+        click.echo(f"  {name}: {cfg.backend} ({detail}, max={max_mb:.0f}MB){marker}")
+
+
+@storage_group.command("ls")
+@click.option("--store", default=None, help="Store name (default: all stores)")
+@click.option("--prefix", default=None, help="Filter by folder prefix")
+@click.option("--limit", default=100, type=int, help="Max results")
+def storage_ls(store, prefix, limit):
+    """List assets in the database."""
+    import asyncio
+
+    from skrift.config import get_settings
+    from skrift.db.services.asset_service import list_assets
+
+    settings = get_settings()
+
+    async def _run():
+        from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, AsyncSessionConfig
+        from advanced_alchemy.config import EngineConfig
+
+        db_config = SQLAlchemyAsyncConfig(
+            connection_string=settings.db.url,
+            session_config=AsyncSessionConfig(expire_on_commit=False),
+            engine_config=EngineConfig(echo=False),
+        )
+        async with db_config.get_session() as session:
+            assets = await list_assets(
+                session,
+                store=store,
+                folder=prefix,
+                limit=limit,
+            )
+            if not assets:
+                click.echo("No assets found.")
+                return
+            for a in assets:
+                size_kb = a.size / 1024
+                click.echo(f"  {a.key}  {a.filename}  {size_kb:.1f}KB  {a.content_type}  store={a.store}")
+
+    asyncio.run(_run())
+
+
+@storage_group.command("orphans")
+@click.option("--store", default=None, help="Store name (default: default store)")
+@click.option("--delete", "do_delete", is_flag=True, help="Delete orphaned files from backend")
+def storage_orphans(store, do_delete):
+    """Find files in backends that have no matching Asset row."""
+    import asyncio
+
+    from skrift.config import get_settings
+    from skrift.lib.storage import StorageManager
+
+    settings = get_settings()
+
+    async def _run():
+        from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, AsyncSessionConfig
+        from advanced_alchemy.config import EngineConfig
+        from sqlalchemy import select
+        from skrift.db.models.asset import Asset
+
+        manager = StorageManager(settings.storage)
+        store_name = store or manager.default_store
+
+        db_config = SQLAlchemyAsyncConfig(
+            connection_string=settings.db.url,
+            session_config=AsyncSessionConfig(expire_on_commit=False),
+            engine_config=EngineConfig(echo=False),
+        )
+
+        backend = await manager.get(store_name)
+
+        async with db_config.get_session() as session:
+            result = await session.execute(
+                select(Asset.key).where(Asset.store == store_name)
+            )
+            db_keys = {row[0] for row in result.all()}
+
+        orphans = []
+        async for key in backend.list_keys():
+            if key not in db_keys:
+                orphans.append(key)
+
+        if not orphans:
+            click.echo("No orphaned files found.")
+            return
+
+        click.echo(f"Found {len(orphans)} orphaned file(s) in store '{store_name}':")
+        for key in orphans:
+            click.echo(f"  {key}")
+
+        if do_delete:
+            for key in orphans:
+                await backend.delete(key)
+            click.echo(f"Deleted {len(orphans)} orphaned file(s).")
+
+        await manager.close()
+
+    asyncio.run(_run())
+
+
+@storage_group.command("sync")
+@click.option("--source", required=True, type=click.Path(exists=True), help="Source directory")
+@click.option("--store", default=None, help="Target store name")
+@click.option("--dry-run", is_flag=True, help="Show what would be uploaded")
+@click.option("--delete", "do_delete", is_flag=True, help="Remove orphaned files from backend")
+def storage_sync(source, store, dry_run, do_delete):
+    """Sync a local directory to a storage backend."""
+    import asyncio
+    import hashlib
+
+    from skrift.config import get_settings
+    from skrift.lib.storage import StorageManager
+
+    settings = get_settings()
+    source_path = Path(source)
+
+    async def _run():
+        from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, AsyncSessionConfig
+        from advanced_alchemy.config import EngineConfig
+        from sqlalchemy import select, and_
+        from skrift.db.models.asset import Asset
+        import mimetypes
+
+        manager = StorageManager(settings.storage)
+        store_name = store or manager.default_store
+        backend = await manager.get(store_name)
+
+        db_config = SQLAlchemyAsyncConfig(
+            connection_string=settings.db.url,
+            session_config=AsyncSessionConfig(expire_on_commit=False),
+            engine_config=EngineConfig(echo=False),
+        )
+
+        files = [p for p in source_path.rglob("*") if p.is_file()]
+        uploaded = 0
+
+        async with db_config.get_session() as session:
+            for file_path in files:
+                data = file_path.read_bytes()
+                content_hash = hashlib.sha256(data).hexdigest()
+
+                # Check if already uploaded
+                existing = await session.execute(
+                    select(Asset).where(
+                        and_(Asset.store == store_name, Asset.content_hash == content_hash)
+                    ).limit(1)
+                )
+                if existing.scalar_one_or_none():
+                    continue
+
+                content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+                relative = str(file_path.relative_to(source_path))
+
+                if dry_run:
+                    click.echo(f"  Would upload: {relative} ({len(data)} bytes)")
+                    uploaded += 1
+                    continue
+
+                key = content_hash
+                await backend.put(key, data, content_type)
+                asset = Asset(
+                    key=key,
+                    store=store_name,
+                    content_hash=content_hash,
+                    filename=file_path.name,
+                    content_type=content_type,
+                    size=len(data),
+                    folder=str(file_path.parent.relative_to(source_path)) if file_path.parent != source_path else "",
+                )
+                session.add(asset)
+                uploaded += 1
+
+            if not dry_run:
+                await session.commit()
+
+        action = "Would upload" if dry_run else "Uploaded"
+        click.echo(f"{action} {uploaded} file(s) to store '{store_name}'.")
+        await manager.close()
+
+    asyncio.run(_run())
+
+
+@storage_group.command("migrate")
+@click.option("--from", "from_store", required=True, help="Source store name")
+@click.option("--to", "to_store", required=True, help="Destination store name")
+@click.option("--dry-run", is_flag=True, help="Show what would be migrated")
+def storage_migrate(from_store, to_store, dry_run):
+    """Migrate assets from one store to another."""
+    import asyncio
+
+    from skrift.config import get_settings
+    from skrift.lib.storage import StorageManager
+
+    settings = get_settings()
+
+    async def _run():
+        from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, AsyncSessionConfig
+        from advanced_alchemy.config import EngineConfig
+        from sqlalchemy import select, and_
+        from skrift.db.models.asset import Asset
+
+        manager = StorageManager(settings.storage)
+        source = await manager.get(from_store)
+        dest = await manager.get(to_store)
+
+        db_config = SQLAlchemyAsyncConfig(
+            connection_string=settings.db.url,
+            session_config=AsyncSessionConfig(expire_on_commit=False),
+            engine_config=EngineConfig(echo=False),
+        )
+
+        migrated = 0
+        async with db_config.get_session() as session:
+            result = await session.execute(
+                select(Asset).where(Asset.store == from_store)
+            )
+            assets = list(result.scalars().all())
+
+            if not assets:
+                click.echo(f"No assets found in store '{from_store}'.")
+                return
+
+            for asset in assets:
+                # Check if content already exists in dest
+                existing = await session.execute(
+                    select(Asset).where(
+                        and_(Asset.store == to_store, Asset.content_hash == asset.content_hash)
+                    ).limit(1)
+                )
+
+                if dry_run:
+                    click.echo(f"  Would migrate: {asset.filename} ({asset.size} bytes)")
+                    migrated += 1
+                    continue
+
+                if not existing.scalar_one_or_none():
+                    data = await source.get(asset.key)
+                    await dest.put(asset.key, data, asset.content_type)
+
+                asset.store = to_store
+                migrated += 1
+
+            if not dry_run:
+                await session.commit()
+
+        action = "Would migrate" if dry_run else "Migrated"
+        click.echo(f"{action} {migrated} asset(s) from '{from_store}' to '{to_store}'.")
+        await manager.close()
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     cli()

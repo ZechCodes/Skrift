@@ -1,0 +1,29 @@
+{% if assets %}
+<div class="sk-media-picker-grid">
+    {% for asset in assets %}
+    <button type="button" class="sk-media-picker-item" data-url="{{ asset_urls[asset.id | string] }}" data-filename="{{ asset.filename }}" data-content-type="{{ asset.content_type }}">
+        {% if asset.content_type.startswith("image/") %}
+        <img src="{{ asset_urls[asset.id | string] }}" alt="{{ asset.alt_text or asset.filename }}" loading="lazy">
+        {% else %}
+        <span class="sk-media-ext">{{ asset.filename.rsplit(".", 1)[-1] | upper if "." in asset.filename else "FILE" }}</span>
+        {% endif %}
+        <span class="sk-media-picker-name">{{ asset.filename }}</span>
+    </button>
+    {% endfor %}
+</div>
+
+{% if total_pages > 1 %}
+<nav class="sk-pagination">
+    {% if page > 1 %}
+    <a href="/admin/media/picker?page={{ page - 1 }}" class="sk-btn-outline sk-btn-small">Previous</a>
+    {% endif %}
+    <span>Page {{ page }} of {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="/admin/media/picker?page={{ page + 1 }}" class="sk-btn-outline sk-btn-small">Next</a>
+    {% endif %}
+</nav>
+{% endif %}
+
+{% else %}
+<p class="sk-no-items">No media assets available.</p>
+{% endif %}

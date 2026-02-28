@@ -6,8 +6,10 @@ from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from skrift.db.base import Base
+from skrift.db.models.page_asset import page_assets
 
 if TYPE_CHECKING:
+    from skrift.db.models.asset import Asset
     from skrift.db.models.page_revision import PageRevision
 
 
@@ -49,4 +51,17 @@ class Page(Base):
         back_populates="page",
         cascade="all, delete-orphan",
         order_by="desc(PageRevision.revision_number)",
+    )
+
+    # Featured asset (cover image)
+    featured_asset_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    featured_asset: Mapped["Asset | None"] = relationship(
+        "Asset", lazy="selectin", foreign_keys=[featured_asset_id]
+    )
+
+    # Assets relationship (many-to-many via page_assets)
+    assets: Mapped[list["Asset"]] = relationship(
+        "Asset", secondary=page_assets, lazy="selectin"
     )

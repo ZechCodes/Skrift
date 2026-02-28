@@ -145,7 +145,7 @@ def load_controllers() -> list:
 
         # Auto-expand AdminController to include split sub-controllers
         if class_name == "AdminController" and module_path == "skrift.admin.controller":
-            for sub_name in ("UserAdminController", "SettingsAdminController"):
+            for sub_name in ("UserAdminController", "SettingsAdminController", "MediaAdminController"):
                 sub_class = getattr(module, sub_name, None)
                 if sub_class and sub_class not in controllers:
                     controllers.append(sub_class)
@@ -557,6 +557,10 @@ def _build_site_app(
 
     theme = site_config.theme or settings.theme
 
+    def _sized_url(url: str, size: str) -> str:
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}size={size}"
+
     template_dirs = get_template_directories_for_theme(theme)
     engine_callback = build_template_engine_callback(
         extra_globals={
@@ -572,6 +576,7 @@ def _build_site_app(
             "theme_url": ThemeStaticURL(static_url, lambda _t=theme: _t),
             "login_url": lambda: f"https://{settings.domain}/auth/login",
         },
+        extra_filters={"sized": _sized_url},
         register_for_updates=False,
     )
     template_config = create_template_config(template_dirs, engine_callback)
@@ -724,9 +729,28 @@ def create_app() -> ASGIApp:
         package_static_dir=package_static_dir,
     )
 
+    # Storage manager
+    from skrift.lib.storage import StorageManager
+
+    storage_manager = StorageManager(settings.storage)
+
+    async def _asset_url(key_or_asset, store=None):
+        """Template helper: resolve an asset URL."""
+        from skrift.db.models.asset import Asset
+
+        if isinstance(key_or_asset, Asset):
+            backend = await storage_manager.get(key_or_asset.store)
+            return await backend.get_url(key_or_asset.key)
+        backend = await storage_manager.get(store)
+        return await backend.get_url(key_or_asset)
+
     # Template configuration
     from skrift.forms import Form, csrf_field as _csrf_field
     from skrift.lib.theme import themes_available
+
+    def _sized_url(url: str, size: str) -> str:
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}size={size}"
 
     template_dirs = get_template_directories()
     engine_callback = build_template_engine_callback(
@@ -741,7 +765,9 @@ def create_app() -> ASGIApp:
             "csrf_field": _csrf_field,
             "static_url": static_url,
             "theme_url": ThemeStaticURL(static_url, get_cached_site_theme),
+            "asset_url": _asset_url,
         },
+        extra_filters={"sized": _sized_url},
     )
     template_config = create_template_config(template_dirs, engine_callback)
 
@@ -795,9 +821,15 @@ def create_app() -> ASGIApp:
         notification_service.set_backend(backend)
         await backend.start()
 
+        # Ensure local storage directories exist
+        for store_cfg in settings.storage.stores.values():
+            if store_cfg.backend == "local":
+                Path(store_cfg.local_path).mkdir(parents=True, exist_ok=True)
+
     async def on_shutdown(_app: Litestar) -> None:
-        """Stop notification backend on shutdown."""
+        """Stop notification backend and storage on shutdown."""
         await notification_service._get_backend().stop()
+        await storage_manager.close()
 
     app = Litestar(
         on_startup=[on_startup],
@@ -812,12 +844,18 @@ def create_app() -> ASGIApp:
         debug=settings.debug,
     )
     app.state.webhook_secret = settings.notifications.webhook_secret
+    app.state.storage_manager = storage_manager
+
+    from skrift.middleware.storage import StorageFilesMiddleware
     from skrift.middleware.static import StaticFilesMiddleware
-    primary_asgi = StaticFilesMiddleware(
-        observability.instrument_app(app),
-        themes_dir=themes_dir,
-        site_static_dir=site_static_dir,
-        package_static_dir=package_static_dir,
+    primary_asgi = StorageFilesMiddleware(
+        StaticFilesMiddleware(
+            observability.instrument_app(app),
+            themes_dir=themes_dir,
+            site_static_dir=site_static_dir,
+            package_static_dir=package_static_dir,
+        ),
+        storage_config=settings.storage,
     )
 
     # Build subdomain → page_types mapping from config
