@@ -3,21 +3,35 @@
 Eliminates duplication between create_app() and create_setup_app() in asgi.py.
 """
 
+from __future__ import annotations
+
+import binascii
 import hashlib
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
+from cryptography.exceptions import InvalidTag
 from litestar.contrib.jinja import JinjaTemplateEngine
+from litestar.datastructures import MutableScopeHeaders
+from litestar.datastructures.cookie import Cookie
 from litestar.exceptions import HTTPException
-from litestar.middleware.session.client_side import CookieBackendConfig
+from litestar.middleware.session.client_side import (
+    ClientSideSessionBackend,
+    CookieBackendConfig,
+)
 from litestar.template import TemplateConfig
 
 from skrift.lib.exceptions import http_exception_handler, internal_server_error_handler
 from skrift.lib.markdown import render_markdown
 from skrift.middleware.security import csp_nonce_var
+
+if TYPE_CHECKING:
+    from litestar.connection import ASGIConnection
+    from litestar.types import Message, ScopeSession
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +44,61 @@ EXCEPTION_HANDLERS: dict[type[Exception], Any] = {
 # Module-level references for runtime updates
 _jinja_env = None
 
+# Scope key used to signal that a stale session cookie was detected
+_STALE_SESSION_KEY = "_skrift_stale_session_cookie"
+
+
+class _SessionBackend(ClientSideSessionBackend):
+    """Session backend that cleans up stale hostname-scoped session cookies.
+
+    When ``cookie_domain`` is configured (e.g. ``.example.com``), cookies
+    previously set without a domain are scoped to the exact hostname
+    (e.g. ``app.example.com``).  Because the hostname-specific cookie has
+    higher specificity, the browser sends it *first* and it shadows the
+    domain-scoped cookie.  The server can't decrypt the stale cookie and
+    starts a fresh (empty) session on every request — breaking OAuth flows
+    and anything else that relies on session continuity.
+
+    This backend detects the decryption failure and adds a ``Set-Cookie``
+    header *without* a ``Domain`` attribute, which tells the browser to
+    expire the hostname-scoped cookie.
+    """
+
+    async def load_from_connection(self, connection: ASGIConnection) -> dict[str, Any]:
+        if cookie_keys := self.get_cookie_keys(connection):
+            data = [connection.cookies[key].encode("utf-8") for key in cookie_keys]
+            try:
+                return self.load_data(data)
+            except (InvalidTag, binascii.Error):
+                connection.scope[_STALE_SESSION_KEY] = True
+        return {}
+
+    async def store_in_message(
+        self,
+        scope_session: ScopeSession,
+        message: Message,
+        connection: ASGIConnection,
+    ) -> None:
+        await super().store_in_message(scope_session, message, connection)
+
+        if not connection.scope.pop(_STALE_SESSION_KEY, False) or not self.config.domain:
+            return
+
+        # Expire the cookie without a Domain attribute so the browser
+        # matches (and removes) the hostname-scoped stale cookie.
+        headers = MutableScopeHeaders.from_message(message)
+        clear_params = {k: v for k, v in self._clear_cookie_params.items() if k != "domain"}
+        for key in self.get_cookie_key_set(connection):
+            headers.add(
+                "Set-Cookie",
+                Cookie(value="null", key=key, expires=0, **clear_params).to_header(header=""),
+            )
+
+
+@dataclass
+class _SessionConfig(CookieBackendConfig):
+    _backend_class = _SessionBackend  # type: ignore[assignment]
+
 
 def create_session_config(
     secret_key: str,
@@ -40,7 +109,7 @@ def create_session_config(
 ) -> CookieBackendConfig:
     """Create a cookie-backed session config."""
     session_secret = hashlib.sha256(secret_key.encode()).digest()
-    return CookieBackendConfig(
+    return _SessionConfig(
         secret=session_secret,
         key=cookie_name,
         max_age=max_age,
