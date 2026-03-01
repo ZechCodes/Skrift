@@ -164,13 +164,12 @@ class TestCheckPageAccess:
         mock_request.session = {"user_id": str(user_id)}
         mock_page = MagicMock()
         mock_page.id = uuid4()
+        mock_page.user_id = user_id  # same user owns the page
 
-        with patch("skrift.admin.helpers.get_user_permissions") as mock_get_perms, \
-             patch("skrift.admin.helpers.page_service") as mock_ps:
+        with patch("skrift.admin.helpers.get_user_permissions") as mock_get_perms:
             mock_perms = MagicMock()
             mock_perms.permissions = {"edit-own-pages"}
             mock_get_perms.return_value = mock_perms
-            mock_ps.check_page_ownership = AsyncMock(return_value=True)
 
             await check_page_access(
                 mock_session, mock_request, mock_page,
@@ -188,13 +187,12 @@ class TestCheckPageAccess:
         mock_request.session = {"user_id": str(user_id)}
         mock_page = MagicMock()
         mock_page.id = uuid4()
+        mock_page.user_id = uuid4()  # different user owns the page
 
-        with patch("skrift.admin.helpers.get_user_permissions") as mock_get_perms, \
-             patch("skrift.admin.helpers.page_service") as mock_ps:
+        with patch("skrift.admin.helpers.get_user_permissions") as mock_get_perms:
             mock_perms = MagicMock()
             mock_perms.permissions = {"edit-own-pages"}
             mock_get_perms.return_value = mock_perms
-            mock_ps.check_page_ownership = AsyncMock(return_value=False)
 
             with pytest.raises(NotAuthorizedException):
                 await check_page_access(

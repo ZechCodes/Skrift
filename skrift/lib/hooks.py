@@ -31,7 +31,6 @@ Usage:
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
-from functools import wraps
 from typing import Any, Callable, TypeVar
 
 T = TypeVar("T")
@@ -250,12 +249,7 @@ def action(hook_name: str, priority: int = 10) -> Callable[[Callable], Callable]
 
     def decorator(func: Callable) -> Callable:
         hooks.add_action(hook_name, func, priority)
-
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return func(*args, **kwargs)
-
-        return wrapper
+        return func
 
     return decorator
 
@@ -272,12 +266,7 @@ def filter(hook_name: str, priority: int = 10) -> Callable[[Callable], Callable]
 
     def decorator(func: Callable) -> Callable:
         hooks.add_filter(hook_name, func, priority)
-
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return func(*args, **kwargs)
-
-        return wrapper
+        return func
 
     return decorator
 

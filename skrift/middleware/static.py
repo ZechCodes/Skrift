@@ -3,6 +3,8 @@ from pathlib import Path
 
 from litestar.types import ASGIApp, Receive, Scope, Send
 
+from skrift.middleware.helpers import send_not_found
+
 
 def resolve_static_file(
     source: str,
@@ -82,14 +84,14 @@ class StaticFilesMiddleware:
         rest = scope["path"][len("/static/"):]
         slash_idx = rest.find("/")
         if slash_idx == -1 or not rest[:slash_idx]:
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         source = rest[:slash_idx]
         filepath = rest[slash_idx + 1:]
 
         if not filepath:
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         resolved = resolve_static_file(
@@ -97,7 +99,7 @@ class StaticFilesMiddleware:
         )
 
         if resolved is None:
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         media_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
@@ -111,12 +113,3 @@ class StaticFilesMiddleware:
             ],
         })
         await send({"type": "http.response.body", "body": content})
-
-    @staticmethod
-    async def _not_found(send: Send) -> None:
-        await send({
-            "type": "http.response.start",
-            "status": 404,
-            "headers": [(b"content-type", b"text/plain")],
-        })
-        await send({"type": "http.response.body", "body": b"Not Found"})

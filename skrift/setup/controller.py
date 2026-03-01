@@ -23,6 +23,12 @@ from litestar.response.sse import ServerSentEvent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from skrift.auth.session_keys import (
+    SESSION_USER_EMAIL,
+    SESSION_USER_ID,
+    SESSION_USER_NAME,
+    SESSION_USER_PICTURE_URL,
+)
 from skrift.db.models.role import Role, user_roles
 from skrift.db.services import setting_service
 from skrift.db.services.setting_service import (
@@ -99,6 +105,41 @@ def _admin_step_number() -> int:
 def _theme_step_number() -> int:
     """Return the step number for the theme step (only valid when themes exist)."""
     return 4
+
+
+async def _finalize_admin_setup(
+    db_session: AsyncSession, request: Request, user
+) -> None:
+    """Sync roles, assign admin role, mark setup complete, and populate session.
+
+    Shared between dummy-login and OAuth callback admin creation flows.
+    """
+    from skrift.auth import sync_roles_to_database
+
+    await sync_roles_to_database(db_session)
+
+    admin_role = await db_session.scalar(select(Role).where(Role.name == "admin"))
+    if admin_role:
+        existing = await db_session.execute(
+            select(user_roles).where(
+                user_roles.c.user_id == user.id,
+                user_roles.c.role_id == admin_role.id,
+            )
+        )
+        if not existing.first():
+            await db_session.execute(
+                user_roles.insert().values(user_id=user.id, role_id=admin_role.id)
+            )
+
+    timestamp = datetime.now(UTC).isoformat()
+    await setting_service.set_setting(db_session, SETUP_COMPLETED_AT_KEY, timestamp)
+
+    request.session[SESSION_USER_ID] = str(user.id)
+    request.session[SESSION_USER_NAME] = user.name
+    request.session[SESSION_USER_EMAIL] = user.email
+    request.session[SESSION_USER_PICTURE_URL] = user.picture_url
+    request.session["flash"] = "Admin account created successfully!"
+    request.session["setup_just_completed"] = True
 
 
 class SetupController(Controller):
@@ -715,37 +756,7 @@ class SetupController(Controller):
             login_result = await find_or_create_oauth_user(
                 db_session, DUMMY_PROVIDER_KEY, user_data, dummy_metadata
             )
-            user = login_result.user
-
-            # Ensure roles are synced
-            from skrift.auth import sync_roles_to_database
-            await sync_roles_to_database(db_session)
-
-            # Always assign admin role during setup
-            admin_role = await db_session.scalar(select(Role).where(Role.name == "admin"))
-            if admin_role:
-                existing = await db_session.execute(
-                    select(user_roles).where(
-                        user_roles.c.user_id == user.id,
-                        user_roles.c.role_id == admin_role.id
-                    )
-                )
-                if not existing.first():
-                    await db_session.execute(
-                        user_roles.insert().values(user_id=user.id, role_id=admin_role.id)
-                    )
-
-            # Mark setup complete
-            timestamp = datetime.now(UTC).isoformat()
-            await setting_service.set_setting(db_session, SETUP_COMPLETED_AT_KEY, timestamp)
-
-        # Set session
-        request.session["user_id"] = str(user.id)
-        request.session["user_name"] = user.name
-        request.session["user_email"] = user.email
-        request.session["user_picture_url"] = user.picture_url
-        request.session["flash"] = "Admin account created successfully!"
-        request.session["setup_just_completed"] = True
+            await _finalize_admin_setup(db_session, request, login_result.user)
 
         return Redirect(path="/setup/complete")
 
@@ -851,39 +862,9 @@ class SetupAuthController(Controller):
             login_result = await find_or_create_oauth_user(
                 db_session, provider, user_data, user_info, tokens=tokens
             )
-            user = login_result.user
-
-            # Ensure roles are synced
-            from skrift.auth import sync_roles_to_database
-            await sync_roles_to_database(db_session)
-
-            # Always assign admin role during setup
-            admin_role = await db_session.scalar(select(Role).where(Role.name == "admin"))
-            if admin_role:
-                existing = await db_session.execute(
-                    select(user_roles).where(
-                        user_roles.c.user_id == user.id,
-                        user_roles.c.role_id == admin_role.id
-                    )
-                )
-                if not existing.first():
-                    await db_session.execute(
-                        user_roles.insert().values(user_id=user.id, role_id=admin_role.id)
-                    )
-
-            # Mark setup complete
-            timestamp = datetime.now(UTC).isoformat()
-            await setting_service.set_setting(db_session, SETUP_COMPLETED_AT_KEY, timestamp)
+            await _finalize_admin_setup(db_session, request, login_result.user)
 
         # Clear setup flag
         request.session.pop("oauth_setup", None)
-
-        # Set session
-        request.session["user_id"] = str(user.id)
-        request.session["user_name"] = user.name
-        request.session["user_email"] = user.email
-        request.session["user_picture_url"] = user.picture_url
-        request.session["flash"] = "Admin account created successfully!"
-        request.session["setup_just_completed"] = True
 
         return Redirect(path="/setup/complete")

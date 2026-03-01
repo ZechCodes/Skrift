@@ -1,17 +1,14 @@
 from pathlib import Path
-from uuid import UUID
 
 from litestar import Controller, Request, get
 from litestar.exceptions import NotFoundException
 from litestar.response import Response, Template as TemplateResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.session_keys import SESSION_USER_ID
-from skrift.db.models.user import User
+from skrift.controllers.helpers import get_user_context, resolve_theme
 from skrift.db.services import page_service
-from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url, get_cached_site_theme
-from skrift.lib.hooks import RESOLVE_THEME, apply_filters
+from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url
 from skrift.lib.seo import get_page_seo_meta, get_page_og_meta
 from skrift.lib.template import Template
 
@@ -21,29 +18,12 @@ TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
 class WebController(Controller):
     path = "/"
 
-    async def _get_user_context(
-        self, request: "Request", db_session: AsyncSession
-    ) -> dict:
-        """Get user data for template context if logged in."""
-        user_id = request.session.get(SESSION_USER_ID)
-        if not user_id:
-            return {"user": None}
-
-        result = await db_session.execute(select(User).where(User.id == UUID(user_id)))
-        user = result.scalar_one_or_none()
-        return {"user": user}
-
-    async def _resolve_theme(self, request: "Request") -> str:
-        """Resolve the active theme for this request via filter hook."""
-        theme_name = get_cached_site_theme()
-        return await apply_filters(RESOLVE_THEME, theme_name, request)
-
     @get("/")
     async def index(
         self, request: "Request", db_session: AsyncSession
     ) -> TemplateResponse:
         """Home page."""
-        user_ctx = await self._get_user_context(request, db_session)
+        user_ctx = await get_user_context(request, db_session)
         flash = request.session.pop("flash", None)
 
         return TemplateResponse(
@@ -77,9 +57,9 @@ class WebController(Controller):
                 media_type="text/markdown",
             )
 
-        user_ctx = await self._get_user_context(request, db_session)
+        user_ctx = await get_user_context(request, db_session)
         flash = request.session.pop("flash", None)
-        theme_name = await self._resolve_theme(request)
+        theme_name = await resolve_theme(request)
 
         # Get SEO metadata
         site_name = get_cached_site_name()

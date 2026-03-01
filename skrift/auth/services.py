@@ -38,6 +38,7 @@ async def get_user_permissions(
     Results are cached with a TTL for performance.
     """
     user_id_str = str(user_id)
+    user_id_uuid = user_id if isinstance(user_id, UUID) else UUID(user_id)
 
     # Check cache
     if user_id_str in _permission_cache:
@@ -50,7 +51,7 @@ async def get_user_permissions(
 
     result = await session.execute(
         select(User)
-        .where(User.id == (UUID(user_id_str) if isinstance(user_id, str) else user_id))
+        .where(User.id == user_id_uuid)
         .options(selectinload(User.roles).selectinload(Role.permissions))
     )
     user = result.scalar_one_or_none()

@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 from uuid import UUID
 
-from skrift.lib.notifications import Notification, NotificationMode
+from skrift.lib.notifications import Notification, NotificationMode, _parse_source_key
 
 if TYPE_CHECKING:
     from skrift.config import Settings
@@ -258,7 +258,8 @@ class _DatabaseStorageMixin:
             old_id = await self.remove_by_group(source_key, notification.group)
 
         # Derive scope/scope_id from source_key for backwards compat
-        scope, scope_id = _parse_source_key(source_key)
+        scope, scope_id_raw = _parse_source_key(source_key)
+        scope_id = scope_id_raw or ""
 
         row = StoredNotification(
             id=notification.id,
@@ -482,16 +483,6 @@ class _DatabaseStorageMixin:
                 )
             )
             await session.commit()
-
-
-def _parse_source_key(source_key: str) -> tuple[str, str]:
-    """Parse a source_key into (scope, scope_id) for backwards compat."""
-    if source_key == "global":
-        return ("broadcast", "")
-    if ":" in source_key:
-        scope, scope_id = source_key.split(":", 1)
-        return (scope, scope_id)
-    return (source_key, "")
 
 
 class RedisBackend(_DatabaseStorageMixin):

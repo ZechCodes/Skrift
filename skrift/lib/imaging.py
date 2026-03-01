@@ -53,20 +53,19 @@ def resize_image(
     """
     img = Image.open(io.BytesIO(data))
     orig_format = img.format or "PNG"
+    content_type = _FORMAT_TO_CONTENT_TYPE.get(orig_format, "image/png")
 
     orig_w, orig_h = img.size
 
     if max_height is not None:
         # Fit within box — don't upscale
         if orig_w <= max_width and orig_h <= max_height:
-            content_type = _FORMAT_TO_CONTENT_TYPE.get(orig_format, "image/png")
             return data, content_type
 
         img.thumbnail((max_width, max_height), Image.LANCZOS)
     else:
         # Width-constrained only — don't upscale
         if orig_w <= max_width:
-            content_type = _FORMAT_TO_CONTENT_TYPE.get(orig_format, "image/png")
             return data, content_type
 
         ratio = max_width / orig_w
@@ -84,7 +83,6 @@ def resize_image(
         save_kwargs["quality"] = 85
 
     img.save(buf, format=orig_format, **save_kwargs)
-    content_type = _FORMAT_TO_CONTENT_TYPE.get(orig_format, "image/png")
     return buf.getvalue(), content_type
 
 

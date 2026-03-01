@@ -34,6 +34,7 @@ from skrift.auth.session_keys import (
     SESSION_USER_PICTURE_URL,
 )
 from skrift.forms import verify_csrf
+from skrift.lib.flash import flash_error, flash_info, flash_success
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
 
 logger = logging.getLogger(__name__)
@@ -266,7 +267,7 @@ class AuthController(Controller):
             raise NotFoundException(f"Unknown provider: {provider}")
 
         if error:
-            request.session["flash"] = f"OAuth error: {error}"
+            flash_error(request, f"OAuth error: {error}")
             return Redirect(path="/auth/login")
 
         # Verify CSRF state
@@ -296,7 +297,7 @@ class AuthController(Controller):
         )
         await db_session.commit()
 
-        request.session["flash"] = "Successfully logged in!"
+        flash_success(request, "Successfully logged in!")
         _set_login_session(request, login_result.user)
 
         return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
@@ -348,7 +349,7 @@ class AuthController(Controller):
             raise NotFoundException("Dummy provider not configured")
 
         if not await verify_csrf(request):
-            request.session["flash"] = "Invalid request. Please try again."
+            flash_error(request, "Invalid request. Please try again.")
             return Redirect(path="/auth/dummy/login")
 
         form_data = await request.form()
@@ -356,7 +357,7 @@ class AuthController(Controller):
         name = form_data.get("name", "").strip()
 
         if not email:
-            request.session["flash"] = "Email is required"
+            flash_error(request, "Email is required")
             return Redirect(path="/auth/dummy/login")
 
         if not name:
@@ -374,7 +375,7 @@ class AuthController(Controller):
         )
         await db_session.commit()
 
-        request.session["flash"] = "Successfully logged in!"
+        flash_success(request, "Successfully logged in!")
         _set_login_session(request, login_result.user)
 
         return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
