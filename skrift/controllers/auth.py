@@ -7,6 +7,7 @@ Also supports a development-only "dummy" provider for testing.
 import base64
 import fnmatch
 import hashlib
+import logging
 import secrets
 from typing import Annotated
 from urllib.parse import urlencode, urlparse
@@ -34,6 +35,8 @@ from skrift.auth.session_keys import (
 )
 from skrift.forms import verify_csrf
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
+
+logger = logging.getLogger(__name__)
 
 
 def _is_safe_redirect_url(url: str, allowed_domains: list[str]) -> bool:
@@ -269,6 +272,12 @@ class AuthController(Controller):
         # Verify CSRF state
         stored_state = request.session.pop(SESSION_OAUTH_STATE, None)
         if not oauth_state or oauth_state != stored_state:
+            logger.warning(
+                "OAuth state mismatch: stored=%s, received=%s, session_keys=%s",
+                stored_state,
+                oauth_state,
+                list(request.session.keys()),
+            )
             raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
         if not code:
