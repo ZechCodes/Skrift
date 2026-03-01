@@ -147,7 +147,7 @@ async def check_page_access(
 
     # Check ownership for users with only the 'own' permission
     if own_permission in permissions.permissions:
-        if await page_service.check_page_ownership(db_session, page.id, UUID(user_id)):
+        if page.user_id == UUID(user_id):
             return
 
     raise NotAuthorizedException("You don't have permission to access this page")

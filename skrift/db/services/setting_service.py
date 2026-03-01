@@ -196,10 +196,16 @@ async def load_site_settings_cache(db_session: AsyncSession) -> None:
     """
     global _site_settings_cache, _per_site_cache
     try:
-        _site_settings_cache = await get_site_settings(db_session)
-
-        # Load all per-site overrides
+        # Single query for all settings (global + per-site overrides)
         all_settings = await get_settings(db_session)
+
+        # Populate global site settings cache with defaults
+        _site_settings_cache = {
+            key: all_settings.get(key) or default
+            for key, default in SITE_DEFAULTS.items()
+        }
+
+        # Extract per-subdomain overrides (keys matching site:{subdomain}:{key})
         per_site: dict[str, dict[str, str]] = {}
         for db_key, value in all_settings.items():
             if db_key.startswith("site:") and value:

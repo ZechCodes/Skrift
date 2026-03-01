@@ -286,14 +286,11 @@ def run_migrations_if_needed() -> tuple[bool, str | None]:
         return False, str(e)
 
 
-async def is_site_configured() -> bool:
-    """Check if site settings have been configured in the database.
+async def _is_setting_configured(setting_key: str) -> bool:
+    """Check if a setting exists in the database.
 
-    The site step is considered complete if site_name has been set.
-    Returns False if the settings table doesn't exist yet (pre-migration).
-
-    Returns:
-        True if site is configured, False otherwise.
+    Creates a temporary engine/session for the check. Returns False if the
+    database isn't reachable or the settings table doesn't exist yet.
     """
     db_url = get_database_url_from_yaml()
     if not db_url:
@@ -307,48 +304,27 @@ async def is_site_configured() -> bool:
         async_session = async_sessionmaker(engine, expire_on_commit=False)
         async with async_session() as session:
             try:
-                site_name = await get_setting(session, SITE_NAME_KEY)
-                return site_name is not None
+                value = await get_setting(session, setting_key)
+                return value is not None
             except Exception:
-                logger.debug("Could not check site_name setting (table may not exist yet)", exc_info=True)
+                logger.debug("Could not check %s setting (table may not exist yet)", setting_key, exc_info=True)
                 return False
     except Exception:
-        logger.debug("Could not connect to check site configuration", exc_info=True)
+        logger.debug("Could not connect to check %s", setting_key, exc_info=True)
         return False
     finally:
         if engine:
             await engine.dispose()
+
+
+async def is_site_configured() -> bool:
+    """Check if site settings have been configured (site_name is set)."""
+    return await _is_setting_configured(SITE_NAME_KEY)
 
 
 async def is_theme_configured() -> bool:
-    """Check if the theme step has been completed.
-
-    The theme step is considered configured if the site_theme key exists
-    in the settings table (even if empty, meaning "no theme").
-    """
-    db_url = get_database_url_from_yaml()
-    if not db_url:
-        return False
-
-    engine = None
-    try:
-        engine = create_setup_engine(db_url)
-        from sqlalchemy.ext.asyncio import async_sessionmaker
-
-        async_session = async_sessionmaker(engine, expire_on_commit=False)
-        async with async_session() as session:
-            try:
-                theme = await get_setting(session, SITE_THEME_KEY)
-                return theme is not None
-            except Exception:
-                logger.debug("Could not check site_theme setting (table may not exist yet)", exc_info=True)
-                return False
-    except Exception:
-        logger.debug("Could not connect to check theme configuration", exc_info=True)
-        return False
-    finally:
-        if engine:
-            await engine.dispose()
+    """Check if the theme step has been completed (site_theme key exists)."""
+    return await _is_setting_configured(SITE_THEME_KEY)
 
 
 async def get_first_incomplete_step() -> SetupStep:

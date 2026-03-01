@@ -11,6 +11,7 @@ from urllib.parse import parse_qs
 from litestar.types import ASGIApp, Receive, Scope, Send
 
 from skrift.lib.imaging import IMAGE_SIZES, detect_image_content_type, resize_image, variant_filename
+from skrift.middleware.helpers import send_not_found
 
 if TYPE_CHECKING:
     from skrift.config import StorageConfig
@@ -41,25 +42,25 @@ class StorageFilesMiddleware:
         rest = scope["path"][len("/storage/"):]
         slash_idx = rest.find("/")
         if slash_idx == -1 or not rest[:slash_idx]:
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         store_name = rest[:slash_idx]
         key = rest[slash_idx + 1:]
 
         if not key:
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         # Only serve local backends
         store_cfg = self._storage_config.stores.get(store_name)
         if store_cfg is None or store_cfg.backend != "local":
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         # Security: reject traversal and null bytes
         if ".." in key.split("/") or "\x00" in key:
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         base_path = Path(store_cfg.local_path).resolve()
@@ -73,15 +74,15 @@ class StorageFilesMiddleware:
         try:
             resolved = candidate.resolve()
         except (OSError, ValueError):
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         if not resolved.is_relative_to(base_path):
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         if not resolved.is_file():
-            await self._not_found(send)
+            await send_not_found(send)
             return
 
         # Check for ?size=name variant request
@@ -89,13 +90,12 @@ class StorageFilesMiddleware:
         params = parse_qs(qs.decode("latin-1") if isinstance(qs, bytes) else qs)
         size_name = params.get("size", [None])[0]
 
+        result = None
         if size_name and size_name in IMAGE_SIZES:
             result = self._get_or_create_variant(resolved, size_name)
-            if result is not None:
-                content, media_type = result
-            else:
-                content = resolved.read_bytes()
-                media_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+
+        if result is not None:
+            content, media_type = result
         else:
             content = resolved.read_bytes()
             media_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
@@ -142,12 +142,3 @@ class StorageFilesMiddleware:
             logger.warning("Failed to cache variant %s", variant_path, exc_info=True)
 
         return resized_bytes, content_type
-
-    @staticmethod
-    async def _not_found(send: Send) -> None:
-        await send({
-            "type": "http.response.start",
-            "status": 404,
-            "headers": [(b"content-type", b"text/plain")],
-        })
-        await send({"type": "http.response.body", "body": b"Not Found"})

@@ -15,6 +15,15 @@ from skrift.lib.hooks import hooks, BEFORE_PAGE_SAVE, AFTER_PAGE_SAVE, BEFORE_PA
 OrderBy = Literal["order", "created", "published", "title"]
 
 
+def _published_filters() -> list:
+    """Return SQLAlchemy filter clauses for published-only pages (respects scheduling)."""
+    now = datetime.now(UTC)
+    return [
+        Page.is_published == True,
+        or_(Page.publish_at.is_(None), Page.publish_at <= now),
+    ]
+
+
 async def list_pages(
     db_session: AsyncSession,
     published_only: bool = False,
@@ -42,10 +51,7 @@ async def list_pages(
     # Build filters
     filters = []
     if published_only:
-        now = datetime.now(UTC)
-        filters.append(Page.is_published == True)
-        # Respect scheduling: either no publish_at set, or publish_at is in the past
-        filters.append(or_(Page.publish_at.is_(None), Page.publish_at <= now))
+        filters.extend(_published_filters())
     if user_id:
         filters.append(Page.user_id == user_id)
     if page_type is not None:
@@ -96,10 +102,8 @@ async def get_page_by_slug(
         query = query.where(Page.type == page_type)
 
     if published_only:
-        now = datetime.now(UTC)
-        query = query.where(Page.is_published == True)
-        # Respect scheduling: either no publish_at set, or publish_at is in the past
-        query = query.where(or_(Page.publish_at.is_(None), Page.publish_at <= now))
+        for clause in _published_filters():
+            query = query.where(clause)
 
     result = await db_session.execute(query)
     return result.scalar_one_or_none()

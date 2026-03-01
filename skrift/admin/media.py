@@ -58,10 +58,10 @@ class MediaAdminController(Controller):
         total = await count_assets(db_session, store=store)
 
         storage: StorageManager = request.app.state.storage_manager
-        asset_urls = {}
-        for asset in assets:
-            backend = await storage.get(asset.store)
-            asset_urls[str(asset.id)] = await backend.get_url(asset.key)
+        asset_urls = {
+            str(asset.id): await get_asset_url(storage, asset)
+            for asset in assets
+        }
 
         total_pages = max(1, (total + per_page - 1) // per_page)
 
@@ -209,10 +209,10 @@ class MediaAdminController(Controller):
         total = await count_assets(db_session)
 
         storage: StorageManager = request.app.state.storage_manager
-        asset_urls = {}
-        for asset in assets:
-            backend = await storage.get(asset.store)
-            asset_urls[str(asset.id)] = await backend.get_url(asset.key)
+        asset_urls = {
+            str(asset.id): await get_asset_url(storage, asset)
+            for asset in assets
+        }
 
         total_pages = max(1, (total + per_page - 1) // per_page)
 
