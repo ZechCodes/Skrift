@@ -70,6 +70,18 @@ class SettingsAdminController(Controller):
                 "active": current_settings.get(setting_service.SITE_THEME_KEY, ""),
             }
 
+        # Resolve current favicon URL for preview
+        current_favicon_url = ""
+        favicon_key = current_settings.get(setting_service.SITE_FAVICON_KEY, "")
+        if favicon_key and not selected_site:
+            try:
+                from skrift.lib.storage import StorageManager
+                storage: StorageManager = request.app.state.storage_manager
+                backend = await storage.get()
+                current_favicon_url = await backend.get_url(favicon_key)
+            except Exception:
+                pass
+
         flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/settings/site.html",
@@ -79,6 +91,7 @@ class SettingsAdminController(Controller):
                 "theme_data": theme_data,
                 "sites_list": sites_list,
                 "selected_site": selected_site,
+                "current_favicon_url": current_favicon_url,
                 **ctx,
             },
         )
@@ -91,15 +104,21 @@ class SettingsAdminController(Controller):
         self,
         request: Request,
         db_session: AsyncSession,
-        data: Annotated[dict, Body(media_type=RequestEncodingType.URL_ENCODED)],
+        data: Annotated[dict, Body(media_type=RequestEncodingType.MULTI_PART)],
     ) -> Redirect:
         """Save site settings."""
         from skrift.app_factory import update_template_directories
         from skrift.lib.theme import themes_available
 
-        subdomain = data.get("_site", "").strip()
-        site_name = data.get("site_name", "").strip()
-        site_tagline = data.get("site_tagline", "").strip()
+        subdomain = data.get("_site", "")
+        if isinstance(subdomain, str):
+            subdomain = subdomain.strip()
+        site_name = data.get("site_name", "")
+        if isinstance(site_name, str):
+            site_name = site_name.strip()
+        site_tagline = data.get("site_tagline", "")
+        if isinstance(site_tagline, str):
+            site_tagline = site_tagline.strip()
 
         if subdomain:
             # Per-subdomain: only save site_name and site_tagline
@@ -140,10 +159,38 @@ class SettingsAdminController(Controller):
                     db_session, setting_service.SITE_THEME_KEY, site_theme
                 )
 
+            # Handle favicon upload
+            favicon_file = data.get("favicon")
+            if favicon_file and hasattr(favicon_file, "read"):
+                content = await favicon_file.read()
+                if content:
+                    from skrift.db.services.asset_service import upload_asset
+                    storage = request.app.state.storage_manager
+                    asset = await upload_asset(
+                        db_session,
+                        storage,
+                        filename=favicon_file.filename or "favicon",
+                        data=content,
+                        content_type=favicon_file.content_type or "image/png",
+                    )
+                    await setting_service.set_setting(
+                        db_session, setting_service.SITE_FAVICON_KEY, asset.key
+                    )
+
             # Update template directories for instant theme switching
             update_template_directories()
 
         await setting_service.load_site_settings_cache(db_session)
+
+        # Re-resolve favicon URL cache after settings change
+        favicon_key = setting_service.get_cached_site_favicon_key()
+        if favicon_key:
+            storage = request.app.state.storage_manager
+            backend = await storage.get()
+            url = await backend.get_url(favicon_key)
+            setting_service.set_cached_favicon_url(url)
+        else:
+            setting_service.set_cached_favicon_url("")
 
         flash_success(request, "Site settings saved successfully")
         redirect_path = "/admin/settings"

@@ -9,6 +9,8 @@ from skrift.db.models import Setting
 _site_settings_cache: dict[str, str] = {}
 # Per-subdomain overrides: subdomain → {key → value}
 _per_site_cache: dict[str, dict[str, str]] = {}
+# Cached resolved favicon URL (set externally after storage URL resolution)
+_favicon_url_cache: str = ""
 
 
 async def get_setting(
@@ -147,6 +149,9 @@ SETUP_COMPLETED_AT_KEY = "setup_completed_at"
 # Robots.txt custom content key
 ROBOTS_TXT_KEY = "robots_txt"
 
+# Favicon asset storage key
+SITE_FAVICON_KEY = "site_favicon_key"
+
 # Default values
 SITE_DEFAULTS = {
     SITE_NAME_KEY: "My Site",
@@ -156,6 +161,7 @@ SITE_DEFAULTS = {
     SITE_BASE_URL_KEY: "",
     SITE_THEME_KEY: "",
     ROBOTS_TXT_KEY: "",
+    SITE_FAVICON_KEY: "",
 }
 
 
@@ -214,9 +220,10 @@ def invalidate_site_settings_cache() -> None:
 
     Call this when settings are modified to ensure fresh values are loaded.
     """
-    global _site_settings_cache, _per_site_cache
+    global _site_settings_cache, _per_site_cache, _favicon_url_cache
     _site_settings_cache.clear()
     _per_site_cache.clear()
+    _favicon_url_cache = ""
 
 
 def site_settings_cache_loaded() -> bool:
@@ -327,3 +334,19 @@ async def set_site_setting_for_subdomain(
 def get_cached_robots_txt() -> str:
     """Get the cached robots.txt custom content (empty string = use default)."""
     return _get_cached_setting(ROBOTS_TXT_KEY)
+
+
+def get_cached_site_favicon_key() -> str:
+    """Get the cached favicon asset storage key (empty string = no favicon)."""
+    return _get_cached_setting(SITE_FAVICON_KEY)
+
+
+def get_cached_favicon_url() -> str:
+    """Get the cached resolved favicon URL (empty string = no favicon)."""
+    return _favicon_url_cache
+
+
+def set_cached_favicon_url(url: str) -> None:
+    """Set the cached resolved favicon URL. Called after storage URL resolution."""
+    global _favicon_url_cache
+    _favicon_url_cache = url

@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{{ site_name() }}{% endblock %}</title>
+    {% set _fav = favicon_url() %}
+    {% if _fav %}<link rel="icon" href="{{ _fav | sized('icon') }}">{% endif %}
 
     {# SEO Meta Tags #}
     {% block seo_meta %}

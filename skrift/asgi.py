@@ -54,6 +54,9 @@ from skrift.db.services.setting_service import (
     get_cached_site_copyright_holder,
     get_cached_site_copyright_start_year,
     get_cached_site_theme,
+    get_cached_site_favicon_key,
+    get_cached_favicon_url,
+    set_cached_favicon_url,
     get_setting,
     SETUP_COMPLETED_AT_KEY,
 )
@@ -575,6 +578,7 @@ def _build_site_app(
             "static_url": static_url,
             "theme_url": ThemeStaticURL(static_url, lambda _t=theme: _t),
             "login_url": lambda: f"https://{settings.domain}/auth/login",
+            "favicon_url": get_cached_favicon_url,
         },
         extra_filters={"sized": _sized_url},
         register_for_updates=False,
@@ -744,6 +748,16 @@ def create_app() -> ASGIApp:
         backend = await storage_manager.get(store)
         return await backend.get_url(key_or_asset)
 
+    async def _resolve_favicon_url():
+        """Resolve the favicon storage key to a URL and cache it."""
+        key = get_cached_site_favicon_key()
+        if not key:
+            set_cached_favicon_url("")
+            return
+        backend = await storage_manager.get()
+        url = await backend.get_url(key)
+        set_cached_favicon_url(url)
+
     # Template configuration
     from skrift.forms import Form, csrf_field as _csrf_field
     from skrift.lib.theme import themes_available
@@ -766,6 +780,7 @@ def create_app() -> ASGIApp:
             "static_url": static_url,
             "theme_url": ThemeStaticURL(static_url, get_cached_site_theme),
             "asset_url": _asset_url,
+            "favicon_url": get_cached_favicon_url,
         },
         extra_filters={"sized": _sized_url},
     )
@@ -810,6 +825,8 @@ def create_app() -> ASGIApp:
                 await load_site_settings_cache(session)
         except Exception:
             logger.info("Startup cache init skipped (DB may not exist)", exc_info=True)
+
+        await _resolve_favicon_url()
 
         update_template_directories()
 

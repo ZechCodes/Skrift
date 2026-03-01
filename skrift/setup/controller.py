@@ -473,6 +473,31 @@ class SetupController(Controller):
                     site_copyright_start_year,
                 )
 
+                # Handle optional favicon upload
+                favicon_file = form_data.get("favicon")
+                if favicon_file and hasattr(favicon_file, "read"):
+                    content = await favicon_file.read()
+                    if content:
+                        from skrift.config import get_settings as get_app_settings
+                        from skrift.lib.storage import StorageManager
+                        from skrift.db.services.asset_service import upload_asset
+
+                        app_settings = get_app_settings()
+                        storage = StorageManager(app_settings.storage)
+                        try:
+                            asset = await upload_asset(
+                                db_session,
+                                storage,
+                                filename=favicon_file.filename or "favicon",
+                                data=content,
+                                content_type=favicon_file.content_type or "image/png",
+                            )
+                            await setting_service.set_setting(
+                                db_session, setting_service.SITE_FAVICON_KEY, asset.key
+                            )
+                        finally:
+                            await storage.close()
+
                 # Reload cache
                 await setting_service.load_site_settings_cache(db_session)
 

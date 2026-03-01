@@ -2,11 +2,26 @@
 
 {% block title %}Site Settings - Skrift{% endblock %}
 
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+.sk-favicon-zone{border:1.5px dashed var(--sk-color-border);border-radius:var(--sk-radius-md);background:var(--sk-color-bg);transition:border-color .15s,background .15s;overflow:hidden}
+.sk-favicon-zone.sk-drag-over{border-color:var(--sk-color-accent);background:rgba(52,211,153,.06)}
+.sk-favicon-empty{display:flex;align-items:center;justify-content:center;padding:.625rem 1rem;cursor:pointer}
+.sk-favicon-empty button{pointer-events:none}
+.sk-favicon-preview{display:flex;align-items:center;gap:.75rem;padding:.625rem 1rem}
+.sk-favicon-preview img{width:2rem;height:2rem;object-fit:cover;border-radius:var(--sk-radius-sm);flex-shrink:0;background:var(--sk-color-surface)}
+.sk-favicon-filename{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8rem;color:var(--sk-color-muted)}
+.sk-favicon-remove{all:unset;cursor:pointer;font-size:1.1rem;line-height:1;color:var(--sk-color-muted);padding:0 .25rem;flex-shrink:0;transition:color .15s}
+.sk-favicon-remove:hover{color:var(--sk-color-error)}
+[hidden].sk-favicon-empty,[hidden].sk-favicon-preview{display:none}
+</style>
+{% endblock %}
+
 {% block content %}
 <h2>Site Settings</h2>
 <p class="description">Configure your site's basic information.</p>
 
-<form method="post" action="/setup/site">
+<form method="post" action="/setup/site" enctype="multipart/form-data">
     <div class="form-group">
         <label for="site_name">Site Name *</label>
         <input type="text" id="site_name" name="site_name" value="{{ settings.site_name }}" required>
@@ -31,9 +46,89 @@
         <small>If different from current year, will show a range (e.g., 2020-2026)</small>
     </div>
 
+    <div class="form-group">
+        <label>Favicon</label>
+        <div class="sk-favicon-zone" id="sk-favicon-zone">
+            <div class="sk-favicon-preview" id="sk-favicon-preview" hidden>
+                <img id="sk-favicon-img" src="" alt="Favicon preview">
+                <span class="sk-favicon-filename" id="sk-favicon-filename"></span>
+                <button type="button" class="sk-favicon-remove" id="sk-favicon-remove" title="Remove">&times;</button>
+            </div>
+            <div class="sk-favicon-empty" id="sk-favicon-empty">
+                <button type="button" class="btn-secondary">Choose image</button>
+            </div>
+            <input type="file" id="sk-favicon-input" name="favicon" accept="image/*" hidden>
+        </div>
+        <small>Optional. Upload a square image for your site's favicon.</small>
+    </div>
+
     <div class="form-actions">
         <a href="/setup/auth" class="btn-secondary" role="button">Back</a>
         <button type="submit">Save &amp; Continue</button>
     </div>
 </form>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    var zone = document.getElementById("sk-favicon-zone");
+    var input = document.getElementById("sk-favicon-input");
+    var preview = document.getElementById("sk-favicon-preview");
+    var img = document.getElementById("sk-favicon-img");
+    var fname = document.getElementById("sk-favicon-filename");
+    var empty = document.getElementById("sk-favicon-empty");
+    var removeBtn = document.getElementById("sk-favicon-remove");
+    if (!zone) return;
+
+    function showPreview(file) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            img.src = e.target.result;
+            fname.textContent = file.name;
+            preview.hidden = false;
+            empty.hidden = true;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function clearPreview() {
+        img.src = "";
+        fname.textContent = "";
+        preview.hidden = true;
+        empty.hidden = false;
+        input.value = "";
+    }
+
+    input.addEventListener("change", function() {
+        if (input.files.length) showPreview(input.files[0]);
+    });
+
+    empty.addEventListener("click", function() { input.click(); });
+    preview.addEventListener("click", function(e) {
+        if (e.target !== removeBtn && !removeBtn.contains(e.target)) input.click();
+    });
+    removeBtn.addEventListener("click", function(e) { e.stopPropagation(); clearPreview(); });
+
+    var dragCounter = 0;
+    zone.addEventListener("dragenter", function(e) { e.preventDefault(); dragCounter++; zone.classList.add("sk-drag-over"); });
+    zone.addEventListener("dragleave", function(e) { e.preventDefault(); dragCounter--; if (dragCounter <= 0) { dragCounter = 0; zone.classList.remove("sk-drag-over"); } });
+    zone.addEventListener("dragover", function(e) { e.preventDefault(); });
+    zone.addEventListener("drop", function(e) {
+        e.preventDefault();
+        dragCounter = 0;
+        zone.classList.remove("sk-drag-over");
+        var files = e.dataTransfer.files;
+        if (files.length) {
+            var file = files[0];
+            if (file.type.startsWith("image/")) {
+                var dt = new DataTransfer();
+                dt.items.add(file);
+                input.files = dt.files;
+                showPreview(file);
+            }
+        }
+    });
+})();
+</script>
 {% endblock %}
