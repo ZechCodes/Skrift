@@ -16,12 +16,14 @@ from skrift.db.base import Base
 logger = logging.getLogger("alembic.env")
 
 # Import all models to ensure they're registered with Base.metadata
-from skrift.db.models.notification import StoredNotification  # noqa: F401
+from skrift.db.models.asset import Asset  # noqa: F401
+from skrift.db.models.notification import DismissedNotification, NotificationSubscription, StoredNotification  # noqa: F401
 from skrift.db.models.oauth_account import OAuthAccount  # noqa: F401
+from skrift.db.models.page import Page  # noqa: F401
+from skrift.db.models.page_revision import PageRevision  # noqa: F401
+from skrift.db.models.role import Role, RolePermission  # noqa: F401
 from skrift.db.models.setting import Setting  # noqa: F401
 from skrift.db.models.user import User  # noqa: F401
-from skrift.db.models.page import Page  # noqa: F401
-from skrift.db.models.role import Role, RolePermission  # noqa: F401
 
 # Dynamically import user model modules from app.yaml
 import importlib
