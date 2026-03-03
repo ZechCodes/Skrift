@@ -50,6 +50,7 @@ class OpenGraphMeta:
     url: str
     site_name: str
     type: str = "website"
+    twitter_card: str = "summary_large_image"
 
     def __html__(self) -> str:
         parts = [
@@ -62,6 +63,9 @@ class OpenGraphMeta:
             parts.append(_og_tag("og:description", self.description))
         if self.image:
             parts.append(_og_tag("og:image", self.image))
+        parts.append(_meta_tag("twitter:card", self.twitter_card))
+        if self.image:
+            parts.append(_meta_tag("twitter:image", self.image))
         return Markup("\n    ".join(parts))
 
 
@@ -104,6 +108,7 @@ async def get_page_og_meta(
     page: "Page",
     site_name: str,
     base_url: str,
+    featured_image_url: str | None = None,
 ) -> OpenGraphMeta:
     """Generate OpenGraph metadata for a page.
 
@@ -111,6 +116,7 @@ async def get_page_og_meta(
         page: The page to generate metadata for
         site_name: The site name
         base_url: Base URL for URL generation
+        featured_image_url: Optional fallback image URL from the page's featured asset
 
     Returns:
         OpenGraphMeta dataclass with the metadata
@@ -122,11 +128,12 @@ async def get_page_og_meta(
     # Use og_* fields if set, otherwise fall back to page fields
     og_title = page.og_title or page.title
     og_description = page.og_description or page.meta_description
+    image = page.og_image or featured_image_url
 
     meta = OpenGraphMeta(
         title=og_title,
         description=og_description,
-        image=page.og_image,
+        image=image,
         url=url,
         site_name=site_name,
     )

@@ -117,11 +117,7 @@ def create_public_page_type_controller(
             site_name = get_cached_site_name()
             base_url = get_cached_site_base_url() or str(request.base_url).rstrip("/")
             seo_meta = await get_page_seo_meta(page, site_name, base_url)
-            og_meta = await get_page_og_meta(page, site_name, base_url)
-
-            # Use featured image as og:image fallback
-            if not og_meta.image and featured_image_url:
-                og_meta.image = featured_image_url
+            og_meta = await get_page_og_meta(page, site_name, base_url, featured_image_url=featured_image_url)
 
             template = Template(
                 type_name, slug,
