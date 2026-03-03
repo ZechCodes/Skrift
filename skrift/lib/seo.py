@@ -12,6 +12,13 @@ if TYPE_CHECKING:
     from skrift.db.models import Page
 
 
+def _ensure_https(url: str) -> str:
+    """Upgrade http:// to https:// for public-facing URLs."""
+    if url.startswith("http://"):
+        return "https://" + url[7:]
+    return url
+
+
 def _meta_tag(name: str, content: str) -> str:
     return f'<meta name="{escape(name)}" content="{escape(content)}">'
 
@@ -84,6 +91,8 @@ async def get_page_seo_meta(
     Returns:
         SEOMeta dataclass with the metadata
     """
+    base_url = _ensure_https(base_url)
+
     # Build canonical URL
     slug = page.slug.strip("/")
     canonical_url = f"{base_url.rstrip('/')}/{slug}" if slug else base_url.rstrip("/")
@@ -121,6 +130,8 @@ async def get_page_og_meta(
     Returns:
         OpenGraphMeta dataclass with the metadata
     """
+    base_url = _ensure_https(base_url)
+
     # Build URL
     slug = page.slug.strip("/")
     url = f"{base_url.rstrip('/')}/{slug}" if slug else base_url.rstrip("/")
@@ -131,6 +142,8 @@ async def get_page_og_meta(
     image = page.og_image or featured_image_url
     if image and not image.startswith(("http://", "https://")):
         image = f"{base_url.rstrip('/')}/{image.lstrip('/')}"
+    elif image:
+        image = _ensure_https(image)
 
     meta = OpenGraphMeta(
         title=og_title,
