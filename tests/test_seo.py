@@ -177,6 +177,56 @@ class TestGetPageOgMeta:
         assert meta.type == "article"
 
     @pytest.mark.asyncio
+    async def test_featured_image_url_fallback(self, mock_page, clean_hooks):
+        """Test that featured_image_url is used when og_image is None."""
+        mock_page.og_image = None
+        meta = await get_page_og_meta(
+            mock_page, "My Site", "https://example.com",
+            featured_image_url="https://example.com/featured.jpg",
+        )
+
+        assert meta.image == "https://example.com/featured.jpg"
+
+    @pytest.mark.asyncio
+    async def test_og_image_takes_precedence_over_featured(self, mock_page, clean_hooks):
+        """Test that og_image takes precedence over featured_image_url."""
+        mock_page.og_image = "https://example.com/og-specific.jpg"
+        meta = await get_page_og_meta(
+            mock_page, "My Site", "https://example.com",
+            featured_image_url="https://example.com/featured.jpg",
+        )
+
+        assert meta.image == "https://example.com/og-specific.jpg"
+
+    @pytest.mark.asyncio
+    async def test_twitter_card_in_html(self, mock_page, clean_hooks):
+        """Test that __html__() emits twitter:card meta tag."""
+        meta = await get_page_og_meta(mock_page, "My Site", "https://example.com")
+        html = meta.__html__()
+
+        assert 'name="twitter:card"' in html
+        assert 'content="summary_large_image"' in html
+
+    @pytest.mark.asyncio
+    async def test_twitter_image_in_html(self, mock_page, clean_hooks):
+        """Test that __html__() emits twitter:image when image is set."""
+        mock_page.og_image = "https://example.com/image.jpg"
+        meta = await get_page_og_meta(mock_page, "My Site", "https://example.com")
+        html = meta.__html__()
+
+        assert 'name="twitter:image"' in html
+        assert 'content="https://example.com/image.jpg"' in html
+
+    @pytest.mark.asyncio
+    async def test_twitter_image_not_in_html_when_no_image(self, mock_page, clean_hooks):
+        """Test that __html__() omits twitter:image when no image is set."""
+        mock_page.og_image = None
+        meta = await get_page_og_meta(mock_page, "My Site", "https://example.com")
+        html = meta.__html__()
+
+        assert 'name="twitter:image"' not in html
+
+    @pytest.mark.asyncio
     async def test_canonical_url_generation_with_trailing_slash(self, mock_page, clean_hooks):
         """Test canonical URL generation handles trailing slashes correctly."""
         meta = await get_page_seo_meta(mock_page, "My Site", "https://example.com/")

@@ -12,6 +12,7 @@ IMAGE_SIZES: dict[str, tuple[int, int | None]] = {
     "small": (400, None),
     "medium": (800, None),
     "cover": (1200, None),
+    "og": (1200, 630),
 }
 
 _FORMAT_TO_CONTENT_TYPE = {
