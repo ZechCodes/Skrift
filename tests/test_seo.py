@@ -112,6 +112,13 @@ class TestGetPageSeoMeta:
         assert meta.robots == "noindex, nofollow"
 
     @pytest.mark.asyncio
+    async def test_http_canonical_url_upgraded_to_https(self, mock_page, clean_hooks):
+        """Test that http:// base_url produces https:// canonical URL."""
+        meta = await get_page_seo_meta(mock_page, "My Site", "http://example.com")
+
+        assert meta.canonical_url == "https://example.com/test-page"
+
+    @pytest.mark.asyncio
     async def test_get_page_seo_meta_with_filter(self, mock_page, clean_hooks):
         """Test that page_seo_meta filter modifies the result."""
         def modify_meta(meta, page, site_name, base_url):
@@ -218,6 +225,28 @@ class TestGetPageOgMeta:
         )
 
         assert meta.image == "https://cdn.example.com/image.jpg"
+
+    @pytest.mark.asyncio
+    async def test_http_base_url_upgraded_to_https(self, mock_page, clean_hooks):
+        """Test that http:// base_url is upgraded to https:// in OG URLs."""
+        mock_page.og_image = None
+        meta = await get_page_og_meta(
+            mock_page, "My Site", "http://example.com",
+            featured_image_url="/storage/default/abc123",
+        )
+
+        assert meta.image == "https://example.com/storage/default/abc123"
+        assert meta.url.startswith("https://")
+
+    @pytest.mark.asyncio
+    async def test_http_og_image_upgraded_to_https(self, mock_page, clean_hooks):
+        """Test that an http:// og_image is upgraded to https://."""
+        mock_page.og_image = "http://example.com/image.jpg"
+        meta = await get_page_og_meta(
+            mock_page, "My Site", "https://example.com",
+        )
+
+        assert meta.image == "https://example.com/image.jpg"
 
     @pytest.mark.asyncio
     async def test_twitter_card_in_html(self, mock_page, clean_hooks):
