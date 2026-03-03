@@ -199,6 +199,27 @@ class TestGetPageOgMeta:
         assert meta.image == "https://example.com/og-specific.jpg"
 
     @pytest.mark.asyncio
+    async def test_relative_image_url_becomes_absolute(self, mock_page, clean_hooks):
+        """Test that a relative image URL is made fully qualified."""
+        mock_page.og_image = None
+        meta = await get_page_og_meta(
+            mock_page, "My Site", "https://example.com",
+            featured_image_url="/storage/default/abc123",
+        )
+
+        assert meta.image == "https://example.com/storage/default/abc123"
+
+    @pytest.mark.asyncio
+    async def test_absolute_image_url_unchanged(self, mock_page, clean_hooks):
+        """Test that an already-absolute image URL is not modified."""
+        mock_page.og_image = "https://cdn.example.com/image.jpg"
+        meta = await get_page_og_meta(
+            mock_page, "My Site", "https://example.com",
+        )
+
+        assert meta.image == "https://cdn.example.com/image.jpg"
+
+    @pytest.mark.asyncio
     async def test_twitter_card_in_html(self, mock_page, clean_hooks):
         """Test that __html__() emits twitter:card meta tag."""
         meta = await get_page_og_meta(mock_page, "My Site", "https://example.com")

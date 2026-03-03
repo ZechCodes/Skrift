@@ -129,6 +129,8 @@ async def get_page_og_meta(
     og_title = page.og_title or page.title
     og_description = page.og_description or page.meta_description
     image = page.og_image or featured_image_url
+    if image and not image.startswith(("http://", "https://")):
+        image = f"{base_url.rstrip('/')}/{image.lstrip('/')}"
 
     meta = OpenGraphMeta(
         title=og_title,
