@@ -140,10 +140,16 @@ def load_controllers() -> list:
         sys.path.insert(0, cwd)
 
     controllers = []
+    seen: set[type] = set()
     for controller_spec in config.get("controllers", []):
         module_path, class_name = controller_spec.split(":")
         module = importlib.import_module(module_path)
         controller_class = getattr(module, class_name)
+        if controller_class in seen:
+            raise ValueError(
+                f"Duplicate controller registered: {controller_spec}"
+            )
+        seen.add(controller_class)
         controllers.append(controller_class)
 
         # Auto-expand AdminController to include split sub-controllers
@@ -185,10 +191,17 @@ def load_site_controllers(specs: list[str]) -> list:
         sys.path.insert(0, cwd)
 
     controllers = []
+    seen: set[type] = set()
     for spec in specs:
         module_path, class_name = spec.split(":")
         module = importlib.import_module(module_path)
-        controllers.append(getattr(module, class_name))
+        controller_class = getattr(module, class_name)
+        if controller_class in seen:
+            raise ValueError(
+                f"Duplicate controller registered: {spec}"
+            )
+        seen.add(controller_class)
+        controllers.append(controller_class)
     return controllers
 
 
