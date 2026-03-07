@@ -30,9 +30,21 @@
             this._connectingSince = null;
             this._connectingTimeout = null;
             this._lastTimestamp = null;
+            this._hiddenSince = null;
             this._config = {};
 
-            this._onFocus = () => this._connect();
+            this._onVisibilityChange = () => {
+                if (document.visibilityState === "visible") {
+                    this._onPageVisible();
+                } else {
+                    this._hiddenSince = Date.now();
+                    if (!this._config.persistConnection) {
+                        this._disconnect();
+                        this._setStatus("suspended");
+                    }
+                }
+            };
+            this._onFocus = () => this._onPageVisible();
             this._onBlur = () => {
                 if (!this._config.persistConnection) {
                     this._disconnect();
@@ -40,13 +52,42 @@
                 }
             };
 
+            document.addEventListener("visibilitychange", this._onVisibilityChange);
             window.addEventListener("focus", this._onFocus);
             window.addEventListener("blur", this._onBlur);
             this._connect();
         }
 
         configure(options) {
+            if (options.statusIndicator && this._config.statusIndicator) {
+                if (options.statusIndicator.labels) {
+                    options.statusIndicator.labels = Object.assign(
+                        {},
+                        this._config.statusIndicator.labels,
+                        options.statusIndicator.labels,
+                    );
+                }
+                options.statusIndicator = Object.assign(
+                    {},
+                    this._config.statusIndicator,
+                    options.statusIndicator,
+                );
+            }
             Object.assign(this._config, options);
+        }
+
+        get _statusConfig() {
+            const cfg = this._config.statusIndicator || {};
+            return {
+                enabled: cfg.enabled !== false,
+                element: cfg.element || null,
+                labels: Object.assign({
+                    connected: "Connected",
+                    suspended: "Paused",
+                    connecting: "Connecting",
+                    disconnected: "Disconnected",
+                }, cfg.labels),
+            };
         }
 
         _getModeConfig(mode) {
@@ -127,6 +168,37 @@
             }
         }
 
+        _onPageVisible() {
+            if (this._config.persistConnection && this._es) {
+                this._healthCheck();
+            } else {
+                this._connect();
+            }
+        }
+
+        _healthCheck() {
+            if (!this._es) {
+                this._connect();
+                return;
+            }
+
+            if (this._es.readyState === EventSource.CLOSED) {
+                this._es = null;
+                this._connect();
+                return;
+            }
+
+            const hiddenDuration = this._hiddenSince
+                ? Date.now() - this._hiddenSince
+                : 0;
+            this._hiddenSince = null;
+
+            if (hiddenDuration > 30000) {
+                this._disconnect();
+                this._connect();
+            }
+        }
+
         _handleNotification(data) {
             if (data.type === "dismissed") {
                 this._removeDismissed(data.id);
@@ -187,7 +259,25 @@
         }
 
         _ensureStatusIndicator() {
+            const sc = this._statusConfig;
+            if (!sc.enabled) return null;
             if (this._statusIndicator) return this._statusIndicator;
+
+            if (sc.element) {
+                const el = (typeof sc.element === "string")
+                    ? document.querySelector(sc.element)
+                    : sc.element;
+                if (el) {
+                    if (!el.querySelector(".sk-status-dot")) {
+                        el.innerHTML =
+                            '<span class="sk-status-dot"></span>' +
+                            '<span class="sk-status-label"></span>';
+                    }
+                    this._statusIndicator = el;
+                    return el;
+                }
+            }
+
             const el = document.createElement("div");
             el.className = "sk-status-indicator sk-status-indicator-hidden";
             el.innerHTML =
@@ -200,8 +290,11 @@
 
         _updateStatusIndicator() {
             const el = this._ensureStatusIndicator();
+            if (!el) return;
+
             const dot = el.querySelector(".sk-status-dot");
             const label = el.querySelector(".sk-status-label");
+            const labels = this._statusConfig.labels;
 
             clearTimeout(this._statusHideTimeout);
 
@@ -211,7 +304,7 @@
                 this._connectingTimeout = null;
                 this._connectingSince = null;
                 dot.style.backgroundColor = "var(--sk-color-success)";
-                label.textContent = "Connected";
+                label.textContent = labels.connected;
                 el.classList.remove("sk-status-indicator-hidden");
                 this._statusHideTimeout = setTimeout(() => {
                     el.classList.add("sk-status-indicator-hidden");
@@ -221,7 +314,7 @@
                 this._connectingTimeout = null;
                 this._connectingSince = null;
                 dot.style.backgroundColor = "var(--sk-color-muted)";
-                label.textContent = "Paused";
+                label.textContent = labels.suspended;
                 el.classList.remove("sk-status-indicator-hidden");
                 this._statusHideTimeout = setTimeout(() => {
                     el.classList.add("sk-status-indicator-hidden");
@@ -233,17 +326,17 @@
                 el.classList.remove("sk-status-indicator-hidden");
                 if (Date.now() - this._connectingSince >= 10000) {
                     dot.style.backgroundColor = "var(--sk-color-error)";
-                    label.textContent = "Disconnected";
+                    label.textContent = labels.disconnected;
                 } else {
                     dot.style.backgroundColor = "var(--sk-color-warning)";
-                    label.textContent = "Connecting";
+                    label.textContent = labels.connecting;
                     if (!this._connectingTimeout) {
                         const remaining = 10000 - (Date.now() - this._connectingSince);
                         this._connectingTimeout = setTimeout(() => {
                             this._connectingTimeout = null;
                             if (this._status === "connecting" || this._status === "reconnecting") {
                                 dot.style.backgroundColor = "var(--sk-color-error)";
-                                label.textContent = "Disconnected";
+                                label.textContent = labels.disconnected;
                             }
                         }, remaining);
                     }
@@ -251,7 +344,7 @@
             } else {
                 // disconnected (transient fallback)
                 dot.style.backgroundColor = "var(--sk-color-error)";
-                label.textContent = "Disconnected";
+                label.textContent = labels.disconnected;
                 el.classList.remove("sk-status-indicator-hidden");
             }
         }

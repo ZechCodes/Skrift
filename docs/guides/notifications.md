@@ -191,6 +191,53 @@ window.__skriftNotifications.configure({
 });
 ```
 
+When `persistConnection` is enabled, the client automatically performs a health check when the page becomes visible again. On mobile devices, the OS may silently kill background connections even though the browser still reports them as open. If the page was hidden for more than 30 seconds, the client force-reconnects to guarantee liveness. For shorter background periods, it trusts the browser's connection state.
+
+The client listens for both `visibilitychange` (reliable on mobile) and `focus`/`blur` (catches desktop window switches) to detect page visibility.
+
+#### Status Indicator
+
+The built-in status indicator shows connection state as a colored dot with a label. You can customize it or disable it entirely:
+
+```javascript
+window.__skriftNotifications.configure({
+    statusIndicator: {
+        enabled: false,  // Disable the indicator entirely (default: true)
+    },
+});
+```
+
+Point the indicator at your own DOM element instead of the auto-created one:
+
+```javascript
+window.__skriftNotifications.configure({
+    statusIndicator: {
+        element: "#my-status",  // CSS selector or HTMLElement
+    },
+});
+```
+
+The element will have `.sk-status-dot` and `.sk-status-label` spans injected if they don't already exist.
+
+Customize the text shown for each connection state:
+
+```javascript
+window.__skriftNotifications.configure({
+    statusIndicator: {
+        labels: {
+            connected: "Live",
+            suspended: "Paused",
+            connecting: "Connecting…",
+            disconnected: "Offline",
+        },
+    },
+});
+```
+
+Partial overrides are supported — only the labels you specify are changed, the rest keep their defaults.
+
+The `sk:notification-status` event fires regardless of whether the indicator is enabled.
+
 Default mode configurations:
 
 | Mode | `dismiss` | `autoClear` |
@@ -219,7 +266,8 @@ if (saved) window.__skriftNotifications.lastSeen = parseFloat(saved);
 
 ### Connection Behavior
 
-- Auto-connects on page load and `window.focus`, disconnects on `window.blur` (opt out with `persistConnection: true`)
+- Auto-connects on page load and on `visibilitychange`/`focus`, disconnects on `blur` (opt out with `persistConnection: true`)
+- When `persistConnection` is enabled, force-reconnects if the page was hidden for more than 30 seconds (handles silently killed mobile connections)
 - Reconnects after 5 seconds on error
 - Deduplicates via internal ID set
 - Max visible toasts: 3 (desktop) / 2 (mobile); excess queued

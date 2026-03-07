@@ -113,11 +113,35 @@ const _modeDefaults = {
 
 Override via `window.__skriftNotifications.configure({ timeseries: { autoClear: 12000 } })`.
 
-Set `persistConnection: true` to keep the SSE connection alive when the tab loses focus:
+Set `persistConnection: true` to keep the SSE connection alive when the tab loses focus. When enabled, the client health-checks on page-visible: force-reconnects if hidden > 30s (handles silently killed mobile connections), trusts `readyState` otherwise.
 
 ```javascript
 window.__skriftNotifications.configure({ persistConnection: true });
 ```
+
+### Status Indicator Configuration
+
+The built-in status indicator can be disabled, pointed at a custom element, or have its labels customized:
+
+```javascript
+window.__skriftNotifications.configure({
+    statusIndicator: {
+        enabled: false,              // default true; false = no DOM, no updates
+        element: "#my-status",       // CSS selector or HTMLElement; null = auto-create
+        labels: {                    // custom text per state
+            connected: "Live",
+            suspended: "Paused",
+            connecting: "Connecting…",
+            disconnected: "Offline",
+        },
+    },
+});
+```
+
+- `enabled: false` prevents DOM creation; `sk:notification-status` events still fire
+- `element` accepts a CSS selector string or an `HTMLElement`; `.sk-status-dot` and `.sk-status-label` spans are injected if missing
+- `labels` supports partial overrides (deep-merged with defaults via `configure()`)
+- `_statusConfig` getter resolves config with defaults: `{ enabled, element, labels }`
 
 ## Notification Types
 
@@ -263,7 +287,8 @@ During the Live phase, group-based replacement sends a `"dismissed"` event for t
 
 ## Client Behavior
 
-- Auto-connects on page load and `window.focus`, disconnects on `window.blur` (opt out with `configure({ persistConnection: true })`)
+- Auto-connects on page load and `visibilitychange`/`focus`, disconnects on `blur` (opt out with `configure({ persistConnection: true })`)
+- When `persistConnection` is enabled, health-checks on page-visible: force-reconnects if hidden > 30s, trusts `readyState` otherwise
 - Reconnects after 5s on error
 - Deduplicates via `_displayedIds` Set
 - Max visible toasts: 3 (desktop) / 2 (mobile); excess queued
@@ -287,7 +312,7 @@ document.addEventListener('sk:notification', (e) => {
 
 ```javascript
 document.addEventListener('sk:notification-status', (e) => {
-    console.log(e.detail.status); // "connecting" | "connected" | "disconnected" | "reconnecting"
+    console.log(e.detail.status); // "connecting" | "connected" | "disconnected" | "reconnecting" | "suspended"
 });
 ```
 
