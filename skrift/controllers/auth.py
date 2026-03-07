@@ -33,8 +33,11 @@ from skrift.auth.session_keys import (
     SESSION_USER_NAME,
     SESSION_USER_PICTURE_URL,
 )
+from jinja2.exceptions import TemplatesNotFound
+
 from skrift.forms import verify_csrf
 from skrift.lib.flash import flash_error, flash_info, flash_success
+from skrift.lib.template import resolve_template_name
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
 
 logger = logging.getLogger(__name__)
@@ -214,8 +217,11 @@ class AuthController(Controller):
         # Dummy provider shows local login form instead of redirecting to OAuth
         if provider == DUMMY_PROVIDER_KEY:
             flash = request.session.pop("flash", None)
+            template_name = resolve_template_name(
+                request.app.template_engine, "dummy_login.html", "auth/dummy_login.html"
+            )
             return TemplateResponse(
-                "auth/dummy_login.html",
+                template_name,
                 context={"flash": flash},
             )
 
@@ -327,8 +333,11 @@ class AuthController(Controller):
         # Check if dummy provider is configured
         has_dummy = DUMMY_PROVIDER_KEY in settings.auth.providers
 
+        template_name = resolve_template_name(
+            request.app.template_engine, "login.html", "auth/login.html"
+        )
         return TemplateResponse(
-            "auth/login.html",
+            template_name,
             context={
                 "flash": flash,
                 "providers": providers,
@@ -381,7 +390,13 @@ class AuthController(Controller):
         return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
 
     @get("/logout")
-    async def logout(self, request: Request) -> Redirect:
-        """Clear session and redirect to home."""
+    async def logout(self, request: Request) -> Redirect | TemplateResponse:
+        """Clear session and redirect to home, or render logout template if available."""
         request.session.clear()
-        return Redirect(path="/")
+        try:
+            template_name = resolve_template_name(
+                request.app.template_engine, "logout.html", "auth/logout.html"
+            )
+            return TemplateResponse(template_name, context={})
+        except TemplatesNotFound:
+            return Redirect(path="/")
