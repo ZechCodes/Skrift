@@ -554,6 +554,7 @@ def _build_site_app(
     site_static_dir: Path,
     package_static_dir: Path,
     page_types: list | None = None,
+    storage_manager=None,
 ) -> ASGIApp:
     """Build a lightweight Litestar app for a subdomain site.
 
@@ -614,6 +615,7 @@ def _build_site_app(
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
+    site_app.state.storage_manager = storage_manager
 
     from skrift.middleware.static import StaticFilesMiddleware
     return StaticFilesMiddleware(
@@ -929,6 +931,7 @@ def create_app() -> ASGIApp:
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
                 page_types=subdomain_page_types.pop(site_cfg.subdomain, []),
+                storage_manager=storage_manager,
             )
 
         # Auto-create apps for subdomains referenced only by page types
@@ -949,6 +952,7 @@ def create_app() -> ASGIApp:
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
                 page_types=pts,
+                storage_manager=storage_manager,
             )
 
         if forced_subdomain:
