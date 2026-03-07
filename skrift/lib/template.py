@@ -113,6 +113,17 @@ class Template:
         return f"Template({self.template_type!r}, {', '.join(repr(s) for s in self.slugs)})"
 
 
+def resolve_template_name(engine: JinjaTemplateEngine, *candidates: str) -> str:
+    """Return the first template name that exists from the candidate list.
+
+    Uses Jinja2's select_template() which searches through the configured
+    template directories (theme → site → package) for each candidate.
+
+    Raises jinja2.TemplatesNotFound if none of the candidates exist.
+    """
+    return engine.engine.select_template(candidates).name
+
+
 def get_template_config(template_dir: Path) -> TemplateConfig:
     """Get the Jinja template configuration.
 

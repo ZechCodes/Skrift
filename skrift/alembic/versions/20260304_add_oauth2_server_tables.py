@@ -23,7 +23,7 @@ def upgrade() -> None:
         sa.Column("display_name", sa.String(255), nullable=False),
         sa.Column("redirect_uris", sa.Text(), nullable=False, server_default=""),
         sa.Column("allowed_scopes", sa.Text(), nullable=False, server_default=""),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("sa_orm_sentinel", sa.Integer(), nullable=True),

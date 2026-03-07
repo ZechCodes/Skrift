@@ -554,6 +554,7 @@ def _build_site_app(
     site_static_dir: Path,
     package_static_dir: Path,
     page_types: list | None = None,
+    storage_manager=None,
 ) -> ASGIApp:
     """Build a lightweight Litestar app for a subdomain site.
 
@@ -561,7 +562,12 @@ def _build_site_app(
     with the primary app. Gets its own controllers and template directories.
     """
     from skrift.app_factory import get_template_directories_for_theme
+    from jinja2 import pass_context
     from skrift.forms import Form, csrf_field as _csrf_field
+
+    @pass_context
+    def _csrf_field_ctx(context):
+        return _csrf_field(context["request"])
 
     controllers = load_site_controllers(site_config.controllers)
 
@@ -587,7 +593,7 @@ def _build_site_app(
             "active_theme": lambda _t=theme: _t,
             "themes_available": lambda: False,
             "Form": Form,
-            "csrf_field": _csrf_field,
+            "csrf_field": _csrf_field_ctx,
             "static_url": static_url,
             "theme_url": ThemeStaticURL(static_url, lambda _t=theme: _t),
             "login_url": lambda: f"https://{settings.domain}/auth/login",
@@ -614,6 +620,7 @@ def _build_site_app(
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
+    site_app.state.storage_manager = storage_manager
 
     from skrift.middleware.static import StaticFilesMiddleware
     return StaticFilesMiddleware(
@@ -772,8 +779,13 @@ def create_app() -> ASGIApp:
         set_cached_favicon_url(url)
 
     # Template configuration
+    from jinja2 import pass_context
     from skrift.forms import Form, csrf_field as _csrf_field
     from skrift.lib.theme import themes_available
+
+    @pass_context
+    def _csrf_field_ctx(context):
+        return _csrf_field(context["request"])
 
     def _sized_url(url: str, size: str) -> str:
         sep = "&" if "?" in url else "?"
@@ -789,7 +801,7 @@ def create_app() -> ASGIApp:
             "active_theme": get_cached_site_theme,
             "themes_available": themes_available,
             "Form": Form,
-            "csrf_field": _csrf_field,
+            "csrf_field": _csrf_field_ctx,
             "static_url": static_url,
             "theme_url": ThemeStaticURL(static_url, get_cached_site_theme),
             "asset_url": _asset_url,
@@ -929,6 +941,7 @@ def create_app() -> ASGIApp:
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
                 page_types=subdomain_page_types.pop(site_cfg.subdomain, []),
+                storage_manager=storage_manager,
             )
 
         # Auto-create apps for subdomains referenced only by page types
@@ -949,6 +962,7 @@ def create_app() -> ASGIApp:
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
                 page_types=pts,
+                storage_manager=storage_manager,
             )
 
         if forced_subdomain:
