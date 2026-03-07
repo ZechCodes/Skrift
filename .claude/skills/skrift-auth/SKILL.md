@@ -89,10 +89,10 @@ class ArticleController(Controller):
 
 | Role | Permissions | Notes |
 |------|-------------|-------|
-| `admin` | `administrator` | Bypasses all permission checks |
-| `editor` | Can manage pages | |
-| `author` | Can view drafts | |
-| `moderator` | Can moderate content | |
+| `admin` | `administrator`, `manage-users`, `manage-pages`, `modify-site`, `manage-oauth-clients` | Bypasses all permission checks |
+| `editor` | `view-drafts`, `manage-pages`, `create-pages`, `manage-media` | Can manage all pages |
+| `author` | `view-drafts`, `edit-own-pages`, `delete-own-pages`, `create-pages`, `upload-media` | Can manage own pages |
+| `moderator` | `view-drafts`, `manage-pages`, `create-pages`, `manage-media` | Can moderate content |
 
 ## Custom Role Registration
 

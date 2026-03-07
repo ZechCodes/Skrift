@@ -140,15 +140,21 @@ def load_controllers() -> list:
         sys.path.insert(0, cwd)
 
     controllers = []
+    seen: set[type] = set()
     for controller_spec in config.get("controllers", []):
         module_path, class_name = controller_spec.split(":")
         module = importlib.import_module(module_path)
         controller_class = getattr(module, class_name)
+        if controller_class in seen:
+            raise ValueError(
+                f"Duplicate controller registered: {controller_spec}"
+            )
+        seen.add(controller_class)
         controllers.append(controller_class)
 
         # Auto-expand AdminController to include split sub-controllers
         if class_name == "AdminController" and module_path == "skrift.admin.controller":
-            for sub_name in ("UserAdminController", "SettingsAdminController", "MediaAdminController"):
+            for sub_name in ("UserAdminController", "SettingsAdminController", "MediaAdminController", "OAuth2ClientAdminController"):
                 sub_class = getattr(module, sub_name, None)
                 if sub_class and sub_class not in controllers:
                     controllers.append(sub_class)
@@ -185,10 +191,17 @@ def load_site_controllers(specs: list[str]) -> list:
         sys.path.insert(0, cwd)
 
     controllers = []
+    seen: set[type] = set()
     for spec in specs:
         module_path, class_name = spec.split(":")
         module = importlib.import_module(module_path)
-        controllers.append(getattr(module, class_name))
+        controller_class = getattr(module, class_name)
+        if controller_class in seen:
+            raise ValueError(
+                f"Duplicate controller registered: {spec}"
+            )
+        seen.add(controller_class)
+        controllers.append(controller_class)
     return controllers
 
 
@@ -794,13 +807,15 @@ def create_app() -> ASGIApp:
     from skrift.lib.notification_backends import InMemoryBackend, load_backend
     from skrift.lib.notifications import notifications as notification_service
 
-    # OAuth2 controller — only registered when clients are configured
+    # OAuth2 controller — only registered when oauth2 is enabled
     oauth2_handlers: list = []
-    if settings.oauth2.clients:
+    if settings.oauth2_enabled:
         oauth2_handlers.append(OAuth2Controller)
-        # Exempt token endpoint from CSRF since it's called by external clients
+        # Exempt OAuth2 API endpoints from CSRF since they're called by external clients
         if settings.csrf is not None:
             settings.csrf.exclude.append("/oauth/token")
+            settings.csrf.exclude.append("/oauth/revoke")
+            settings.csrf.exclude.append("/oauth/introspect")
 
     # Webhook controller — only registered when a secret is configured
     webhook_handlers: list = []

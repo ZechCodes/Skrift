@@ -171,6 +171,8 @@ class MyModel(Base):
 | `PageRevision` | `page_revisions` | Content history |
 | `Setting` | `settings` | Key-value site settings |
 | `StoredNotification` | `stored_notifications` | Persistent notifications with `mode` column (Redis/PgNotify backends) |
+| `OAuth2Client` | `oauth2_clients` | Registered OAuth2 client applications |
+| `RevokedToken` | `revoked_tokens` | Revoked token JTIs for OAuth2 server |
 
 Sessions injected via `db_session: AsyncSession` parameter in handlers.
 

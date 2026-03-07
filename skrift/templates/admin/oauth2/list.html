@@ -1,0 +1,49 @@
+{% extends "admin/base.html" %}
+
+{% block title %}OAuth Clients - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>OAuth Clients</h1>
+    <p>Manage registered OAuth2 client applications</p>
+</hgroup>
+
+<div class="sk-form-actions" style="margin-bottom: 1rem;">
+    <a href="/admin/oauth-clients/new" role="button">New Client</a>
+</div>
+
+<table class="sk-admin-table">
+    <thead>
+        <tr>
+            <th>Display Name</th>
+            <th>Client ID</th>
+            <th>Redirect URIs</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for client in clients %}
+        <tr>
+            <td>{{ client.display_name }}</td>
+            <td><code>{{ client.client_id[:16] }}...</code></td>
+            <td>{{ client.redirect_uri_list | length }} URI{{ "s" if client.redirect_uri_list | length != 1 }}</td>
+            <td>
+                {% if client.is_active %}
+                    <span class="sk-role-badge">Active</span>
+                {% else %}
+                    <span class="sk-text-muted">Inactive</span>
+                {% endif %}
+            </td>
+            <td>
+                <a href="/admin/oauth-clients/{{ client.id }}/edit" role="button" class="sk-btn-outline sk-btn-small">Edit</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not clients %}
+<p class="sk-no-items">No OAuth2 clients registered.</p>
+{% endif %}
+{% endblock %}

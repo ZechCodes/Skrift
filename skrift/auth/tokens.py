@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import time
+import uuid
 
 
 def create_signed_token(payload: dict, secret: str, expires_in: int) -> str:
@@ -21,7 +22,7 @@ def create_signed_token(payload: dict, secret: str, expires_in: int) -> str:
     Returns:
         URL-safe base64 string: ``base64(json_payload).base64(signature)``
     """
-    payload = {**payload, "exp": int(time.time()) + expires_in}
+    payload = {**payload, "jti": uuid.uuid4().hex, "exp": int(time.time()) + expires_in}
     payload_bytes = json.dumps(payload, separators=(",", ":")).encode()
     payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode()
 

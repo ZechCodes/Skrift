@@ -86,7 +86,7 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 .env (loaded early) → app.yaml (with $VAR interpolation) → Settings (Pydantic)
 ```
 
-Environment-specific: `app.yaml` (production), `app.dev.yaml` (development), `app.test.yaml` (testing). Set via `SKRIFT_ENV`.
+Environment-specific: `app.yaml` (production), `app.dev.yaml` (development), `app.test.yaml` (testing). Set via `SKRIFT_ENV` or overridden with `skrift -f <path>`. Config files can set `environment: <name>` to propagate `SKRIFT_ENV`.
 
 ```yaml
 db:
@@ -136,11 +136,14 @@ middleware:
 ```bash
 skrift serve --reload --port 8080
 skrift serve --subdomain blog --port 8081  # serve single subdomain site
+skrift -f custom.yaml serve --reload       # use a specific config file
 skrift secret --write .env
 skrift db upgrade head
 skrift db downgrade -1
 skrift db revision -m "desc" --autogenerate
 ```
+
+Global option `-f`/`--config-file` overrides `SKRIFT_ENV`-based config file selection. Applies to all subcommands.
 
 ## Database Layer
 
@@ -168,6 +171,8 @@ class MyModel(Base):
 | `PageRevision` | `page_revisions` | Content history |
 | `Setting` | `settings` | Key-value site settings |
 | `StoredNotification` | `stored_notifications` | Persistent notifications with `mode` column (Redis/PgNotify backends) |
+| `OAuth2Client` | `oauth2_clients` | Registered OAuth2 client applications |
+| `RevokedToken` | `revoked_tokens` | Revoked token JTIs for OAuth2 server |
 
 Sessions injected via `db_session: AsyncSession` parameter in handlers.
 
