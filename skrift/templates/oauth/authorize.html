@@ -99,7 +99,7 @@
         {% endif %}
 
         <form method="post" action="/oauth/authorize">
-            {{ csrf_field(request) }}
+            {{ csrf_field() }}
             <div class="consent-buttons">
                 <button type="submit" name="action" value="deny" class="btn-deny">Deny</button>
                 <button type="submit" name="action" value="allow" class="btn-allow">Allow</button>
