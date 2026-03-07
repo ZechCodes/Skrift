@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models import Page
 from skrift.db.services import revision_service
-from skrift.lib.hooks import hooks, BEFORE_PAGE_SAVE, AFTER_PAGE_SAVE, BEFORE_PAGE_DELETE, AFTER_PAGE_DELETE
+from skrift.lib.hooks import hooks, BEFORE_PAGE_SAVE, AFTER_PAGE_SAVE, BEFORE_PAGE_DELETE, AFTER_PAGE_DELETE, AFTER_PAGE_PUBLISHED, AFTER_PAGE_UNPUBLISHED
 
 
 OrderBy = Literal["order", "created", "published", "title"]
@@ -254,6 +254,9 @@ async def update_page(
         if title_changed or content_changed:
             await revision_service.create_revision(db_session, page, user_id)
 
+    # Capture publish state before mutation for transition detection
+    was_published = page.is_published
+
     # Fire before_page_save action (is_new=False for updates)
     await hooks.do_action(BEFORE_PAGE_SAVE, page, is_new=False)
 
@@ -291,6 +294,13 @@ async def update_page(
 
     # Fire after_page_save action
     await hooks.do_action(AFTER_PAGE_SAVE, page, is_new=False)
+
+    # Fire publish/unpublish hooks on state transition
+    if is_published is not None:
+        if is_published and not was_published:
+            await hooks.do_action(AFTER_PAGE_PUBLISHED, page)
+        elif not is_published and was_published:
+            await hooks.do_action(AFTER_PAGE_UNPUBLISHED, page)
 
     return page
 

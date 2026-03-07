@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
 from skrift.db.models.role import Role, RolePermission
+from skrift.lib.hooks import hooks
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,6 +111,7 @@ async def assign_role_to_user(
         user.roles.append(role)
         await session.commit()
         invalidate_user_permissions_cache(user_id)
+        await hooks.do_action("after_role_assigned", user, role)
 
     return True
 
@@ -140,6 +142,7 @@ async def remove_role_from_user(
             user.roles.remove(role)
             await session.commit()
             invalidate_user_permissions_cache(user_id)
+            await hooks.do_action("after_role_removed", user, role)
             return True
 
     return False

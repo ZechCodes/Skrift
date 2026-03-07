@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models.oauth2_client import OAuth2Client
 from skrift.db.models.revoked_token import RevokedToken
+from skrift.lib.hooks import hooks
 
 
 async def get_client_by_client_id(db_session: AsyncSession, client_id: str) -> OAuth2Client | None:
@@ -46,6 +47,7 @@ async def create_client(
     )
     db_session.add(client)
     await db_session.commit()
+    await hooks.do_action("after_oauth2_client_created", client)
     return client
 
 
@@ -67,6 +69,7 @@ async def update_client(
     if is_active is not None:
         client.is_active = is_active
     await db_session.commit()
+    await hooks.do_action("after_oauth2_client_updated", client)
     return client
 
 
@@ -77,8 +80,10 @@ async def delete_client(db_session: AsyncSession, client_id: UUID) -> None:
     )
     client = result.scalar_one_or_none()
     if client:
+        await hooks.do_action("before_oauth2_client_deleted", client)
         await db_session.delete(client)
         await db_session.commit()
+        await hooks.do_action("after_oauth2_client_deleted", client_id)
 
 
 async def regenerate_client_secret(db_session: AsyncSession, client: OAuth2Client) -> str:
@@ -86,6 +91,7 @@ async def regenerate_client_secret(db_session: AsyncSession, client: OAuth2Clien
     new_secret = secrets.token_urlsafe(48)
     client.client_secret = new_secret
     await db_session.commit()
+    await hooks.do_action("after_oauth2_client_secret_regenerated", client)
     return new_secret
 
 
@@ -99,6 +105,7 @@ async def revoke_token(
     revoked = RevokedToken(jti=jti, token_type=token_type, expires_at=expires_at)
     db_session.add(revoked)
     await db_session.commit()
+    await hooks.do_action("after_token_revoked", jti, token_type)
 
 
 async def is_token_revoked(db_session: AsyncSession, jti: str) -> bool:

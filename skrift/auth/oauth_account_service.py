@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from skrift.auth.providers import NormalizedUserData
 from skrift.db.models.oauth_account import OAuthAccount
 from skrift.db.models.user import User
+from skrift.lib.hooks import hooks
 
 
 @dataclass
@@ -61,6 +62,7 @@ async def find_or_create_oauth_user(
         if tokens:
             oauth_account.access_token = tokens.get("access_token")
             oauth_account.refresh_token = tokens.get("refresh_token")
+        await hooks.do_action("after_user_update", user)
         return LoginResult(user=user, oauth_account=oauth_account, is_new_user=False)
 
     # Step 2: Check if a user with this email already exists
@@ -86,6 +88,7 @@ async def find_or_create_oauth_user(
         if user_data.picture_url:
             user.picture_url = user_data.picture_url
         user.last_login_at = datetime.now(UTC)
+        await hooks.do_action("after_user_update", user)
         return LoginResult(user=user, oauth_account=oauth_account, is_new_user=False)
 
     # Step 3: Create new user + OAuth account
@@ -97,6 +100,7 @@ async def find_or_create_oauth_user(
     )
     db_session.add(user)
     await db_session.flush()
+    await hooks.do_action("after_user_created_db", user)
 
     oauth_account = OAuthAccount(
         provider=provider,

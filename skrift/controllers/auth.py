@@ -37,6 +37,7 @@ from jinja2.exceptions import TemplatesNotFound
 
 from skrift.forms import verify_csrf
 from skrift.lib.flash import flash_error, flash_info, flash_success
+from skrift.lib.hooks import hooks
 from skrift.lib.template import resolve_template_name
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
 
@@ -306,7 +307,13 @@ class AuthController(Controller):
         flash_success(request, "Successfully logged in!")
         _set_login_session(request, login_result.user)
 
-        return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
+        await hooks.do_action("after_login", login_result, request)
+        if login_result.is_new_user:
+            await hooks.do_action("after_user_created", login_result, request)
+
+        next_url = _get_safe_redirect_url(request, settings.auth.allowed_redirect_domains)
+        next_url = await hooks.apply_filters("login_redirect", next_url, login_result, request)
+        return Redirect(path=next_url)
 
     @get("/login")
     async def login_page(
@@ -387,11 +394,18 @@ class AuthController(Controller):
         flash_success(request, "Successfully logged in!")
         _set_login_session(request, login_result.user)
 
-        return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
+        await hooks.do_action("after_login", login_result, request)
+        if login_result.is_new_user:
+            await hooks.do_action("after_user_created", login_result, request)
+
+        next_url = _get_safe_redirect_url(request, settings.auth.allowed_redirect_domains)
+        next_url = await hooks.apply_filters("login_redirect", next_url, login_result, request)
+        return Redirect(path=next_url)
 
     @get("/logout")
     async def logout(self, request: Request) -> Redirect | TemplateResponse:
         """Clear session and redirect to home, or render logout template if available."""
+        await hooks.do_action("before_logout", request)
         request.session.clear()
         try:
             template_name = resolve_template_name(
