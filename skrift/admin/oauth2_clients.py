@@ -89,12 +89,9 @@ class OAuth2ClientAdminController(Controller):
             db_session, display_name, redirect_uris, allowed_scopes
         )
 
-        flash_success(
-            request,
-            f"Client created. Client ID: {client.client_id} — Secret: {client.client_secret} "
-            f"(save this now, it won't be shown again in full)"
-        )
-        return Redirect(path="/admin/oauth-clients")
+        request.session["new_secret"] = client.client_secret
+        flash_success(request, f"Client '{display_name}' created")
+        return Redirect(path=f"/admin/oauth-clients/{client.id}/edit")
 
     @get(
         "/oauth-clients/{client_db_id:uuid}/edit",
@@ -113,6 +110,7 @@ class OAuth2ClientAdminController(Controller):
             flash_error(request, "Client not found")
             return Redirect(path="/admin/oauth-clients")
 
+        new_secret = request.session.pop("new_secret", None)
         flash_messages = get_flash_messages(request)
         return TemplateResponse(
             "admin/oauth2/edit.html",
@@ -120,6 +118,7 @@ class OAuth2ClientAdminController(Controller):
                 "flash_messages": flash_messages,
                 "client": client,
                 "available_scopes": SCOPE_DEFINITIONS,
+                "new_secret": new_secret,
                 **ctx,
             },
         )
@@ -191,8 +190,6 @@ class OAuth2ClientAdminController(Controller):
             return Redirect(path="/admin/oauth-clients")
 
         new_secret = await oauth2_service.regenerate_client_secret(db_session, client)
-        flash_success(
-            request,
-            f"New secret for '{client.display_name}': {new_secret} (save this now)"
-        )
+        request.session["new_secret"] = new_secret
+        flash_success(request, f"Secret regenerated for '{client.display_name}'")
         return Redirect(path=f"/admin/oauth-clients/{client_db_id}/edit")

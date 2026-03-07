@@ -8,15 +8,58 @@
     <p>{{ "Update client settings" if client else "Register a new OAuth2 client application" }}</p>
 </hgroup>
 
+{% if new_secret %}
+<style nonce="{{ csp_nonce() }}">
+.sk-secret-reveal {
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: 0.5rem;
+}
+.sk-secret-reveal p { margin: 0 0 0.5rem; }
+.sk-secret-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.sk-secret-masked {
+    font-size: 0.95rem;
+    padding: 0.25rem 0.5rem;
+    background: var(--sk-color-bg-subtle, #f8f9fa);
+    border-radius: 0.25rem;
+}
+</style>
+<div class="sk-secret-reveal">
+    <p><strong>Client Secret</strong> — save this now, it won't be shown again</p>
+    <div class="sk-secret-row">
+        <code class="sk-secret-masked">{{ new_secret[:8] }}••••••••••••</code>
+        <span hidden id="sk-secret-full">{{ new_secret }}</span>
+        <button type="button" class="sk-btn-outline sk-btn-small" onclick="copyValue(this, document.getElementById('sk-secret-full').textContent)">Copy</button>
+    </div>
+</div>
+{% endif %}
+
 {% if client %}
 <div style="margin-bottom: 1.5rem; padding: 1rem; background: var(--sk-color-bg-subtle, #f8f9fa); border-radius: 0.5rem;">
-    <p><strong>Client ID:</strong> <code>{{ client.client_id }}</code></p>
+    <p><strong>Client ID:</strong> <code>{{ client.client_id }}</code>
+        <button type="button" class="sk-btn-outline sk-btn-small" onclick="copyValue(this, '{{ client.client_id }}')">Copy</button>
+    </p>
     <p><strong>Client Secret:</strong> <code>{{ client.client_secret[:8] }}••••••••</code></p>
     <form method="post" action="/admin/oauth-clients/{{ client.id }}/regenerate-secret" style="display: inline;">
         {{ csrf_field() }}
         <button type="submit" class="sk-btn-outline sk-btn-small" onclick="return confirm('Regenerate secret? The old secret will stop working immediately.')">Regenerate Secret</button>
     </form>
 </div>
+<script nonce="{{ csp_nonce() }}">
+function copyValue(btn, text) {
+    navigator.clipboard.writeText(text).then(function() {
+        var orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = orig; }, 2000);
+    });
+}
+</script>
 {% endif %}
 
 <form method="post" action="/admin/oauth-clients/{{ client.id ~ '/edit' if client else 'new' }}">
