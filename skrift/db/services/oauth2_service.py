@@ -45,7 +45,7 @@ async def create_client(
         allowed_scopes="\n".join(allowed_scopes),
     )
     db_session.add(client)
-    await db_session.flush()
+    await db_session.commit()
     return client
 
 
@@ -66,7 +66,7 @@ async def update_client(
         client.allowed_scopes = "\n".join(allowed_scopes)
     if is_active is not None:
         client.is_active = is_active
-    await db_session.flush()
+    await db_session.commit()
     return client
 
 
@@ -78,14 +78,14 @@ async def delete_client(db_session: AsyncSession, client_id: UUID) -> None:
     client = result.scalar_one_or_none()
     if client:
         await db_session.delete(client)
-        await db_session.flush()
+        await db_session.commit()
 
 
 async def regenerate_client_secret(db_session: AsyncSession, client: OAuth2Client) -> str:
     """Regenerate a client's secret and return the new value."""
     new_secret = secrets.token_urlsafe(48)
     client.client_secret = new_secret
-    await db_session.flush()
+    await db_session.commit()
     return new_secret
 
 
@@ -98,7 +98,7 @@ async def revoke_token(
     """Record a token revocation."""
     revoked = RevokedToken(jti=jti, token_type=token_type, expires_at=expires_at)
     db_session.add(revoked)
-    await db_session.flush()
+    await db_session.commit()
 
 
 async def is_token_revoked(db_session: AsyncSession, jti: str) -> bool:
@@ -115,5 +115,5 @@ async def cleanup_expired_revocations(db_session: AsyncSession) -> int:
     result = await db_session.execute(
         delete(RevokedToken).where(RevokedToken.expires_at < now)
     )
-    await db_session.flush()
+    await db_session.commit()
     return result.rowcount
