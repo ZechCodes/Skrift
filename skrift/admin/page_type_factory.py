@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
+import logging
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -10,25 +11,29 @@ from litestar import Controller, Request, get, post
 from litestar.enums import RequestEncodingType
 from litestar.params import Body
 from litestar.response import Redirect, Template as TemplateResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from skrift.admin.helpers import (
     check_page_access,
     extract_page_form_data,
     get_admin_context,
 )
+from skrift.admin.page_operations import (
+    create_typed_page,
+    list_pages_for_admin,
+    update_typed_page,
+)
 from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.auth.guards import OwnerOrPermission, Permission, auth_guard
 from skrift.auth.roles import permissions_for_type
 from skrift.config import PageTypeConfig
-from skrift.db.models import Page
 from skrift.db.services import page_service, revision_service
-from skrift.db.services.asset_service import sync_page_assets
+from skrift.db.services.asset_service import get_asset_url
 from skrift.lib.flash import flash_error, flash_success, get_flash_messages
 from skrift.lib.storage import StorageManager
+
+logger = logging.getLogger(__name__)
 
 
 def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
@@ -77,24 +82,13 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             self, request: Request, db_session: AsyncSession
         ) -> TemplateResponse:
             ctx = await get_admin_context(request, db_session)
-            permissions = ctx["permissions"]
-
-            query = (
-                select(Page)
-                .where(Page.type == type_name)
-                .options(selectinload(Page.user))
-                .order_by(Page.order.asc(), Page.created_at.desc())
+            pages = await list_pages_for_admin(
+                db_session,
+                page_type_name=type_name,
+                user_id=UUID(request.session[SESSION_USER_ID]),
+                permissions=ctx["permissions"],
+                manage_permission=perms["manage"],
             )
-
-            if (
-                "administrator" not in permissions.permissions
-                and perms["manage"] not in permissions.permissions
-            ):
-                user_id = UUID(request.session[SESSION_USER_ID])
-                query = query.where(Page.user_id == user_id)
-
-            result = await db_session.execute(query)
-            pages = list(result.scalars().all())
 
             flash_messages = get_flash_messages(request)
             return TemplateResponse(
@@ -148,38 +142,23 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 flash_error(request, "Title and slug are required")
                 return Redirect(path=f"{admin_base}/new")
 
-            published_at = datetime.now(UTC) if form.is_published else None
             user_id = UUID(request.session[SESSION_USER_ID])
 
-            featured_id = UUID(form.featured_asset_id) if form.featured_asset_id else None
-
             try:
-                page = await page_service.create_page(
+                page = await create_typed_page(
                     db_session,
-                    slug=form.slug,
-                    title=form.title,
-                    content=form.content,
-                    is_published=form.is_published,
-                    published_at=published_at,
-                    order=form.order,
-                    publish_at=form.publish_at,
-                    meta_description=form.meta_description,
-                    og_title=form.og_title,
-                    og_description=form.og_description,
-                    og_image=form.og_image,
-                    meta_robots=form.meta_robots,
                     user_id=user_id,
-                    page_type=type_name,
-                    featured_asset_id=featured_id,
+                    form=form,
+                    page_type_name=type_name,
                 )
-                if form.asset_ids:
-                    await sync_page_assets(
-                        db_session, page.id, [UUID(aid) for aid in form.asset_ids]
-                    )
                 flash_success(request, f"{label} '{form.title}' created successfully!")
                 return Redirect(path=admin_base)
-            except Exception as e:
-                flash_error(request, f"Error creating {type_name}: {str(e)}")
+            except Exception:
+                logger.exception("Admin %s create failed", type_name)
+                flash_error(
+                    request,
+                    f"Could not create {label.lower()}. Check the server logs and try again.",
+                )
                 return Redirect(path=f"{admin_base}/new")
 
         @get(
@@ -201,10 +180,10 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
 
             # Resolve asset URLs for attached assets
             storage: StorageManager = request.app.state.storage_manager
-            asset_urls = {}
-            for asset in page.assets:
-                backend = await storage.get(asset.store)
-                asset_urls[str(asset.id)] = await backend.get_url(asset.key)
+            asset_urls = {
+                str(asset.id): await get_asset_url(storage, asset)
+                for asset in page.assets
+            }
 
             flash_messages = get_flash_messages(request)
             return TemplateResponse(
@@ -248,38 +227,22 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 db_session, request, page, perms["edit_own"], perms["manage"]
             )
 
-            published_at = page.published_at
-            if form.is_published and not page.is_published:
-                published_at = datetime.now(UTC)
-
-            featured_id = UUID(form.featured_asset_id) if form.featured_asset_id else None
-
             try:
-                await page_service.update_page(
+                await update_typed_page(
                     db_session,
-                    page_id=page_id,
-                    slug=form.slug,
-                    title=form.title,
-                    content=form.content,
-                    is_published=form.is_published,
-                    published_at=published_at,
-                    order=form.order,
-                    publish_at=form.publish_at,
-                    meta_description=form.meta_description,
-                    og_title=form.og_title,
-                    og_description=form.og_description,
-                    og_image=form.og_image,
-                    meta_robots=form.meta_robots,
-                    page_type=type_name,
-                    featured_asset_id=featured_id,
-                )
-                await sync_page_assets(
-                    db_session, page_id, [UUID(aid) for aid in form.asset_ids]
+                    page=page,
+                    form=form,
+                    user_id=UUID(request.session[SESSION_USER_ID]),
+                    page_type_name=type_name,
                 )
                 flash_success(request, f"{label} '{form.title}' updated successfully!")
                 return Redirect(path=admin_base)
-            except Exception as e:
-                flash_error(request, f"Error updating {type_name}: {str(e)}")
+            except Exception:
+                logger.exception("Admin %s update failed", type_name)
+                flash_error(
+                    request,
+                    f"Could not update {label.lower()}. Check the server logs and try again.",
+                )
                 return Redirect(path=f"{admin_base}/{page_id}/edit")
 
         @post(

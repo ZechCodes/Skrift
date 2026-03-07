@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -18,6 +19,8 @@ from skrift.admin.helpers import get_admin_context
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.db.services import setting_service
 from skrift.lib.flash import flash_success, get_flash_messages
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsAdminController(Controller):
@@ -80,7 +83,11 @@ class SettingsAdminController(Controller):
                 backend = await storage.get()
                 current_favicon_url = await backend.get_url(favicon_key)
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to resolve favicon preview URL for key '%s'",
+                    favicon_key,
+                    exc_info=True,
+                )
 
         flash_messages = get_flash_messages(request)
         return TemplateResponse(

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import secrets
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -43,6 +44,7 @@ from skrift.setup.config_writer import (
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_all_providers, get_provider_info
 from skrift.setup.state import (
     can_connect_to_database,
+    can_connect_to_database_url,
     create_setup_engine,
     get_database_url_from_yaml,
     get_first_incomplete_step,
@@ -80,10 +82,99 @@ async def get_setup_db_session():
 
 def _resolve_env_var(value: str) -> str:
     """Resolve environment variable reference if value starts with $."""
-    import os
     if value.startswith("$"):
         return os.environ.get(value[1:], "")
     return value
+
+
+def _detect_request_base_url(request: Request) -> str:
+    """Infer the current request's base URL."""
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("host", request.url.netloc)
+    return f"{scheme}://{host}"
+
+
+def _get_setup_redirect_base_url(request: Request) -> str:
+    """Return the configured setup OAuth base URL, falling back to the request."""
+    config = load_config()
+    configured = str(config.get("auth", {}).get("redirect_base_url", "")).strip()
+    return configured or _detect_request_base_url(request)
+
+
+def _store_setup_error(request: Request, user_message: str) -> None:
+    """Store a user-safe setup error in the session."""
+    request.session["setup_error"] = user_message
+
+
+def _build_candidate_database_url(form_data: dict) -> tuple[dict, str]:
+    """Build config write args plus a concrete database URL for validation."""
+    db_type = str(form_data.get("db_type", "sqlite"))
+
+    if db_type == "sqlite":
+        file_path = str(form_data.get("sqlite_path", "./app.db")).strip() or "./app.db"
+        use_env = form_data.get("sqlite_path_env") == "on"
+        if use_env:
+            resolved_path = os.environ.get(file_path)
+            if not resolved_path:
+                raise ValueError(f"Environment variable {file_path} is not set")
+            return (
+                {
+                    "db_type": "sqlite",
+                    "url": file_path,
+                    "use_env_vars": {"url": True},
+                },
+                f"sqlite+aiosqlite:///{resolved_path}",
+            )
+
+        return (
+            {
+                "db_type": "sqlite",
+                "url": file_path,
+                "use_env_vars": {"url": False},
+            },
+            f"sqlite+aiosqlite:///{file_path}",
+        )
+
+    use_env_url = form_data.get("pg_url_env") == "on"
+    if use_env_url:
+        env_var = str(form_data.get("pg_url_envvar", "DATABASE_URL")).strip() or "DATABASE_URL"
+        resolved_url = os.environ.get(env_var)
+        if not resolved_url:
+            raise ValueError(f"Environment variable {env_var} is not set")
+        return (
+            {
+                "db_type": "postgresql",
+                "url": env_var,
+                "use_env_vars": {"url": True},
+            },
+            resolved_url,
+        )
+
+    host = str(form_data.get("pg_host", "localhost")).strip() or "localhost"
+    port = int(form_data.get("pg_port", 5432))
+    database = str(form_data.get("pg_database", "skrift")).strip() or "skrift"
+    username = str(form_data.get("pg_username", "postgres")).strip() or "postgres"
+    password = str(form_data.get("pg_password", ""))
+
+    candidate_url = (
+        f"postgresql+asyncpg://{username}:{password}@{host}:{port}/{database}"
+    )
+    return (
+        {
+            "db_type": "postgresql",
+            "host": host,
+            "port": port,
+            "database": database,
+            "username": username,
+            "password": password,
+        },
+        candidate_url,
+    )
+
+
+def _get_previous_setup_step_path() -> str:
+    """Return the previous step before admin creation."""
+    return "/setup/theme" if _has_themes() else "/setup/site"
 
 
 def _has_themes() -> bool:
@@ -154,6 +245,7 @@ class SetupController(Controller):
                 value = await get_setting(db_session, SETUP_COMPLETED_AT_KEY)
                 return value is not None
         except Exception:
+            logger.exception("Setup completion check failed")
             return False
 
     @get("/")
@@ -203,59 +295,32 @@ class SetupController(Controller):
     async def save_database(self, request: Request) -> Redirect:
         """Save database configuration."""
         form_data = await request.form()
-        db_type = form_data.get("db_type", "sqlite")
 
         try:
-            if db_type == "sqlite":
-                file_path = form_data.get("sqlite_path", "./app.db")
-                use_env = form_data.get("sqlite_path_env") == "on"
-
-                update_database_config(
-                    db_type="sqlite",
-                    url=file_path,
-                    use_env_vars={"url": use_env},
-                )
-            else:
-                # PostgreSQL
-                use_env_url = form_data.get("pg_url_env") == "on"
-
-                if use_env_url:
-                    env_var = form_data.get("pg_url_envvar", "DATABASE_URL")
-                    update_database_config(
-                        db_type="postgresql",
-                        url=env_var,
-                        use_env_vars={"url": True},
-                    )
-                else:
-                    host = form_data.get("pg_host", "localhost")
-                    port = int(form_data.get("pg_port", 5432))
-                    database = form_data.get("pg_database", "skrift")
-                    username = form_data.get("pg_username", "postgres")
-                    password = form_data.get("pg_password", "")
-
-                    update_database_config(
-                        db_type="postgresql",
-                        host=host,
-                        port=port,
-                        database=database,
-                        username=username,
-                        password=password,
-                    )
+            update_kwargs, candidate_url = _build_candidate_database_url(form_data)
 
             # Test connection
-            can_connect, error = await can_connect_to_database()
+            can_connect, error = await can_connect_to_database_url(candidate_url)
             if not can_connect:
                 logger.warning("Setup database: connection test failed: %s", error)
-                request.session["setup_error"] = f"Connection failed: {error}"
+                _store_setup_error(request, f"Connection failed: {error}")
                 return Redirect(path="/setup/database")
+
+            update_database_config(**update_kwargs)
 
             # Connection successful - redirect to configuring page to run migrations
             request.session["setup_wizard_step"] = "configuring"
             return Redirect(path="/setup/configuring")
 
+        except ValueError as exc:
+            _store_setup_error(request, str(exc))
+            return Redirect(path="/setup/database")
         except Exception as e:
-            logger.error("Setup database: unexpected error saving config: %s", e, exc_info=True)
-            request.session["setup_error"] = str(e)
+            logger.exception("Setup database: unexpected error saving config")
+            _store_setup_error(
+                request,
+                "Could not save database settings. Check the server logs and try again.",
+            )
             return Redirect(path="/setup/database")
 
     @get("/restart")
@@ -371,15 +436,11 @@ class SetupController(Controller):
                 request.session["setup_wizard_step"] = next_step.value
                 return Redirect(path=f"/setup/{next_step.value}")
 
-        # Get current redirect URL from request
-        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-        host = request.headers.get("host", request.url.netloc)
-        redirect_base_url = f"{scheme}://{host}"
-
         # Get configured providers
         config = load_config()
         auth_config = config.get("auth", {})
         configured_providers = auth_config.get("providers", {})
+        redirect_base_url = str(auth_config.get("redirect_base_url", "")).strip() or _detect_request_base_url(request)
 
         # Get all available providers
         all_providers = get_all_providers()
@@ -433,7 +494,9 @@ class SetupController(Controller):
                 use_env_vars[provider_key] = provider_env_vars
 
         if not providers:
-            request.session["setup_error"] = "Please configure at least one authentication provider"
+            _store_setup_error(
+                request, "Please configure at least one authentication provider"
+            )
             return Redirect(path="/setup/auth")
 
         try:
@@ -450,7 +513,11 @@ class SetupController(Controller):
             return Redirect(path=f"/setup/{next_step.value}")
 
         except Exception as e:
-            request.session["setup_error"] = str(e)
+            logger.exception("Setup auth: unexpected error saving configuration")
+            _store_setup_error(
+                request,
+                "Could not save authentication settings. Check the server logs and try again.",
+            )
             return Redirect(path="/setup/auth")
 
     @get("/site")
@@ -490,7 +557,7 @@ class SetupController(Controller):
         try:
             site_name = form_data.get("site_name", "").strip()
             if not site_name:
-                request.session["setup_error"] = "Site name is required"
+                _store_setup_error(request, "Site name is required")
                 return Redirect(path="/setup/site")
 
             site_tagline = form_data.get("site_tagline", "").strip()
@@ -549,7 +616,11 @@ class SetupController(Controller):
             return Redirect(path=f"/setup/{next_step.value}")
 
         except Exception as e:
-            request.session["setup_error"] = str(e)
+            logger.exception("Setup site: unexpected error saving settings")
+            _store_setup_error(
+                request,
+                "Could not save site settings. Check the server logs and try again.",
+            )
             return Redirect(path="/setup/site")
 
     @get("/theme")
@@ -592,7 +663,7 @@ class SetupController(Controller):
 
         # Validate: if non-empty, must be a valid theme
         if site_theme and not get_theme_info(site_theme):
-            request.session["setup_error"] = f"Unknown theme: {site_theme}"
+            _store_setup_error(request, f"Unknown theme: {site_theme}")
             return Redirect(path="/setup/theme")
 
         try:
@@ -608,7 +679,11 @@ class SetupController(Controller):
             return Redirect(path=f"/setup/{next_step.value}")
 
         except Exception as e:
-            request.session["setup_error"] = str(e)
+            logger.exception("Setup theme: unexpected error saving selection")
+            _store_setup_error(
+                request,
+                "Could not save theme settings. Check the server logs and try again.",
+            )
             return Redirect(path="/setup/theme")
 
     @get("/theme-screenshot/{name:str}")
@@ -629,6 +704,12 @@ class SetupController(Controller):
         flash = request.session.pop("flash", None)
         error = request.session.pop("setup_error", None)
 
+        if not error:
+            next_step = await get_first_incomplete_step()
+            if next_step.value not in {"admin", "complete"}:
+                request.session["setup_wizard_step"] = next_step.value
+                return Redirect(path=f"/setup/{next_step.value}")
+
         # Get configured providers
         config = load_config()
         auth_config = config.get("auth", {})
@@ -648,6 +729,7 @@ class SetupController(Controller):
                 "total_steps": _total_steps(),
                 "providers": provider_info,
                 "configured_providers": configured_providers,
+                "previous_step_path": _get_previous_setup_step_path(),
             },
         )
 
@@ -672,8 +754,9 @@ class SetupController(Controller):
                 "setup/dummy_login.html",
                 context={
                     "flash": flash,
-                    "step": 4,
-                    "total_steps": 4,
+                    "step": _admin_step_number(),
+                    "total_steps": _total_steps(),
+                    "previous_step_path": _get_previous_setup_step_path(),
                 },
             )
 
@@ -687,9 +770,7 @@ class SetupController(Controller):
         request.session["oauth_setup"] = True
 
         # Build redirect URI
-        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-        host = request.headers.get("host", request.url.netloc)
-        redirect_uri = f"{scheme}://{host}/auth/{provider}/callback"
+        redirect_uri = f"{_get_setup_redirect_base_url(request)}/auth/{provider}/callback"
 
         scopes = provider_config.get("scopes", provider_info.scopes)
 
@@ -816,7 +897,7 @@ class SetupAuthController(Controller):
             raise HTTPException(status_code=400, detail="Invalid OAuth flow")
 
         if error:
-            request.session["setup_error"] = f"OAuth error: {error}"
+            _store_setup_error(request, f"OAuth error: {error}")
             return Redirect(path="/setup/admin")
 
         # Verify CSRF state
@@ -839,9 +920,7 @@ class SetupAuthController(Controller):
         client_secret = _resolve_env_var(provider_config.get("client_secret", ""))
 
         # Build redirect URI
-        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-        host = request.headers.get("host", request.url.netloc)
-        redirect_uri = f"{scheme}://{host}/auth/{provider}/callback"
+        redirect_uri = f"{_get_setup_redirect_base_url(request)}/auth/{provider}/callback"
 
         code_verifier = request.session.pop("oauth_code_verifier", None)
 
@@ -851,10 +930,26 @@ class SetupAuthController(Controller):
             tenant = _resolve_env_var(tenant) or "common"
 
         from skrift.controllers.auth import _exchange_and_fetch
-        user_data, user_info, tokens = await _exchange_and_fetch(
-            provider, None, code, redirect_uri, code_verifier,
-            client_id=client_id, client_secret=client_secret, tenant=tenant,
-        )
+        try:
+            user_data, user_info, tokens = await _exchange_and_fetch(
+                provider,
+                None,
+                code,
+                redirect_uri,
+                code_verifier,
+                client_id=client_id,
+                client_secret=client_secret,
+                tenant=tenant,
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Setup OAuth callback failed for provider '%s'", provider)
+            _store_setup_error(
+                request,
+                "Could not complete authentication. Check the server logs and try again.",
+            )
+            return Redirect(path="/setup/admin")
 
         # Create user and mark setup complete
         async with get_setup_db_session() as db_session:

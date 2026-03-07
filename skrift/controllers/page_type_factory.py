@@ -12,14 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.config import PageTypeConfig
 from skrift.controllers.helpers import get_user_context, resolve_theme
-from skrift.db.services import page_service
-from skrift.db.services.asset_service import get_asset_url
-from skrift.db.services.setting_service import (
-    get_cached_site_name,
-    get_cached_site_base_url,
+from skrift.controllers.page_rendering import (
+    build_public_page_render_context,
+    wants_markdown_response,
 )
-from skrift.lib.seo import get_page_seo_meta, get_page_og_meta
-from skrift.lib.storage import StorageManager
+from skrift.db.services import page_service
 from skrift.lib.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
@@ -94,47 +91,35 @@ def create_public_page_type_controller(
             if not page:
                 raise NotFoundException(f"{label} '{slug}' not found")
 
-            if "text/markdown" in request.headers.get("accept", ""):
+            if wants_markdown_response(request):
                 return Response(
                     content=page.content,
                     media_type="text/markdown",
                 )
 
-            user_ctx = await get_user_context(request, db_session)
-            flash = request.session.pop("flash", None)
-            theme_name = await resolve_theme(request)
-
-            # Resolve asset URLs
-            storage: StorageManager = request.app.state.storage_manager
-            asset_urls = {
-                str(asset.id): await get_asset_url(storage, asset)
-                for asset in page.assets
-            }
-            featured_image_url = None
-            if page.featured_asset and str(page.featured_asset.id) in asset_urls:
-                featured_image_url = asset_urls[str(page.featured_asset.id)]
-
-            site_name = get_cached_site_name()
-            base_url = get_cached_site_base_url() or str(request.base_url).rstrip("/")
-            seo_meta = await get_page_seo_meta(page, site_name, base_url)
-            og_meta = await get_page_og_meta(page, site_name, base_url, featured_image_url=featured_image_url)
+            render_ctx = await build_public_page_render_context(
+                request,
+                db_session,
+                page,
+                include_asset_urls=True,
+            )
 
             template = Template(
                 type_name, slug,
                 context={
                     "page": page,
-                    "seo_meta": seo_meta,
-                    "og_meta": og_meta,
-                    "featured_image_url": featured_image_url,
-                    "asset_urls": asset_urls,
+                    "seo_meta": render_ctx.seo_meta,
+                    "og_meta": render_ctx.og_meta,
+                    "featured_image_url": render_ctx.featured_image_url,
+                    "asset_urls": render_ctx.asset_urls,
                 },
             )
             return template.render(
                 TEMPLATE_DIR,
-                theme_name=theme_name,
-                flash=flash,
+                theme_name=render_ctx.theme_name,
+                flash=render_ctx.flash,
                 **page_type_ctx,
-                **user_ctx,
+                **render_ctx.user_ctx,
             )
 
     suffix = "Subdomain" if for_subdomain else "Public"

@@ -5,11 +5,14 @@ Each theme must have a templates/ subdirectory and may optionally include
 static/, theme.yaml metadata, and a screenshot.png preview.
 """
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -109,7 +112,7 @@ def _parse_theme(theme_dir: Path) -> ThemeInfo:
             if isinstance(raw_colors, list):
                 colors = [str(c) for c in raw_colors]
         except Exception:
-            pass
+            logger.debug("Failed to parse theme metadata for '%s'", directory_name, exc_info=True)
 
     return ThemeInfo(
         directory_name=directory_name,

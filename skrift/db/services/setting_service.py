@@ -217,6 +217,7 @@ async def load_site_settings_cache(db_session: AsyncSession) -> None:
     except Exception:
         # Table might not exist yet (before migration), leave cache empty so
         # the next access retries instead of being stuck on cached defaults.
+        logger.debug("Could not load site settings cache", exc_info=True)
         _site_settings_cache.clear()
         _per_site_cache.clear()
 
@@ -284,6 +285,7 @@ def get_cached_site_theme() -> str:
         from skrift.config import get_settings
         return get_settings().theme
     except Exception:
+        logger.debug("Could not fall back to app.yaml theme", exc_info=True)
         return ""
 
 

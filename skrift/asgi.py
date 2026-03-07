@@ -433,10 +433,11 @@ class AppDispatcher:
                 await main_app(scope, receive, send)
                 return
             # Can't create main app — show error page
-            await self._error_response(
-                send,
-                f"Setup complete but cannot start application: {self._main_app_error}",
+            logger.error(
+                "Main application startup failed after setup completion: %s",
+                self._main_app_error,
             )
+            await self._error_response(send, self._main_app_error or "Application startup failed")
             return
 
         # Setup not locked - /setup/* always goes to setup app
@@ -453,9 +454,13 @@ class AppDispatcher:
                 await main_app(scope, receive, send)
             else:
                 # Can't create main app - show error
+                logger.error(
+                    "Main application startup failed after setup completion: %s",
+                    self._main_app_error,
+                )
                 await self._error_response(
                     send,
-                    f"Setup complete but cannot start application: {self._main_app_error}"
+                    self._main_app_error or "Application startup failed",
                 )
         else:
             # Setup not complete
@@ -515,18 +520,19 @@ class AppDispatcher:
     async def _error_response(self, send: Send, message: str) -> None:
         """Send an error response using the built-in error template."""
         hint = self._get_config_error_hint(message)
+        public_message = "Application failed to start. Check the server logs for details."
 
         try:
             template_engine = self.setup_app.template_engine
             template = template_engine.get_template("error.html")
             body = template.render(
                 status_code=500,
-                message=message,
+                message=public_message,
                 hint=hint,
             ).encode()
         except Exception:
             logger.warning("Error template failed to render", exc_info=True)
-            body = f"<h1>Configuration Error</h1><p>{message}</p>".encode()
+            body = f"<h1>Configuration Error</h1><p>{public_message}</p>".encode()
 
         await send({
             "type": "http.response.start",

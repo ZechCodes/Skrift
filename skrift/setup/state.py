@@ -12,6 +12,7 @@ import os
 import subprocess
 from enum import Enum
 from pathlib import Path
+
 import yaml
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -151,6 +152,11 @@ async def can_connect_to_database() -> tuple[bool, str | None]:
     if not db_url:
         return False, "Database URL not configured"
 
+    return await can_connect_to_database_url(db_url)
+
+
+async def can_connect_to_database_url(db_url: str) -> tuple[bool, str | None]:
+    """Test if a specific database URL is connectable."""
     try:
         engine = create_setup_engine(db_url)
         async with engine.connect() as conn:

@@ -13,14 +13,14 @@
     <p><strong>Client ID:</strong> <code>{{ client.client_id }}</code></p>
     <p><strong>Client Secret:</strong> <code>{{ client.client_secret[:8] }}••••••••</code></p>
     <form method="post" action="/admin/oauth-clients/{{ client.id }}/regenerate-secret" style="display: inline;">
-        {{ csrf_field(request) }}
+        {{ csrf_field() }}
         <button type="submit" class="sk-btn-outline sk-btn-small" onclick="return confirm('Regenerate secret? The old secret will stop working immediately.')">Regenerate Secret</button>
     </form>
 </div>
 {% endif %}
 
 <form method="post" action="/admin/oauth-clients/{{ client.id ~ '/edit' if client else 'new' }}">
-    {{ csrf_field(request) }}
+    {{ csrf_field() }}
 
     <label>
         Display Name
@@ -63,7 +63,7 @@
 <details>
     <summary>Danger Zone</summary>
     <form method="post" action="/admin/oauth-clients/{{ client.id }}/delete" style="margin-top: 1rem;">
-        {{ csrf_field(request) }}
+        {{ csrf_field() }}
         <button type="submit" class="sk-btn-danger" onclick="return confirm('Delete this client? This cannot be undone.')">Delete Client</button>
     </form>
 </details>

@@ -35,6 +35,7 @@ class TestRevisionService:
             from skrift.db.services.revision_service import create_revision
 
             mock_session = AsyncMock()
+            mock_session.add = MagicMock()
             mock_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0)))
             mock_session.commit = AsyncMock()
             mock_session.refresh = AsyncMock()
@@ -55,6 +56,7 @@ class TestRevisionService:
             from skrift.db.services.revision_service import create_revision
 
             mock_session = AsyncMock()
+            mock_session.add = MagicMock()
             # Simulate existing max revision number of 5
             mock_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=5)))
             mock_session.commit = AsyncMock()
@@ -106,6 +108,7 @@ class TestRevisionService:
             from skrift.db.services.revision_service import create_revision
 
             mock_session = AsyncMock()
+            mock_session.add = MagicMock()
             mock_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0)))
             mock_session.commit = AsyncMock()
             mock_session.refresh = AsyncMock()

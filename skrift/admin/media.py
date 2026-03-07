@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -27,6 +28,8 @@ from skrift.db.services.asset_service import (
 )
 from skrift.lib.flash import flash_error, flash_success, get_flash_messages
 from skrift.lib.storage import StorageManager
+
+logger = logging.getLogger(__name__)
 
 
 class MediaAdminController(Controller):
@@ -112,8 +115,9 @@ class MediaAdminController(Controller):
             flash_success(request, f"Uploaded {filename}")
         except UploadTooLargeError:
             flash_error(request, f"File too large: {filename}")
-        except Exception as exc:
-            flash_error(request, f"Upload failed: {exc}")
+        except Exception:
+            logger.exception("Admin media upload failed for '%s'", filename)
+            flash_error(request, "Upload failed. Check the server logs and try again.")
 
         return Redirect(path="/admin/media")
 
@@ -151,9 +155,10 @@ class MediaAdminController(Controller):
                 status_code=413,
                 media_type="application/json",
             )
-        except Exception as exc:
+        except Exception:
+            logger.exception("Admin media JSON upload failed for '%s'", filename)
             return Response(
-                content={"error": f"Upload failed: {exc}"},
+                content={"error": "Upload failed. Check the server logs."},
                 status_code=500,
                 media_type="application/json",
             )

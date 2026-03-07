@@ -303,11 +303,11 @@ In the default template, this renders as:
 
 For endpoints that need CSRF protection but don't use a `Form` instance (e.g., simple action buttons, delete confirmations), use the standalone functions:
 
-**`csrf_field(request)`** — Generates a hidden CSRF input field. Available as a template global:
+**`csrf_field()`** — Generates a hidden CSRF input field. Available as a template global:
 
 ```html
 <form method="post" action="/delete-item">
-    {{ csrf_field(request) }}
+    {{ csrf_field() }}
     <button type="submit">Delete</button>
 </form>
 ```
