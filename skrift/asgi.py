@@ -706,6 +706,15 @@ def create_app() -> ASGIApp:
     if settings.security_headers.enabled:
         headers = settings.security_headers.build_headers(debug=settings.debug)
         csp_value = settings.security_headers.content_security_policy
+
+        # Auto-augment CSP with origins from storage backends
+        if csp_value:
+            from skrift.lib.csp import augment_csp, collect_storage_origins
+
+            directive_origins = collect_storage_origins(settings.storage)
+            if directive_origins:
+                csp_value = augment_csp(csp_value, directive_origins)
+
         if headers or csp_value:
             security_middleware = [
                 DefineMiddleware(

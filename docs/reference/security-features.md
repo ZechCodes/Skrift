@@ -125,6 +125,69 @@ security_headers:
   permissions_policy: "camera=(), microphone=(), geolocation=(), payment=()"
 ```
 
+### Automatic CSP for Storage Backends
+
+When a storage store serves assets from an external origin (S3, CloudFront, MinIO, etc.), Skrift automatically adds that origin to the CSP header at startup. No manual CSP editing is required for the common case.
+
+**How it works:** At app startup, Skrift inspects every configured store and extracts the origin (scheme + host) from its URL configuration. Those origins are appended to the CSP directives specified by the store's `csp_directives` field.
+
+#### Which S3 configurations produce origins
+
+| Configuration | Origin used |
+|---|---|
+| `public_url` set (e.g. CloudFront CDN) | Origin extracted from `public_url` |
+| `acl: public-read` + `endpoint_url` (MinIO, R2, Spaces) | Origin extracted from `endpoint_url` |
+| `acl: public-read` on AWS (no `endpoint_url`) | `https://{bucket}.s3.{region}.amazonaws.com` |
+| `acl: private` without `public_url` (presigned URLs) | None — served via presigned URLs |
+| `backend: local` | None — served from `'self'` |
+
+#### The `csp_directives` field
+
+Each store has a `csp_directives` list controlling which CSP directives receive the origin. The default is:
+
+```yaml
+csp_directives: [img-src, font-src, style-src, script-src]
+```
+
+Set `csp_directives: []` to opt out entirely (e.g. for a presigned-URL-only store), or restrict to specific directives:
+
+```yaml
+# User-uploaded content — only trust for images
+csp_directives: [img-src]
+```
+
+#### Example app.yaml
+
+```yaml
+storage:
+  default: cdn
+  stores:
+    cdn:
+      backend: s3
+      s3:
+        bucket: my-site-assets
+        region: us-east-1
+        public_url: https://cdn.example.com
+      # All asset types allowed (default)
+
+    user-uploads:
+      backend: s3
+      s3:
+        bucket: my-site-uploads
+        region: us-east-1
+        public_url: https://uploads.example.com
+      # Only trust for images — don't allow script/style execution
+      csp_directives: [img-src]
+```
+
+With this configuration, the resulting CSP header will include:
+- `img-src 'self' data: https: https://cdn.example.com https://uploads.example.com`
+- `font-src 'self' https: https://cdn.example.com`
+- `style-src 'self' 'unsafe-inline' https://cdn.example.com`
+- `script-src 'self' https://cdn.example.com`
+
+The `user-uploads` origin only appears in `img-src`, preventing uploaded content from being loaded as scripts or stylesheets.
+
 ## Rate Limiting
 
 ### RateLimitConfig

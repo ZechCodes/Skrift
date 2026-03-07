@@ -373,6 +373,7 @@ class StoreConfig(BaseModel):
     local_path: str = "./uploads"
     max_upload_size: int = 10_485_760  # 10 MB
     s3: S3Config = S3Config()
+    csp_directives: list[str] = ["img-src", "font-src", "style-src", "script-src"]
 
 
 class StorageConfig(BaseModel):
