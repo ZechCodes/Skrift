@@ -87,6 +87,11 @@ def _resolve_env_var(value: str) -> str:
     return value
 
 
+def _get_provider_type(key: str, config: dict) -> str:
+    """Resolve provider type from raw config dict, falling back to key."""
+    return config.get("provider", "") or key
+
+
 def _detect_request_base_url(request: Request) -> str:
     """Infer the current request's base URL."""
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
@@ -716,9 +721,12 @@ class SetupController(Controller):
         configured_providers = list(auth_config.get("providers", {}).keys())
 
         # Get provider display info (include dummy — get_all_providers() excludes it)
-        provider_info = {
-            key: OAUTH_PROVIDERS[key] for key in configured_providers if key in OAUTH_PROVIDERS
-        }
+        provider_info = {}
+        for key in configured_providers:
+            ptype = _get_provider_type(key, auth_config.get("providers", {}).get(key, {}))
+            info = OAUTH_PROVIDERS.get(ptype)
+            if info:
+                provider_info[key] = info
 
         return TemplateResponse(
             "setup/admin.html",
@@ -743,7 +751,8 @@ class SetupController(Controller):
         if provider not in providers_config:
             raise HTTPException(status_code=404, detail=f"Provider {provider} not configured")
 
-        provider_info = get_provider_info(provider)
+        provider_type = _get_provider_type(provider, providers_config.get(provider, {}))
+        provider_info = get_provider_info(provider_type)
         if not provider_info:
             raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
 
@@ -776,7 +785,7 @@ class SetupController(Controller):
 
         # Get the provider strategy for PKCE + auth params
         from skrift.auth.providers import get_oauth_provider
-        oauth_provider = get_oauth_provider(provider)
+        oauth_provider = get_oauth_provider(provider, provider_type=provider_type)
 
         # Generate PKCE for providers that require it
         code_challenge = None
@@ -929,6 +938,8 @@ class SetupAuthController(Controller):
         if isinstance(tenant, str) and tenant.startswith("$"):
             tenant = _resolve_env_var(tenant) or "common"
 
+        provider_type = _get_provider_type(provider, providers_config.get(provider, {}))
+
         from skrift.controllers.auth import _exchange_and_fetch
         try:
             user_data, user_info, tokens = await _exchange_and_fetch(
@@ -940,6 +951,7 @@ class SetupAuthController(Controller):
                 client_id=client_id,
                 client_secret=client_secret,
                 tenant=tenant,
+                provider_type=provider_type,
             )
         except HTTPException:
             raise

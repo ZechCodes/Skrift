@@ -207,7 +207,13 @@ def validate_no_dummy_auth_in_production() -> None:
         return
 
     providers = config.get("auth", {}).get("providers", {})
-    if DUMMY_PROVIDER_KEY in providers:
+    is_dummy = DUMMY_PROVIDER_KEY in providers
+    if not is_dummy:
+        for cfg in providers.values():
+            if isinstance(cfg, dict) and cfg.get("provider") == "dummy":
+                is_dummy = True
+                break
+    if is_dummy:
         # Only print if we haven't already (use env var as cross-process flag)
         if not os.environ.get("_SKRIFT_DUMMY_ERROR_PRINTED"):
             os.environ["_SKRIFT_DUMMY_ERROR_PRINTED"] = "1"

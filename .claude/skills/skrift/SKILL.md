@@ -98,10 +98,14 @@ db:
 auth:
   redirect_base_url: "https://example.com"
   providers:
-    google:
+    google:                                    # key IS the provider type (default)
       client_id: $GOOGLE_CLIENT_ID
       client_secret: $GOOGLE_CLIENT_SECRET
       scopes: ["openid", "email", "profile"]
+    corporate_sso:                             # custom key with explicit type
+      provider: skrift
+      server_url: "https://sso.corp.com"
+      client_id: $SSO_CLIENT_ID
 
 session:
   cookie_domain: null
