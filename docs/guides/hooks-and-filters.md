@@ -118,6 +118,51 @@ result = await hooks.apply_filters("my_filter", initial_value, extra_arg)
 | `before_page_delete` | Action | `page` | Before page deletion |
 | `after_page_delete` | Action | `page` | After page deleted |
 
+### Page Lifecycle Hooks
+
+| Hook | Type | Arguments | Description |
+|------|------|-----------|-------------|
+| `after_page_published` | Action | `page` | After a page transitions from unpublished to published |
+| `after_page_unpublished` | Action | `page` | After a page transitions from published to unpublished |
+
+### Auth Hooks
+
+| Hook | Type | Arguments | Description |
+|------|------|-----------|-------------|
+| `after_login` | Action | `login_result`, `request` | After a user logs in (any provider) |
+| `before_logout` | Action | `request` | Before session is cleared on logout |
+| `after_user_created` | Action | `login_result`, `request` | After a new user is created (controller-level, has request context) |
+| `after_user_created_db` | Action | `user` | After a new user is created at the DB layer (no request context) |
+| `after_user_update` | Action | `user` | After an existing user's profile is updated during login |
+| `login_redirect` | Filter | `next_url`, `login_result`, `request` | Modify the post-login redirect URL (e.g. send new users to profile setup) |
+
+### Role Hooks
+
+| Hook | Type | Arguments | Description |
+|------|------|-----------|-------------|
+| `after_role_assigned` | Action | `user`, `role` | After a role is assigned to a user |
+| `after_role_removed` | Action | `user`, `role` | After a role is removed from a user |
+
+### Setting Hooks
+
+| Hook | Type | Arguments | Description |
+|------|------|-----------|-------------|
+| `before_setting_save` | Action | `key`, `value`, `is_new` | Before a setting is saved |
+| `after_setting_save` | Action | `key`, `value`, `is_new` | After a setting is saved |
+| `before_setting_delete` | Action | `key` | Before a setting is deleted |
+| `after_setting_delete` | Action | `key` | After a setting is deleted |
+
+### OAuth2 Client Hooks
+
+| Hook | Type | Arguments | Description |
+|------|------|-----------|-------------|
+| `after_oauth2_client_created` | Action | `client` | After an OAuth2 client is created |
+| `after_oauth2_client_updated` | Action | `client` | After an OAuth2 client is updated |
+| `before_oauth2_client_deleted` | Action | `client` | Before an OAuth2 client is deleted (last chance to reference the object) |
+| `after_oauth2_client_deleted` | Action | `client_id` | After an OAuth2 client is deleted |
+| `after_oauth2_client_secret_regenerated` | Action | `client` | After an OAuth2 client secret is regenerated |
+| `after_token_revoked` | Action | `jti`, `token_type` | After a token is revoked |
+
 ### SEO Hooks
 
 | Hook | Type | Arguments | Description |
@@ -269,10 +314,14 @@ Import hook names as constants for better IDE support:
 
 ```python
 from skrift.lib.hooks import (
+    # Page hooks
     BEFORE_PAGE_SAVE,
     AFTER_PAGE_SAVE,
     BEFORE_PAGE_DELETE,
     AFTER_PAGE_DELETE,
+    AFTER_PAGE_PUBLISHED,
+    AFTER_PAGE_UNPUBLISHED,
+    # SEO / Sitemap / Template
     PAGE_SEO_META,
     PAGE_OG_META,
     SITEMAP_URLS,
@@ -280,11 +329,35 @@ from skrift.lib.hooks import (
     ROBOTS_TXT,
     TEMPLATE_CONTEXT,
     RESOLVE_THEME,
+    # Form hooks
     FORM_VALIDATED,
+    # Notification hooks
     NOTIFICATION_SENT,
     NOTIFICATION_DISMISSED,
     NOTIFICATION_PRE_SEND,
     WEBHOOK_NOTIFICATION_RECEIVED,
+    # Auth hooks
+    AFTER_LOGIN,
+    BEFORE_LOGOUT,
+    AFTER_USER_CREATED,
+    AFTER_USER_CREATED_DB,
+    AFTER_USER_UPDATE,
+    LOGIN_REDIRECT,
+    # Role hooks
+    AFTER_ROLE_ASSIGNED,
+    AFTER_ROLE_REMOVED,
+    # Setting hooks
+    BEFORE_SETTING_SAVE,
+    AFTER_SETTING_SAVE,
+    BEFORE_SETTING_DELETE,
+    AFTER_SETTING_DELETE,
+    # OAuth2 client hooks
+    AFTER_OAUTH2_CLIENT_CREATED,
+    AFTER_OAUTH2_CLIENT_UPDATED,
+    BEFORE_OAUTH2_CLIENT_DELETED,
+    AFTER_OAUTH2_CLIENT_DELETED,
+    AFTER_OAUTH2_CLIENT_SECRET_REGENERATED,
+    AFTER_TOKEN_REVOKED,
 )
 ```
 

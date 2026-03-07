@@ -8,7 +8,7 @@
 
 <div class="oauth-buttons">
     {% for key, provider in providers.items() %}
-    <a href="/setup/oauth/{{ key }}/login" class="oauth-btn oauth-btn-{{ key }}">
+    <a href="/setup/oauth/{{ key }}/login" class="oauth-btn oauth-btn-{{ provider.icon or key }}">
         Sign in with {{ provider.name }}
     </a>
     {% endfor %}

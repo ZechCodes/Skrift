@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import importlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -23,7 +24,11 @@ class NormalizedUserData:
 
 
 class OAuthProvider(ABC):
-    """Base class for OAuth provider strategies."""
+    """Base class for OAuth provider strategies.
+
+    Custom providers loaded via dotted import path must define a ``provider_info``
+    class attribute of type :class:`OAuthProviderInfo`.
+    """
 
     def __init__(self, provider_key: str, provider_info: OAuthProviderInfo):
         self.provider_key = provider_key
@@ -304,14 +309,46 @@ _PROVIDER_CLASSES: dict[str, type[OAuthProvider]] = {
 }
 
 
-def get_oauth_provider(provider_key: str) -> OAuthProvider:
+def _import_provider_class(dotted_path: str) -> type[OAuthProvider]:
+    """Dynamically import a custom provider class from a dotted path."""
+    module_path, _, class_name = dotted_path.rpartition(".")
+    if not module_path:
+        raise ValueError(f"Invalid provider path: {dotted_path}")
+
+    module = importlib.import_module(module_path)
+    cls = getattr(module, class_name)
+
+    if not (isinstance(cls, type) and issubclass(cls, OAuthProvider)):
+        raise TypeError(f"'{dotted_path}' must be a subclass of OAuthProvider")
+    if not hasattr(cls, "provider_info"):
+        raise TypeError(f"'{dotted_path}' must define a 'provider_info' class attribute")
+
+    _PROVIDER_CLASSES[dotted_path] = cls  # cache
+    return cls
+
+
+def get_oauth_provider(provider_key: str, *, provider_type: str | None = None) -> OAuthProvider:
     """Get an OAuth provider strategy instance by key.
 
-    Returns a GenericProvider for unknown provider keys.
-    """
-    provider_info = get_provider_info(provider_key)
-    if not provider_info:
-        raise ValueError(f"Unknown provider: {provider_key}")
+    Args:
+        provider_key: The config key for this provider (used for config lookups and OAuthAccount).
+        provider_type: Explicit provider type. If None, resolved from settings.
 
-    cls = _PROVIDER_CLASSES.get(provider_key, GenericProvider)
+    Returns a GenericProvider for unknown built-in provider types.
+    """
+    if provider_type is None:
+        from skrift.config import get_settings
+        provider_type = get_settings().auth.get_provider_type(provider_key)
+
+    # Dotted import path → custom provider class
+    if "." in provider_type and provider_type not in _PROVIDER_CLASSES:
+        cls = _import_provider_class(provider_type)
+        return cls(provider_key, cls.provider_info)
+
+    # Built-in lookup
+    provider_info = get_provider_info(provider_type)
+    if not provider_info:
+        raise ValueError(f"Unknown provider type: {provider_type} (key: {provider_key})")
+
+    cls = _PROVIDER_CLASSES.get(provider_type, GenericProvider)
     return cls(provider_key, provider_info)

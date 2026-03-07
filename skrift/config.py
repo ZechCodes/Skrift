@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load .env file early so env vars are available for YAML interpolation
@@ -325,27 +325,44 @@ class AuthConfig(BaseModel):
     redirect_base_url: str = "http://localhost:8000"
     allowed_redirect_domains: list[str] = []
     providers: dict[str, ProviderConfig] = {}
+    _provider_types: dict[str, str] = PrivateAttr(default_factory=dict)
+
+    @classmethod
+    def _resolve_provider_type(cls, key: str, config: dict) -> str:
+        """Resolve the provider type from config, falling back to key."""
+        return config.get("provider", "") or key
 
     @classmethod
     def _parse_provider(cls, name: str, config: dict) -> ProviderConfig:
-        """Parse a provider config, using the appropriate model based on provider name."""
-        if name == "dummy":
+        """Parse a provider config, using the appropriate model based on provider type."""
+        config = dict(config)  # shallow copy
+        provider_type = config.pop("provider", "") or name
+
+        if provider_type == "dummy":
             return DummyProviderConfig(**config)
-        if name == "skrift":
+        if provider_type == "skrift":
             return SkriftProviderConfig(**config)
         return OAuthProviderConfig(**config)
 
     def __init__(self, **data):
         # Convert raw provider dicts to appropriate config objects
+        provider_types = {}
         if "providers" in data and isinstance(data["providers"], dict):
             parsed_providers = {}
             for name, config in data["providers"].items():
                 if isinstance(config, dict):
+                    provider_types[name] = self._resolve_provider_type(name, config)
                     parsed_providers[name] = self._parse_provider(name, config)
                 else:
                     parsed_providers[name] = config
+                    provider_types[name] = name
             data["providers"] = parsed_providers
         super().__init__(**data)
+        self._provider_types = provider_types
+
+    def get_provider_type(self, key: str) -> str:
+        """Get the provider type for a config key. Falls back to key itself."""
+        return self._provider_types.get(key, key)
 
     def get_redirect_uri(self, provider: str) -> str:
         """Get the OAuth callback URL for a provider."""

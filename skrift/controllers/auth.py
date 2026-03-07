@@ -37,8 +37,9 @@ from jinja2.exceptions import TemplatesNotFound
 
 from skrift.forms import verify_csrf
 from skrift.lib.flash import flash_error, flash_info, flash_success
+from skrift.lib.hooks import hooks
 from skrift.lib.template import resolve_template_name
-from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_provider_info
+from skrift.setup.providers import DUMMY_PROVIDER_KEY, get_provider_info
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,7 @@ async def _exchange_and_fetch(
     client_id: str | None = None,
     client_secret: str | None = None,
     tenant: str | None = None,
+    provider_type: str | None = None,
 ) -> tuple[NormalizedUserData, dict, dict]:
     """Exchange authorization code for token, fetch user info, and extract normalized data.
 
@@ -115,11 +117,12 @@ async def _exchange_and_fetch(
         client_id: Override client_id (used during setup when settings aren't available).
         client_secret: Override client_secret (used during setup).
         tenant: Override tenant ID (used during setup for Microsoft).
+        provider_type: Explicit provider type (used during setup when settings aren't loaded).
 
     Returns:
         Tuple of (NormalizedUserData, raw_user_info_dict, tokens_dict).
     """
-    provider = get_oauth_provider(provider_key)
+    provider = get_oauth_provider(provider_key, provider_type=provider_type)
 
     # Resolve credentials
     if client_id is None or client_secret is None:
@@ -202,7 +205,8 @@ class AuthController(Controller):
     ) -> Redirect | TemplateResponse:
         """Redirect to OAuth provider consent screen, or show dummy login form."""
         settings = get_settings()
-        provider_info = get_provider_info(provider)
+        provider_type = settings.auth.get_provider_type(provider)
+        provider_info = get_provider_info(provider_type)
 
         # Store next URL in session if provided and valid
         if next_url and _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
@@ -268,8 +272,9 @@ class AuthController(Controller):
     ) -> Redirect:
         """Handle OAuth callback from provider."""
         settings = get_settings()
+        provider_type = settings.auth.get_provider_type(provider)
 
-        if not get_provider_info(provider):
+        if not get_provider_info(provider_type):
             raise NotFoundException(f"Unknown provider: {provider}")
 
         if error:
@@ -306,7 +311,13 @@ class AuthController(Controller):
         flash_success(request, "Successfully logged in!")
         _set_login_session(request, login_result.user)
 
-        return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
+        await hooks.do_action("after_login", login_result, request)
+        if login_result.is_new_user:
+            await hooks.do_action("after_user_created", login_result, request)
+
+        next_url = _get_safe_redirect_url(request, settings.auth.allowed_redirect_domains)
+        next_url = await hooks.apply_filters("login_redirect", next_url, login_result, request)
+        return Redirect(path=next_url)
 
     @get("/login")
     async def login_page(
@@ -324,11 +335,14 @@ class AuthController(Controller):
 
         # Get configured providers (excluding dummy from main list)
         configured_providers = list(settings.auth.providers.keys())
-        providers = {
-            key: OAUTH_PROVIDERS[key]
-            for key in configured_providers
-            if key in OAUTH_PROVIDERS and key != DUMMY_PROVIDER_KEY
-        }
+        providers = {}
+        for key in configured_providers:
+            if key == DUMMY_PROVIDER_KEY:
+                continue
+            ptype = settings.auth.get_provider_type(key)
+            info = get_provider_info(ptype)
+            if info:
+                providers[key] = info
 
         # Check if dummy provider is configured
         has_dummy = DUMMY_PROVIDER_KEY in settings.auth.providers
@@ -387,11 +401,18 @@ class AuthController(Controller):
         flash_success(request, "Successfully logged in!")
         _set_login_session(request, login_result.user)
 
-        return Redirect(path=_get_safe_redirect_url(request, settings.auth.allowed_redirect_domains))
+        await hooks.do_action("after_login", login_result, request)
+        if login_result.is_new_user:
+            await hooks.do_action("after_user_created", login_result, request)
+
+        next_url = _get_safe_redirect_url(request, settings.auth.allowed_redirect_domains)
+        next_url = await hooks.apply_filters("login_redirect", next_url, login_result, request)
+        return Redirect(path=next_url)
 
     @get("/logout")
     async def logout(self, request: Request) -> Redirect | TemplateResponse:
         """Clear session and redirect to home, or render logout template if available."""
+        await hooks.do_action("before_logout", request)
         request.session.clear()
         try:
             template_name = resolve_template_name(

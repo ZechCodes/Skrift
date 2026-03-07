@@ -196,7 +196,8 @@ def update_auth_config(
         # Add default scopes if not specified
         from skrift.setup.providers import get_provider_info
 
-        provider_info = get_provider_info(provider)
+        provider_type = provider_config.get("provider", "") or provider
+        provider_info = get_provider_info(provider_type)
         if provider_info and "scopes" not in processed_config:
             processed_config["scopes"] = provider_info.scopes
 

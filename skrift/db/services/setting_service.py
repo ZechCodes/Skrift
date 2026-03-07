@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models import Setting
+from skrift.lib.hooks import hooks
 
 # In-memory cache for site settings (avoids DB queries on every page render)
 _site_settings_cache: dict[str, str] = {}
@@ -89,6 +90,9 @@ async def set_setting(
     """
     result = await db_session.execute(select(Setting).where(Setting.key == key))
     setting = result.scalar_one_or_none()
+    is_new = setting is None
+
+    await hooks.do_action("before_setting_save", key, value, is_new=is_new)
 
     if setting:
         setting.value = value
@@ -98,6 +102,9 @@ async def set_setting(
 
     await db_session.commit()
     await db_session.refresh(setting)
+
+    await hooks.do_action("after_setting_save", key, value, is_new=is_new)
+
     return setting
 
 
@@ -120,8 +127,10 @@ async def delete_setting(
     if not setting:
         return False
 
+    await hooks.do_action("before_setting_delete", key)
     await db_session.delete(setting)
     await db_session.commit()
+    await hooks.do_action("after_setting_delete", key)
     return True
 
 

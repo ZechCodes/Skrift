@@ -89,6 +89,25 @@ auth:
       scopes: ["openid", "profile", "email"]
 ```
 
+### Multiple Hubs
+
+The config key is decoupled from the provider type via the optional `provider` field, allowing multiple Skrift hubs:
+
+```yaml
+auth:
+  providers:
+    hub1:
+      provider: skrift
+      server_url: "https://hub1.example.com"
+      client_id: "spoke-for-hub1"
+    hub2:
+      provider: skrift
+      server_url: "https://hub2.example.com"
+      client_id: "spoke-for-hub2"
+```
+
+Each key (`hub1`, `hub2`) creates distinct `OAuthAccount` records — the unique constraint `(provider, provider_account_id)` distinguishes users from different hubs. The `provider` field is consumed during config parsing (popped from the dict before passing to `SkriftProviderConfig`).
+
 Config model: `SkriftProviderConfig`
 
 | Field | Type | Default | Notes |

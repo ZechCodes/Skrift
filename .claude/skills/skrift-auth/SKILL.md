@@ -26,9 +26,28 @@ auth:
       scopes: ["openid", "email", "profile"]
 ```
 
-Available providers: `google`, `github`, `microsoft`, `discord`, `facebook`, `twitter`, `skrift`.
+Available provider types: `google`, `github`, `microsoft`, `discord`, `facebook`, `twitter`, `skrift`, `dummy`.
 
 The `skrift` provider authenticates against another Skrift instance's OAuth2 server. See `/skrift-oauth2` for hub/spoke setup.
+
+### Provider Key vs Provider Type
+
+By default, the config key **is** the provider type (`google: {...}` means type=google). An optional `provider` field decouples the key from the type, allowing custom keys and multiple instances of the same provider type:
+
+```yaml
+auth:
+  providers:
+    google: { client_id: ... }                              # key IS the type (default)
+    hub1: { provider: skrift, server_url: https://h1.com, client_id: ... }
+    hub2: { provider: skrift, server_url: https://h2.com, client_id: ... }
+    sso:  { provider: myapp.auth.SSOProvider, client_id: ... }  # dotted import path
+```
+
+The `provider` field is consumed during config parsing and not stored in the config model. `AuthConfig` tracks key-to-type mappings internally via `get_provider_type(key)`.
+
+**OAuthAccount.provider stores the config key** (not the type). Two keys (`hub1`, `hub2`) pointing at different Skrift servers create distinct user accounts. The unique constraint `(provider, provider_account_id)` correctly distinguishes them.
+
+**Custom provider classes** can be loaded via dotted import path (e.g., `myapp.auth.SSOProvider`). The class must be a subclass of `OAuthProvider` and define a `provider_info` class attribute of type `OAuthProviderInfo`.
 
 ## Session Management
 
@@ -161,7 +180,10 @@ Tokens are refreshed (overwritten) on every login. Skrift does not auto-refresh 
 | File | Purpose |
 |------|---------|
 | `skrift/auth/` | Guards, roles, permissions |
+| `skrift/auth/providers.py` | OAuth provider strategy classes, `get_oauth_provider()`, dynamic import for custom providers |
 | `skrift/controllers/auth.py` | OAuth login/callback controller |
 | `skrift/auth/oauth_account_service.py` | `find_or_create_oauth_user()` with token persistence |
+| `skrift/config.py` | `AuthConfig` with `get_provider_type()`, `SkriftProviderConfig`, provider config parsing |
+| `skrift/setup/providers.py` | `OAuthProviderInfo` definitions, `OAUTH_PROVIDERS` registry, dummy auth validation |
 | `skrift/db/models/user.py` | `User`, `Role` models |
 | `skrift/db/models/oauth_account.py` | `OAuthAccount` model (`access_token`, `refresh_token` fields) |

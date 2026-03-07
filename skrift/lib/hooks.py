@@ -306,3 +306,33 @@ BEFORE_ASSET_DELETE = "before_asset_delete"
 AFTER_ASSET_DELETE = "after_asset_delete"
 ASSET_UPLOAD_KEY = "asset_upload_key"
 ASSET_UPLOAD_DATA = "asset_upload_data"
+
+# Auth hooks
+AFTER_LOGIN = "after_login"
+BEFORE_LOGOUT = "before_logout"
+AFTER_USER_CREATED = "after_user_created"
+AFTER_USER_CREATED_DB = "after_user_created_db"
+AFTER_USER_UPDATE = "after_user_update"
+LOGIN_REDIRECT = "login_redirect"
+
+# Role hooks
+AFTER_ROLE_ASSIGNED = "after_role_assigned"
+AFTER_ROLE_REMOVED = "after_role_removed"
+
+# Setting hooks
+BEFORE_SETTING_SAVE = "before_setting_save"
+AFTER_SETTING_SAVE = "after_setting_save"
+BEFORE_SETTING_DELETE = "before_setting_delete"
+AFTER_SETTING_DELETE = "after_setting_delete"
+
+# OAuth2 client hooks
+AFTER_OAUTH2_CLIENT_CREATED = "after_oauth2_client_created"
+AFTER_OAUTH2_CLIENT_UPDATED = "after_oauth2_client_updated"
+BEFORE_OAUTH2_CLIENT_DELETED = "before_oauth2_client_deleted"
+AFTER_OAUTH2_CLIENT_DELETED = "after_oauth2_client_deleted"
+AFTER_OAUTH2_CLIENT_SECRET_REGENERATED = "after_oauth2_client_secret_regenerated"
+AFTER_TOKEN_REVOKED = "after_token_revoked"
+
+# Page lifecycle hooks
+AFTER_PAGE_PUBLISHED = "after_page_published"
+AFTER_PAGE_UNPUBLISHED = "after_page_unpublished"

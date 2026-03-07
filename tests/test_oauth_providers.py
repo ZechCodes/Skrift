@@ -167,44 +167,50 @@ class TestGenericProvider:
 
 class TestGetOAuthProvider:
     def test_returns_google_provider(self):
-        assert isinstance(get_oauth_provider("google"), GoogleProvider)
+        assert isinstance(get_oauth_provider("google", provider_type="google"), GoogleProvider)
 
     def test_returns_github_provider(self):
-        assert isinstance(get_oauth_provider("github"), GitHubProvider)
+        assert isinstance(get_oauth_provider("github", provider_type="github"), GitHubProvider)
 
     def test_returns_microsoft_provider(self):
-        assert isinstance(get_oauth_provider("microsoft"), MicrosoftProvider)
+        assert isinstance(get_oauth_provider("microsoft", provider_type="microsoft"), MicrosoftProvider)
 
     def test_returns_discord_provider(self):
-        assert isinstance(get_oauth_provider("discord"), DiscordProvider)
+        assert isinstance(get_oauth_provider("discord", provider_type="discord"), DiscordProvider)
 
     def test_returns_facebook_provider(self):
-        assert isinstance(get_oauth_provider("facebook"), FacebookProvider)
+        assert isinstance(get_oauth_provider("facebook", provider_type="facebook"), FacebookProvider)
 
     def test_returns_twitter_provider(self):
-        assert isinstance(get_oauth_provider("twitter"), TwitterProvider)
+        assert isinstance(get_oauth_provider("twitter", provider_type="twitter"), TwitterProvider)
 
     def test_returns_generic_for_dummy(self):
-        provider = get_oauth_provider("dummy")
+        provider = get_oauth_provider("dummy", provider_type="dummy")
         assert isinstance(provider, GenericProvider)
 
     def test_raises_for_unknown(self):
-        with pytest.raises(ValueError, match="Unknown provider"):
-            get_oauth_provider("nonexistent")
+        with pytest.raises(ValueError, match="Unknown provider type"):
+            get_oauth_provider("nonexistent", provider_type="nonexistent")
+
+    def test_custom_key_with_explicit_type(self):
+        """A custom key resolves to the correct provider class when type is given."""
+        provider = get_oauth_provider("my_google", provider_type="google")
+        assert isinstance(provider, GoogleProvider)
+        assert provider.provider_key == "my_google"
 
 
 class TestResolveUrl:
     def test_resolves_tenant_placeholder(self):
-        provider = get_oauth_provider("microsoft")
+        provider = get_oauth_provider("microsoft", provider_type="microsoft")
         url = provider.resolve_url("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize", "my-tenant")
         assert url == "https://login.microsoftonline.com/my-tenant/oauth2/v2.0/authorize"
 
     def test_defaults_to_common(self):
-        provider = get_oauth_provider("microsoft")
+        provider = get_oauth_provider("microsoft", provider_type="microsoft")
         url = provider.resolve_url("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize")
         assert "common" in url
 
     def test_no_placeholder_unchanged(self):
-        provider = get_oauth_provider("google")
+        provider = get_oauth_provider("google", provider_type="google")
         url = provider.resolve_url("https://accounts.google.com/o/oauth2/v2/auth")
         assert url == "https://accounts.google.com/o/oauth2/v2/auth"
