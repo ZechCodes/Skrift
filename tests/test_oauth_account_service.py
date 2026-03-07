@@ -102,6 +102,7 @@ class TestFindOrCreateOAuthUser:
             mock_user.id = uuid4()
 
             mock_session = AsyncMock()
+            mock_session.add = MagicMock()
             # First call: OAuth lookup returns None
             # Second call: User email lookup returns user
             mock_result_no_oauth = MagicMock()
@@ -132,6 +133,7 @@ class TestFindOrCreateOAuthUser:
             MockUser.return_value = mock_new_user
 
             mock_session = AsyncMock()
+            mock_session.add = MagicMock()
             # First call: OAuth lookup returns None
             # Second call: User email lookup returns None
             mock_result_none = MagicMock()
@@ -161,6 +163,7 @@ class TestFindOrCreateOAuthUser:
             MockUser.return_value = mock_new_user
 
             mock_session = AsyncMock()
+            mock_session.add = MagicMock()
             mock_result_none = MagicMock()
             mock_result_none.scalar_one_or_none.return_value = None
             mock_session.execute.side_effect = [mock_result_none, mock_result_none]
@@ -198,6 +201,7 @@ class TestFindOrCreateOAuthUser:
             MockUser.return_value = mock_new_user
 
             mock_session = AsyncMock()
+            mock_session.add = MagicMock()
             # Only one DB call for OAuth lookup — no email lookup
             mock_result_none = MagicMock()
             mock_result_none.scalar_one_or_none.return_value = None

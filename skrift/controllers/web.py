@@ -6,12 +6,12 @@ from litestar.response import Response, Template as TemplateResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.session_keys import SESSION_USER_ID
-from skrift.controllers.helpers import get_user_context, resolve_theme
+from skrift.controllers.helpers import get_user_context
+from skrift.controllers.page_rendering import (
+    build_public_page_render_context,
+    wants_markdown_response,
+)
 from skrift.db.services import page_service
-from skrift.db.services.asset_service import get_asset_url
-from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url
-from skrift.lib.seo import get_page_seo_meta, get_page_og_meta
-from skrift.lib.storage import StorageManager
 from skrift.lib.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
@@ -53,27 +53,13 @@ class WebController(Controller):
         if not page:
             raise NotFoundException(f"Page '{path}' not found")
 
-        if "text/markdown" in request.headers.get("accept", ""):
+        if wants_markdown_response(request):
             return Response(
                 content=page.content,
                 media_type="text/markdown",
             )
 
-        user_ctx = await get_user_context(request, db_session)
-        flash = request.session.pop("flash", None)
-        theme_name = await resolve_theme(request)
-
-        # Resolve featured asset URL
-        featured_image_url = None
-        if page.featured_asset:
-            storage: StorageManager = request.app.state.storage_manager
-            featured_image_url = await get_asset_url(storage, page.featured_asset)
-
-        # Get SEO metadata
-        site_name = get_cached_site_name()
-        base_url = get_cached_site_base_url() or str(request.base_url).rstrip("/")
-        seo_meta = await get_page_seo_meta(page, site_name, base_url)
-        og_meta = await get_page_og_meta(page, site_name, base_url, featured_image_url=featured_image_url)
+        render_ctx = await build_public_page_render_context(request, db_session, page)
 
         template = Template(
             "page", *slugs,
@@ -81,9 +67,14 @@ class WebController(Controller):
                 "path": path,
                 "slugs": slugs,
                 "page": page,
-                "seo_meta": seo_meta,
-                "og_meta": og_meta,
-                "featured_image_url": featured_image_url,
+                "seo_meta": render_ctx.seo_meta,
+                "og_meta": render_ctx.og_meta,
+                "featured_image_url": render_ctx.featured_image_url,
             }
         )
-        return template.render(TEMPLATE_DIR, theme_name=theme_name, flash=flash, **user_ctx)
+        return template.render(
+            TEMPLATE_DIR,
+            theme_name=render_ctx.theme_name,
+            flash=render_ctx.flash,
+            **render_ctx.user_ctx,
+        )

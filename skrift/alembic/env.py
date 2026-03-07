@@ -78,7 +78,7 @@ def get_url() -> str:
             logger.info("Using database URL from app.yaml (settings unavailable)")
             return url
     except Exception:
-        pass
+        logger.debug("Could not resolve database URL from app.yaml", exc_info=True)
 
     fallback = config.get_main_option("sqlalchemy.url", "")
     logger.warning("Falling back to alembic.ini database URL: %s", fallback)
@@ -90,14 +90,15 @@ def get_schema() -> str | None:
     try:
         settings = get_settings()
         return settings.db.db_schema
-    except BaseException:
-        pass
+    except Exception:
+        logger.debug("Could not resolve schema from settings", exc_info=True)
 
     # Fall back to reading schema directly from app.yaml
     try:
         from skrift.setup.state import get_database_schema_from_yaml
         return get_database_schema_from_yaml()
     except Exception:
+        logger.debug("Could not resolve schema from app.yaml", exc_info=True)
         return None
 
 
