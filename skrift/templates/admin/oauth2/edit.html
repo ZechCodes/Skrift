@@ -1,0 +1,71 @@
+{% extends "admin/base.html" %}
+
+{% block title %}{{ "Edit" if client else "New" }} OAuth Client - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>{{ "Edit" if client else "New" }} OAuth Client</h1>
+    <p>{{ "Update client settings" if client else "Register a new OAuth2 client application" }}</p>
+</hgroup>
+
+{% if client %}
+<div style="margin-bottom: 1.5rem; padding: 1rem; background: var(--sk-color-bg-subtle, #f8f9fa); border-radius: 0.5rem;">
+    <p><strong>Client ID:</strong> <code>{{ client.client_id }}</code></p>
+    <p><strong>Client Secret:</strong> <code>{{ client.client_secret[:8] }}••••••••</code></p>
+    <form method="post" action="/admin/oauth-clients/{{ client.id }}/regenerate-secret" style="display: inline;">
+        {{ csrf_field(request) }}
+        <button type="submit" class="sk-btn-outline sk-btn-small" onclick="return confirm('Regenerate secret? The old secret will stop working immediately.')">Regenerate Secret</button>
+    </form>
+</div>
+{% endif %}
+
+<form method="post" action="/admin/oauth-clients/{{ client.id ~ '/edit' if client else 'new' }}">
+    {{ csrf_field(request) }}
+
+    <label>
+        Display Name
+        <input type="text" name="display_name" value="{{ client.display_name if client else '' }}" required placeholder="My Application">
+    </label>
+
+    <label>
+        Redirect URIs <small class="sk-text-muted">(one per line)</small>
+        <textarea name="redirect_uris" rows="4" placeholder="https://example.com/callback">{{ client.redirect_uris if client else '' }}</textarea>
+    </label>
+
+    <fieldset>
+        <legend>Allowed Scopes</legend>
+        {% for scope_name, scope_def in available_scopes.items() %}
+        <label>
+            <input type="checkbox" name="scope_{{ scope_name }}" {% if client and scope_name in client.allowed_scope_list %}checked{% endif %}>
+            <span>
+                <strong>{{ scope_name }}</strong>
+                <small class="sk-text-muted"> — {{ scope_def.description }}</small>
+            </span>
+        </label>
+        {% endfor %}
+    </fieldset>
+
+    {% if client %}
+    <label>
+        <input type="checkbox" name="is_active" {% if client.is_active %}checked{% endif %}>
+        Active
+    </label>
+    {% endif %}
+
+    <div class="sk-form-actions">
+        <button type="submit">{{ "Update Client" if client else "Create Client" }}</button>
+        <a href="/admin/oauth-clients" role="button" class="sk-btn-outline">Cancel</a>
+    </div>
+</form>
+
+{% if client %}
+<hr>
+<details>
+    <summary>Danger Zone</summary>
+    <form method="post" action="/admin/oauth-clients/{{ client.id }}/delete" style="margin-top: 1rem;">
+        {{ csrf_field(request) }}
+        <button type="submit" class="sk-btn-danger" onclick="return confirm('Delete this client? This cannot be undone.')">Delete Client</button>
+    </form>
+</details>
+{% endif %}
+{% endblock %}

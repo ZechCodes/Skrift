@@ -204,20 +204,6 @@ class SkriftProviderConfig(BaseModel):
 ProviderConfig = OAuthProviderConfig | DummyProviderConfig | SkriftProviderConfig
 
 
-class OAuth2ClientConfig(BaseModel):
-    """A registered OAuth2 client (spoke site)."""
-
-    client_id: str
-    client_secret: str = ""
-    redirect_uris: list[str] = []
-
-
-class OAuth2Config(BaseModel):
-    """OAuth2 Authorization Server configuration."""
-
-    clients: list[OAuth2ClientConfig] = []
-
-
 class SecurityHeadersConfig(BaseModel):
     """Security response headers configuration.
 
@@ -414,8 +400,8 @@ class Settings(BaseSettings):
     # Auth config (loaded from app.yaml)
     auth: AuthConfig = AuthConfig()
 
-    # OAuth2 Authorization Server config (loaded from app.yaml)
-    oauth2: OAuth2Config = OAuth2Config()
+    # OAuth2 Authorization Server enabled flag
+    oauth2_enabled: bool = False
 
     # Session config (loaded from app.yaml)
     session: SessionConfig = SessionConfig()
@@ -537,11 +523,8 @@ def get_settings() -> Settings:
     if "logfire" in app_config:
         kwargs["logfire"] = LogfireConfig(**app_config["logfire"])
 
-    if "oauth2" in app_config:
-        oauth2_data = app_config["oauth2"]
-        kwargs["oauth2"] = OAuth2Config(
-            clients=[OAuth2ClientConfig(**c) for c in oauth2_data.get("clients", [])]
-        )
+    if "oauth2_enabled" in app_config:
+        kwargs["oauth2_enabled"] = app_config["oauth2_enabled"]
 
     if "storage" in app_config:
         storage_data = app_config["storage"]

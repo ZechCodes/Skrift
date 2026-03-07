@@ -204,6 +204,55 @@ code_challenge = base64.urlsafe_b64encode(
 ).decode().rstrip("=")
 ```
 
+## OAuth2 Token Security
+
+### Token JTI (JWT ID)
+
+Every token created by `create_signed_token()` includes a unique `jti` field (UUID hex, 32 characters). This enables token revocation by tracking revoked JTIs in the `revoked_tokens` database table.
+
+```python
+# In skrift/auth/tokens.py:
+payload = {**payload, "jti": uuid.uuid4().hex, "exp": int(time.time()) + expires_in}
+```
+
+### Token Revocation (RFC 7009)
+
+`POST /oauth/revoke` accepts a `token` parameter and always returns HTTP 200, per RFC 7009. If the token is valid and has a `jti`, the JTI is recorded in `revoked_tokens` with the token's expiration time.
+
+```python
+# skrift/controllers/oauth2.py
+async def revoke(self, request, db_session):
+    # Parse token, extract jti, record in revoked_tokens
+    # Always returns 200 (even for invalid tokens)
+```
+
+Revoked tokens are checked by `verify_oauth_token()`, which wraps `verify_signed_token()` with a database lookup:
+
+```python
+async def verify_oauth_token(token, secret, db_session):
+    payload = verify_signed_token(token, secret)  # Crypto check
+    if payload and payload.get("jti"):
+        if await oauth2_service.is_token_revoked(db_session, payload["jti"]):
+            return None  # Token was revoked
+    return payload
+```
+
+### Refresh Token Rotation
+
+When a refresh token is used at `/oauth/token` (`grant_type=refresh_token`), the old refresh token is automatically revoked before issuing new tokens. This limits the window for token reuse attacks.
+
+### Token Introspection (RFC 7662)
+
+`POST /oauth/introspect` requires client authentication (`client_id` + `client_secret`) and returns `{"active": true/false}` with token metadata. Uses `verify_oauth_token()` so revoked tokens report as inactive.
+
+### Expired Revocation Cleanup
+
+`oauth2_service.cleanup_expired_revocations(db_session)` deletes revocation records for tokens that have already expired, preventing unbounded table growth.
+
+### OIDC Discovery
+
+`GET /.well-known/openid-configuration` returns a standard OpenID Connect discovery document when `oauth2_enabled` is `true` in `app.yaml`. Returns 404 otherwise.
+
 ## Environment Variable Interpolation
 
 ### Implementation
@@ -348,7 +397,7 @@ From `skrift/auth/roles.py`:
 ```python
 ADMIN = create_role(
     "admin",
-    "administrator", "manage-users", "manage-pages", "modify-site",
+    "administrator", "manage-users", "manage-pages", "modify-site", "manage-oauth-clients",
     display_name="Administrator",
 )
 

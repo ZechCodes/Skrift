@@ -126,6 +126,38 @@ Sitemap: {sitemap_url}
             headers={"Content-Type": "text/plain; charset=utf-8"},
         )
 
+    @get("/.well-known/openid-configuration")
+    async def openid_configuration(self, request: Request) -> Response:
+        """OIDC Discovery document."""
+        from skrift.config import get_settings
+
+        settings = get_settings()
+        if not settings.oauth2_enabled:
+            raise NotFoundException()
+
+        issuer = str(request.base_url).rstrip("/")
+
+        discovery = {
+            "issuer": issuer,
+            "authorization_endpoint": f"{issuer}/oauth/authorize",
+            "token_endpoint": f"{issuer}/oauth/token",
+            "userinfo_endpoint": f"{issuer}/oauth/userinfo",
+            "revocation_endpoint": f"{issuer}/oauth/revoke",
+            "introspection_endpoint": f"{issuer}/oauth/introspect",
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "scopes_supported": ["openid", "profile", "email"],
+            "claims_supported": ["sub", "name", "email", "picture"],
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
+        }
+
+        return Response(
+            content=discovery,
+            status_code=200,
+            media_type="application/json",
+        )
+
     @get("/.well-known/security.txt")
     async def security_txt(self, request: Request) -> Response:
         """Serve security.txt per RFC 9116."""

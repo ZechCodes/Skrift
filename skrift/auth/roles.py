@@ -49,6 +49,7 @@ ADMIN = create_role(
     "manage-users",
     "manage-pages",
     "modify-site",
+    "manage-oauth-clients",
     display_name="Administrator",
     description="Full system access with all permissions",
 )

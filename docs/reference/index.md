@@ -50,6 +50,14 @@ Technical reference documentation for Skrift.
 
     [:octicons-arrow-right-24: Security Features](security-features.md)
 
+-   :material-shield-key:{ .lg .middle } **OAuth2 Server**
+
+    ---
+
+    Authorization server for hub/spoke identity federation with PKCE, token revocation, and OIDC discovery.
+
+    [:octicons-arrow-right-24: OAuth2 Server](oauth2-server.md)
+
 </div>
 
 ## Styling
@@ -88,6 +96,7 @@ Technical reference documentation for Skrift.
 | [Environment Variables](environment-variables.md) | Configuration and secrets |
 | [OAuth Providers](auth-providers.md) | Authentication setup |
 | [Security Features](security-features.md) | Security implementation details |
+| [OAuth2 Server](oauth2-server.md) | Authorization server, token revocation, OIDC discovery |
 | [CSS Framework](css-framework.md) | Styling classes and components |
 | [Sitemap & Robots.txt](sitemap-robots.md) | SEO sitemap and crawler directives |
 | [Template System](../guides/custom-templates.md) | Template hierarchy and blocks |

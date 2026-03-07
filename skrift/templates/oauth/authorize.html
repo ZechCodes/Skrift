@@ -78,11 +78,18 @@
         </header>
 
         <p>
-            <span class="client-name">{{ client_id }}</span>
+            <span class="client-name">{{ display_name or client_id }}</span>
             wants to access your account.
         </p>
 
-        {% if scopes %}
+        {% if scope_descriptions %}
+        <p>This will allow the application to:</p>
+        <ul class="scope-list">
+            {% for scope in scope_descriptions %}
+            <li>{{ scope.description }}</li>
+            {% endfor %}
+        </ul>
+        {% elif scopes %}
         <p>This will allow the application to:</p>
         <ul class="scope-list">
             {% for scope in scopes %}
