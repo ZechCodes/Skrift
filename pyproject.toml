@@ -1,6 +1,6 @@
 [project]
 name = "skrift"
-version = "0.1.0a73"
+version = "0.1.0a74"
 description = "A lightweight async Python CMS for crafting modern websites"
 readme = "README.md"
 requires-python = ">=3.13"
