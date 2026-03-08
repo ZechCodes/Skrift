@@ -298,12 +298,17 @@ async def notify(
         **payload,
     )
 
-    # Check if user has active SSE connections
-    if push_fallback:
+    # Check push_notify from payload: True=always, False=never, None=auto (fallback)
+    push_notify = payload.get("push_notify")
+    if push_notify is False or not push_fallback:
+        return
+
+    should_push = push_notify is True
+    if not should_push:
+        # Auto mode: only send push if no active SSE connection
         user_key = f"user:{user_id}"
         has_sse = notifications._registry.has_listeners(user_key)
 
-        # Also check downstream — sessions subscribed to this user
         if not has_sse:
             children = notifications._registry._subscribers.get(user_key, set())
             has_sse = any(
@@ -311,7 +316,9 @@ async def notify(
                 for child in children
             )
 
-        if not has_sse:
+        should_push = not has_sse
+
+    if should_push:
             title = push_title or payload.get("title", event)
             body = push_body or payload.get("body", "")
             url = push_url or payload.get("url")
@@ -347,21 +354,26 @@ def setup_push_hook(session_maker) -> None:
         if scope != "user" or not scope_id:
             return
 
-        from skrift.lib.notifications import notifications
-
-        user_key = f"user:{scope_id}"
-
-        # Check for active SSE connections
-        has_sse = notifications._registry.has_listeners(user_key)
-        if not has_sse:
-            children = notifications._registry._subscribers.get(user_key, set())
-            has_sse = any(
-                notifications._registry.has_listeners(child)
-                for child in children
-            )
-
-        if has_sse:
+        # Check push_notify payload flag: True=always, False=never, None=auto
+        push_notify = notification.payload.get("push_notify")
+        if push_notify is False:
             return
+
+        if push_notify is not True:
+            # Auto mode: only send push if no active SSE connection
+            from skrift.lib.notifications import notifications
+
+            user_key = f"user:{scope_id}"
+            has_sse = notifications._registry.has_listeners(user_key)
+            if not has_sse:
+                children = notifications._registry._subscribers.get(user_key, set())
+                has_sse = any(
+                    notifications._registry.has_listeners(child)
+                    for child in children
+                )
+
+            if has_sse:
+                return
 
         # No SSE — send push
         title = notification.payload.get("title", notification.type)

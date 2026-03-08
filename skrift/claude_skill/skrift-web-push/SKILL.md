@@ -89,6 +89,43 @@ setup_push_hook(db_config.get_session)
 
 The hook fires at priority 50, checks SSE connectivity, and sends push only when the user has no active connections.
 
+### Controlling Push per Notification — `push_notify`
+
+Pass `push_notify` in the payload to control push behavior per notification:
+
+```python
+# Always send push (even if SSE connected) — for important alerts
+await notify_user(user_id, "message", title="New message", push_notify=True)
+
+# Never send push — for transient UI updates
+await notify_user(user_id, "typing", title="User is typing", push_notify=False)
+
+# Auto (default) — push only if no SSE connection
+await notify_user(user_id, "generic", title="Update")
+```
+
+Values: `True` = always push, `False` = never push, `None`/omitted = auto (SSE fallback).
+
+### Client-Side Push Filtering
+
+Apps can suppress or modify push notifications based on what the user is viewing:
+
+```javascript
+window.__skriftPush.onFilter(function(payload) {
+  // Suppress notification if user is already viewing this chat
+  if (payload.tag === "chat:" + currentChatId && document.hasFocus()) {
+    return { cancel: true };
+  }
+  return payload;  // show as-is
+});
+```
+
+The service worker queries focused tabs before showing a notification (200ms timeout).
+
+### Service Worker Auto-Update
+
+The service worker uses `skipWaiting()` + `clients.claim()` to activate immediately on update. No manual intervention needed — new features work on the next page load.
+
 ## Subscription Management
 
 ```python

@@ -63,6 +63,27 @@ from skrift.lib.notifications import notify_user
 await notify_user(str(user.id), "generic", title="New reply", message="Someone replied.")
 ```
 
+### Controlling Push per Notification
+
+Pass `push_notify` to control whether a specific notification triggers a push:
+
+```python
+# Always push (even if user has SSE connected) — for important messages
+await notify_user(str(user.id), "message", title="New message", push_notify=True)
+
+# Never push — for transient status updates
+await notify_user(str(user.id), "typing", title="User is typing", push_notify=False)
+
+# Auto (default) — push only if no active SSE connection
+await notify_user(str(user.id), "generic", title="Update")
+```
+
+| Value | Behavior |
+|-------|----------|
+| `True` | Always send push, even if user has active SSE |
+| `False` | Never send push, SSE only |
+| `None` (default) | Send push only if user has no active SSE connection |
+
 ### Unified `notify()`
 
 For more control over push content separately from SSE:
@@ -127,6 +148,23 @@ await window.__skriftPush.unsubscribe();
 // Check current status
 const active = await window.__skriftPush.isSubscribed();
 ```
+
+### Client-Side Push Filtering
+
+Register a filter callback to suppress or modify notifications based on what the user is currently viewing:
+
+```javascript
+window.__skriftPush.onFilter(function(payload) {
+  // Suppress notification if user is viewing this chat
+  if (payload.tag === "chat:" + currentChatId) {
+    return { cancel: true };
+  }
+  // Or modify the notification
+  return payload;
+});
+```
+
+When a push arrives, the service worker asks focused tabs if the notification should be shown. If the filter returns `{ cancel: true }`, the notification is suppressed. If no filter is registered or no tab responds within 200ms, the notification shows normally.
 
 ## Service Worker
 

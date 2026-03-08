@@ -546,6 +546,95 @@ class TestPushHook:
         mock_push.assert_not_awaited()
         hooks.clear()
 
+    @pytest.mark.asyncio
+    async def test_push_hook_respects_push_notify_true(self):
+        """push_notify=True forces push even when SSE is connected."""
+        from skrift.lib.hooks import NOTIFICATION_SENT, hooks
+        from skrift.lib.notifications import Notification, NotificationMode
+        from skrift.lib.push import setup_push_hook
+
+        hooks.clear()
+
+        mock_session = AsyncMock()
+        mock_session_maker = MagicMock()
+        mock_session_maker.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_maker.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        setup_push_hook(mock_session_maker)
+
+        notification = Notification(
+            type="test",
+            payload={"title": "Important", "body": "Alert", "push_notify": True},
+            mode=NotificationMode.TIMESERIES,
+        )
+
+        with patch("skrift.lib.notifications.notifications") as mock_ns, \
+             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+            # SSE IS connected, but push_notify=True overrides
+            mock_ns._registry.has_listeners.return_value = True
+
+            await hooks.do_action(NOTIFICATION_SENT, notification, "user", "user-123")
+
+        mock_push.assert_awaited_once()
+        hooks.clear()
+
+    @pytest.mark.asyncio
+    async def test_push_hook_respects_push_notify_false(self):
+        """push_notify=False blocks push even when SSE is disconnected."""
+        from skrift.lib.hooks import NOTIFICATION_SENT, hooks
+        from skrift.lib.notifications import Notification, NotificationMode
+        from skrift.lib.push import setup_push_hook
+
+        hooks.clear()
+
+        mock_session_maker = MagicMock()
+        setup_push_hook(mock_session_maker)
+
+        notification = Notification(
+            type="test",
+            payload={"title": "Silent", "body": "No push", "push_notify": False},
+            mode=NotificationMode.TIMESERIES,
+        )
+
+        with patch("skrift.lib.notifications.notifications") as mock_ns, \
+             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+            # SSE is NOT connected, but push_notify=False prevents push
+            mock_ns._registry.has_listeners.return_value = False
+            mock_ns._registry._subscribers.get.return_value = set()
+
+            await hooks.do_action(NOTIFICATION_SENT, notification, "user", "user-123")
+
+        mock_push.assert_not_awaited()
+        hooks.clear()
+
+    @pytest.mark.asyncio
+    async def test_push_hook_push_notify_none_is_auto(self):
+        """push_notify=None (default) uses SSE presence to decide."""
+        from skrift.lib.hooks import NOTIFICATION_SENT, hooks
+        from skrift.lib.notifications import Notification, NotificationMode
+        from skrift.lib.push import setup_push_hook
+
+        hooks.clear()
+
+        mock_session_maker = MagicMock()
+        setup_push_hook(mock_session_maker)
+
+        notification = Notification(
+            type="test",
+            payload={"title": "Auto", "body": "Default behavior"},
+            mode=NotificationMode.TIMESERIES,
+        )
+
+        with patch("skrift.lib.notifications.notifications") as mock_ns, \
+             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+            # SSE IS connected — auto mode should skip push
+            mock_ns._registry.has_listeners.return_value = True
+
+            await hooks.do_action(NOTIFICATION_SENT, notification, "user", "user-123")
+
+        mock_push.assert_not_awaited()
+        hooks.clear()
+
 
 # ===========================================================================
 # Service worker (Tier 5)
@@ -581,6 +670,23 @@ class TestServiceWorker:
         push_js_path = Path(__file__).parent.parent / "skrift" / "static" / "js" / "push.js"
         assert push_js_path.is_file()
 
+    def test_sw_has_auto_update(self):
+        from pathlib import Path
+
+        sw_path = Path(__file__).parent.parent / "skrift" / "static" / "sw.js"
+        content = sw_path.read_text()
+        assert "skipWaiting" in content
+        assert "clients.claim" in content
+        assert "SW_VERSION" in content
+
+    def test_sw_has_push_filter(self):
+        from pathlib import Path
+
+        sw_path = Path(__file__).parent.parent / "skrift" / "static" / "sw.js"
+        content = sw_path.read_text()
+        assert "skrift-push-filter" in content
+        assert "_filterAndShow" in content
+
     def test_push_js_has_subscribe_function(self):
         from pathlib import Path
 
@@ -588,6 +694,14 @@ class TestServiceWorker:
         content = push_js_path.read_text()
         assert "async subscribe()" in content
         assert "async unsubscribe()" in content
+
+    def test_push_js_has_filter_support(self):
+        from pathlib import Path
+
+        push_js_path = Path(__file__).parent.parent / "skrift" / "static" / "js" / "push.js"
+        content = push_js_path.read_text()
+        assert "onFilter" in content
+        assert "skrift-push-filter" in content
         assert "async isSubscribed()" in content
 
 

@@ -1,14 +1,23 @@
 /**
- * SkriftPush — Web Push subscription management.
+ * SkriftPush — Web Push subscription management and client-side filtering.
  *
  * Fetches the VAPID public key, subscribes via the Push API,
  * and sends the subscription to the server.
+ *
+ * Push filter:
+ *   window.__skriftPush.onFilter(function(payload) {
+ *     if (payload.tag === "chat:123" && isViewingChat("123")) {
+ *       return { cancel: true };  // suppress notification
+ *     }
+ *     return payload;  // show as-is (or modify fields)
+ *   });
  */
 (function () {
   "use strict";
 
   var SkriftPush = {
     _subscribed: false,
+    _filterCallback: null,
 
     async subscribe() {
       if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
@@ -89,7 +98,43 @@
         return false;
       }
     },
+
+    /**
+     * Register a filter callback for incoming push notifications.
+     *
+     * The callback receives the push payload and should return:
+     *   - { cancel: true } to suppress the notification
+     *   - A modified payload object to update the notification
+     *   - The original payload (or nothing) to show as-is
+     *
+     * @param {Function} callback - function(payload) => payload | {cancel: true}
+     */
+    onFilter(callback) {
+      this._filterCallback = callback;
+    },
   };
+
+  // Listen for filter requests from the service worker
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", function (event) {
+      if (!event.data || event.data.type !== "skrift-push-filter") return;
+      if (!event.ports || !event.ports[0]) return;
+
+      var payload = event.data.payload;
+      var result = payload;
+
+      if (SkriftPush._filterCallback) {
+        try {
+          result = SkriftPush._filterCallback(payload) || payload;
+        } catch (err) {
+          console.error("Push filter error:", err);
+          result = payload;
+        }
+      }
+
+      event.ports[0].postMessage(result);
+    });
+  }
 
   window.__skriftPush = SkriftPush;
 })();
