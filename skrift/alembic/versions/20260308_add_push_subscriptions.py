@@ -1,6 +1,6 @@
 """Add push_subscriptions table for Web Push notifications.
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: 4ef00221df53
 Revises: s1t2u3v4w5x6
 Create Date: 2026-03-08
 """
@@ -8,7 +8,7 @@ Create Date: 2026-03-08
 from alembic import op
 import sqlalchemy as sa
 
-revision = "a1b2c3d4e5f6"
+revision = "4ef00221df53"
 down_revision = "s1t2u3v4w5x6"
 branch_labels = None
 depends_on = None
