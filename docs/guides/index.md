@@ -106,6 +106,14 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Notifications](notifications.md)
 
+-   :material-cellphone-message:{ .lg .middle } **Web Push**
+
+    ---
+
+    Send push notifications to users who aren't actively connected, with automatic VAPID key management.
+
+    [:octicons-arrow-right-24: Web Push](web-push.md)
+
 -   :material-web:{ .lg .middle } **Multi-Subdomain Sites**
 
     ---
@@ -131,6 +139,7 @@ Step-by-step guides for building and customizing your Skrift site.
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |
 | [Observability](observability.md) | Tracing & logging | None |
 | [Notifications](notifications.md) | Real-time notifications | Python basics |
+| [Web Push](web-push.md) | Offline push notifications | Python basics |
 | [Multi-Subdomain Sites](multisite.md) | Subdomain architecture | Python, ASGI |
 
 ## What You Can Build

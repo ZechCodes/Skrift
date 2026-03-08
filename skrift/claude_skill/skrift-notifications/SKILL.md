@@ -265,3 +265,7 @@ Two hook constants defined in `skrift/lib/hooks.py`:
 | `GET` | `/notifications/stream` | SSE stream (auto-connected by `notifications.js`) |
 | `DELETE` | `/notifications/{id}` | Dismiss by notification UUID |
 | `DELETE` | `/notifications/group/{group}` | Dismiss by group key |
+
+## Web Push Fallback
+
+For offline notification delivery, see the `skrift-web-push` skill. Web Push automatically sends browser push notifications to users without active SSE connections via the `NOTIFICATION_SENT` hook.

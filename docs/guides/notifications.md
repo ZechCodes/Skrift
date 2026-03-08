@@ -292,5 +292,6 @@ if (saved) window.__skriftNotifications.lastSeen = parseFloat(saved);
 
 ## See Also
 
+- [Web Push Notifications](web-push.md) — offline push delivery for users without active SSE connections
 - [Hooks and Filters](hooks-and-filters.md) — `NOTIFICATION_SENT` and `NOTIFICATION_DISMISSED` hook constants
 - [Custom Controllers](custom-controllers.md) — building controllers that send notifications
