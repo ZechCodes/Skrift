@@ -238,6 +238,14 @@ class TestSubscriptionManagement:
 # ===========================================================================
 
 
+try:
+    import pywebpush  # noqa: F401
+    _has_pywebpush = True
+except ImportError:
+    _has_pywebpush = False
+
+
+@pytest.mark.skipif(not _has_pywebpush, reason="pywebpush not installed")
 class TestSendPush:
     """Test the send_push utility."""
 
