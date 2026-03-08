@@ -820,6 +820,7 @@ def create_app() -> ASGIApp:
     from skrift.controllers.notifications import NotificationsController
     from skrift.controllers.notification_webhook import NotificationsWebhookController
     from skrift.controllers.oauth2 import OAuth2Controller
+    from skrift.controllers.push import PushController, service_worker
     from skrift.controllers.sitemap import SitemapController
     from skrift.auth import sync_roles_to_database
     from skrift.lib.notification_backends import InMemoryBackend, load_backend
@@ -834,6 +835,11 @@ def create_app() -> ASGIApp:
             settings.csrf.exclude.append("/oauth/token")
             settings.csrf.exclude.append("/oauth/revoke")
             settings.csrf.exclude.append("/oauth/introspect")
+
+    # Exempt push subscription endpoints from CSRF (session-authed JSON API)
+    if settings.csrf is not None:
+        settings.csrf.exclude.append("/push/subscribe")
+        settings.csrf.exclude.append("/push/unsubscribe")
 
     # Webhook controller — only registered when a secret is configured
     webhook_handlers: list = []
@@ -871,6 +877,13 @@ def create_app() -> ASGIApp:
         notification_service.set_backend(backend)
         await backend.start()
 
+        # Register Web Push fallback hook (sends push when no SSE connection)
+        try:
+            from skrift.lib.push import setup_push_hook
+            setup_push_hook(db_config.get_session)
+        except ImportError:
+            logger.debug("pywebpush not installed, push notifications disabled")
+
         # Ensure local storage directories exist
         for store_cfg in settings.storage.stores.values():
             if store_cfg.backend == "local":
@@ -884,7 +897,7 @@ def create_app() -> ASGIApp:
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
-        route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *webhook_handlers, *controllers],
+        route_handlers=[NotificationsController, PushController, service_worker, SitemapController, *oauth2_handlers, *webhook_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
