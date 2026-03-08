@@ -306,13 +306,13 @@ class _DatabaseStorageMixin:
                     StoredNotification.group_key == group,
                 )
             )
-            old_id = result.scalar_one_or_none()
-            if old_id:
+            old_ids = list(result.scalars().all())
+            if old_ids:
                 await session.execute(
-                    delete(StoredNotification).where(StoredNotification.id == old_id)
+                    delete(StoredNotification).where(StoredNotification.id.in_(old_ids))
                 )
                 await session.commit()
-            return old_id
+            return old_ids[0] if old_ids else None
 
     async def get_queued_multi(self, source_keys: Collection[str]) -> list[Notification]:
         from skrift.db.models.notification import StoredNotification
