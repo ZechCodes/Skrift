@@ -63,8 +63,17 @@ class Notification:
 
     @classmethod
     def dismissed(cls, notification_id: UUID) -> Notification:
-        """Create a dismissed notification event."""
-        return cls(type="dismissed", id=notification_id, payload={})
+        """Create a dismissed notification event.
+
+        Uses TIMESERIES mode so disconnected clients receive it on reconnect
+        via get_since. The dismissed notification's ID is in the payload as
+        ``notification_id``; this event gets its own unique ID for storage.
+        """
+        return cls(
+            type="dismissed",
+            payload={"notification_id": str(notification_id)},
+            mode=NotificationMode.TIMESERIES,
+        )
 
 
 def _parse_source_key(source_key: str) -> tuple[str, str | None]:
@@ -215,7 +224,9 @@ class NotificationService:
         if notification.mode != NotificationMode.EPHEMERAL:
             old_id = await backend.store(source_key, notification)
             if old_id is not None:
-                self._registry.push(source_key, Notification.dismissed(old_id))
+                dismissed = Notification.dismissed(old_id)
+                await backend.store(source_key, dismissed)
+                self._registry.push(source_key, dismissed)
 
         self._registry.push(source_key, notification)
 
@@ -295,6 +306,9 @@ class NotificationService:
 
         if dismissed_id is not None:
             dismissed = Notification.dismissed(dismissed_id)
+
+            # Store as timeseries so disconnected clients receive on reconnect
+            await backend.store(subscriber_key, dismissed)
 
             # Push only to the dismisser's sessions, not the source
             self._registry.push(f"session:{nid}", dismissed)

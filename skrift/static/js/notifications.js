@@ -201,7 +201,7 @@
 
         _handleNotification(data) {
             if (data.type === "dismissed") {
-                this._removeDismissed(data.id);
+                this._removeDismissed(data.notification_id || data.id);
                 return;
             }
 

@@ -419,7 +419,7 @@ class TestSendToSessionGroup:
         # Should get: dismissed(n1), then n2
         dismissed = q.get_nowait()
         assert dismissed.type == "dismissed"
-        assert dismissed.id == n1.id
+        assert dismissed.payload["notification_id"] == str(n1.id)
 
         new_notif = q.get_nowait()
         assert new_notif.id == n2.id
@@ -498,7 +498,7 @@ class TestSendToUserGroup:
         for q in (q1, q2):
             dismissed = q.get_nowait()
             assert dismissed.type == "dismissed"
-            assert dismissed.id == n1.id
+            assert dismissed.payload["notification_id"] == str(n1.id)
 
             new_notif = q.get_nowait()
             assert new_notif.id == n2.id
@@ -622,7 +622,7 @@ class TestDismissByGroup:
 
         dismissed = q.get_nowait()
         assert dismissed.type == "dismissed"
-        assert dismissed.id == n.id
+        assert dismissed.payload["notification_id"] == str(n.id)
 
     @pytest.mark.asyncio
     async def test_dismiss_by_group_pushes_to_other_user_sessions(self, svc):
@@ -639,7 +639,7 @@ class TestDismissByGroup:
         for q in (q1, q2):
             dismissed = q.get_nowait()
             assert dismissed.type == "dismissed"
-            assert dismissed.id == n.id
+            assert dismissed.payload["notification_id"] == str(n.id)
 
     @pytest.mark.asyncio
     async def test_dismiss_by_group_does_not_affect_other_groups(self, svc):
@@ -740,7 +740,7 @@ class TestDismissGroupConvenience:
 
             dismissed = q.get_nowait()
             assert dismissed.type == "dismissed"
-            assert dismissed.id == n.id
+            assert dismissed.payload["notification_id"] == str(n.id)
         finally:
             mod.notifications = original
 
@@ -1169,7 +1169,7 @@ class TestSourceSubscriptionModel:
         # Dismissed event pushed through graph
         dismissed = q.get_nowait()
         assert dismissed.type == "dismissed"
-        assert dismissed.id == n.id
+        assert dismissed.payload["notification_id"] == str(n.id)
 
         # Storage is cleared for dismisser
         queued = await svc.get_queued("abc", "alice")
@@ -1258,7 +1258,7 @@ class TestPerSubscriberDismissals:
         # Alice gets dismissed event
         dismissed = q_alice.get_nowait()
         assert dismissed.type == "dismissed"
-        assert dismissed.id == n.id
+        assert dismissed.payload["notification_id"] == str(n.id)
 
         # Bob's queue should be empty (no spurious dismissed event)
         assert q_bob.empty()
