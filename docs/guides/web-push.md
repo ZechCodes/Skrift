@@ -2,15 +2,16 @@
 
 Skrift can send browser push notifications to users who aren't actively connected via SSE. This provides offline notification delivery — users receive notifications even when they've closed the tab.
 
-Web Push requires the `push` extra: `pip install 'skrift[push]'`.
+Web Push requires the `push` extra and must be explicitly enabled in your `app.yaml`.
 
 ## How It Works
 
-1. VAPID keys are auto-generated on first use and stored in the database
-2. Users subscribe via the browser Push API (your frontend calls `window.__skriftPush.subscribe()`)
-3. When a notification is sent and the user has no active SSE connection, Skrift sends a Web Push notification instead
+1. You enable the `PushController` in your `app.yaml`
+2. VAPID keys are auto-generated on first use and stored in the database
+3. Users subscribe via the browser Push API (your frontend calls `window.__skriftPush.subscribe()`)
+4. When a notification is sent and the user has no active SSE connection, Skrift sends a Web Push notification instead
 
-This is automatic when using the `NOTIFICATION_SENT` hook (enabled by default). You can also use the `notify()` function or `send_push()` directly.
+This is automatic when using the `NOTIFICATION_SENT` hook. You can also use the `notify()` function or `send_push()` directly.
 
 ## Quick Start
 
@@ -20,7 +21,18 @@ This is automatic when using the `NOTIFICATION_SENT` hook (enabled by default). 
 pip install 'skrift[push]'
 ```
 
-### 2. Register the service worker
+### 2. Enable the PushController
+
+Add to your `app.yaml`:
+
+```yaml
+controllers:
+  - "skrift.controllers.push:PushController"
+```
+
+This registers the `/push/*` endpoints and `/sw.js` service worker route. The push fallback hook is also activated automatically.
+
+### 3. Register the service worker in your template
 
 Add to your base template:
 
@@ -33,7 +45,7 @@ Add to your base template:
 </script>
 ```
 
-### 3. Add a subscribe button
+### 4. Add a subscribe button
 
 ```html
 <button id="push-subscribe">Enable notifications</button>

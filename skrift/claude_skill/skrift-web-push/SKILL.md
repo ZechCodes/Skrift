@@ -7,7 +7,14 @@ description: "Skrift Web Push notifications — VAPID key management, browser su
 
 Web Push notification support with VAPID authentication. Sends browser push notifications to users who don't have an active SSE connection, providing offline notification delivery.
 
-Requires `pip install 'skrift[push]'` (`pywebpush` dependency). Gracefully no-ops if not installed.
+Requires `pip install 'skrift[push]'` (`pywebpush` dependency) and must be explicitly enabled by adding `PushController` to `app.yaml`:
+
+```yaml
+controllers:
+  - "skrift.controllers.push:PushController"
+```
+
+The controller, service worker route, CSRF exclusions, and push fallback hook are only active when `PushController` is registered. Without it, no push-related routes or hooks are loaded.
 
 ## VAPID Key Management
 
@@ -202,9 +209,10 @@ Include both scripts in your template:
 
 ## Integration in `asgi.py`
 
-- `PushController` and `service_worker` route registered automatically
-- `/push/subscribe` and `/push/unsubscribe` added to CSRF exclude list
-- `setup_push_hook()` called in `on_startup` if `pywebpush` is importable
+- `PushController` is user-enabled via `app.yaml` controllers list
+- `service_worker` route is auto-expanded when `PushController` is loaded (similar to AdminController auto-expansion)
+- `/push/subscribe` and `/push/unsubscribe` added to CSRF exclude list only when push is enabled
+- `setup_push_hook()` called in `on_startup` only when push is enabled and `pywebpush` is importable
 
 ## Key Files
 
