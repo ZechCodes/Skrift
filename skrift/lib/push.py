@@ -236,7 +236,7 @@ async def send_push(
             sub.last_used_at = datetime.now(timezone.utc)
             sent += 1
         except WebPushException as e:
-            if e.response and e.response.status_code in (404, 410):
+            if e.response is not None and e.response.status_code in (404, 410):
                 # Subscription expired or unsubscribed — clean up
                 expired_ids.append(sub.id)
                 logger.debug("Removing expired push subscription %s", sub.endpoint)
