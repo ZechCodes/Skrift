@@ -29,6 +29,8 @@ from skrift.db.session import SessionCleanupMiddleware
 from litestar import Litestar
 from litestar.config.compression import CompressionConfig
 from litestar.config.csrf import CSRFConfig as LitestarCSRFConfig
+
+from skrift.middleware.compression import SafeGzipCompression
 from litestar.middleware import DefineMiddleware
 from litestar.types import ASGIApp, Receive, Scope, Send
 
@@ -626,7 +628,7 @@ def _build_site_app(
             *user_middleware,
         ],
         template_config=template_config,
-        compression_config=CompressionConfig(backend="gzip"),
+        compression_config=CompressionConfig(backend="gzip", compression_facade=SafeGzipCompression),
         csrf_config=csrf_config,
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
@@ -910,7 +912,7 @@ def create_app() -> ASGIApp:
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
-        compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream"),
+        compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream", compression_facade=SafeGzipCompression),
         csrf_config=csrf_config,
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
@@ -1133,7 +1135,7 @@ def create_setup_app() -> Litestar:
         plugins=plugins,
         middleware=[DefineMiddleware(SessionCleanupMiddleware), session_config.middleware],
         template_config=template_config,
-        compression_config=CompressionConfig(backend="gzip"),
+        compression_config=CompressionConfig(backend="gzip", compression_facade=SafeGzipCompression),
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
