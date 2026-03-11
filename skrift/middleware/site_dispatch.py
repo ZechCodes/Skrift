@@ -68,7 +68,7 @@ class SiteDispatcher:
             await self._handle_lifespan(scope, receive, send)
             return
 
-        if scope["type"] != "http":
+        if scope["type"] not in ("http", "websocket"):
             await self.primary_app(scope, receive, send)
             return
 

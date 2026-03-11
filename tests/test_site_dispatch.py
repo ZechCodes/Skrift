@@ -113,17 +113,37 @@ class TestSiteDispatcher:
         assert scope["state"]["site_name"] == ""
 
     @pytest.mark.asyncio
-    async def test_non_http_goes_to_primary(self):
+    async def test_websocket_routes_to_subdomain_app(self):
+        called_with = {}
+
+        async def blog_app(scope, receive, send):
+            called_with["app"] = "blog"
+            called_with["type"] = scope["type"]
+
+        async def primary(scope, receive, send):
+            called_with["app"] = "primary"
+            called_with["type"] = scope["type"]
+
+        dispatcher = SiteDispatcher(primary, {"blog": blog_app}, "example.com")
+        scope = {"type": "websocket", "headers": [(b"host", b"blog.example.com")]}
+        await dispatcher(scope, None, None)
+
+        assert called_with["app"] == "blog"
+        assert called_with["type"] == "websocket"
+        assert scope["state"]["site_name"] == "blog"
+
+    @pytest.mark.asyncio
+    async def test_non_http_websocket_goes_to_primary(self):
         called_with = {}
 
         async def primary(scope, receive, send):
             called_with["type"] = scope["type"]
 
         dispatcher = SiteDispatcher(primary, {}, "example.com")
-        scope = {"type": "websocket", "headers": [(b"host", b"blog.example.com")]}
+        scope = {"type": "lifespan.unknown", "headers": []}
         await dispatcher(scope, None, None)
 
-        assert called_with["type"] == "websocket"
+        assert called_with["type"] == "lifespan.unknown"
 
     @pytest.mark.asyncio
     async def test_sets_state_dict_if_missing(self, captured_messages):
