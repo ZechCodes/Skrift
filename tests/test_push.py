@@ -289,7 +289,7 @@ class TestSendPush:
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         import pywebpush as _pw
-        with patch.object(_pw, "webpush") as mock_webpush:
+        with patch.object(_pw, "webpush_async", new_callable=AsyncMock) as mock_webpush:
             sent = await push_mod.send_push(
                 mock_session, "user-123", "Test Title", "Test Body",
                 url="/test", tag="test-tag",
@@ -298,7 +298,7 @@ class TestSendPush:
         assert sent == 1
         assert mock_sub.last_used_at is not None
 
-        # Verify webpush was called with correct args
+        # Verify webpush_async was called with correct args
         call_kwargs = mock_webpush.call_args
         sub_info = call_kwargs.kwargs["subscription_info"]
         assert sub_info["endpoint"] == "https://push.example.com/sub1"
@@ -342,7 +342,7 @@ class TestSendPush:
         error.response = mock_response
 
         import pywebpush as _pw
-        with patch.object(_pw, "webpush", side_effect=error):
+        with patch.object(_pw, "webpush_async", new_callable=AsyncMock, side_effect=error):
             sent = await push_mod.send_push(mock_session, "user-123", "Test", "body")
 
         assert sent == 0
