@@ -188,7 +188,7 @@ async def send_push(
     Returns:
         Number of notifications successfully sent.
     """
-    from pywebpush import WebPushException, webpush
+    from pywebpush import WebPushException, webpush_async
 
     from skrift.db.models.push_subscription import PushSubscription
 
@@ -227,7 +227,7 @@ async def send_push(
         }
 
         try:
-            webpush(
+            await webpush_async(
                 subscription_info=subscription_info,
                 data=data,
                 vapid_private_key=padded_key,
