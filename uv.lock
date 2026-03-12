@@ -1709,7 +1709,7 @@ wheels = [
 
 [[package]]
 name = "skrift"
-version = "0.1.0a76"
+version = "0.1.0a82"
 source = { editable = "." }
 dependencies = [
     { name = "advanced-alchemy" },
