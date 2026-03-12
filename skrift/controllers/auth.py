@@ -170,10 +170,11 @@ def _set_login_session(request: Request, user: "User") -> None:
     Preserves flash/flash_messages across the rotation so login
     success messages aren't lost.
     """
-    # Preserve flash state and notification ID
+    # Preserve flash state, notification ID, and auth redirect
     flash = request.session.get("flash")
     flash_messages = request.session.get("flash_messages")
     nid = request.session.get("_nid")
+    auth_next = request.session.get(SESSION_AUTH_NEXT)
 
     # Clear session to rotate the cookie
     request.session.clear()
@@ -191,6 +192,8 @@ def _set_login_session(request: Request, user: "User") -> None:
         request.session["flash_messages"] = flash_messages
     if nid is not None:
         request.session["_nid"] = nid
+    if auth_next is not None:
+        request.session[SESSION_AUTH_NEXT] = auth_next
 
 
 class AuthController(Controller):
