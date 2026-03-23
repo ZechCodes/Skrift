@@ -5,7 +5,7 @@ description: "Skrift form system — Pydantic-backed forms with CSRF protection,
 
 # Skrift Form System
 
-Skrift forms combine Pydantic validation with CSRF protection, template rendering, and hook integration.
+Skrift forms combine Pydantic validation with CSRF protection, template rendering, and hook integration. For form template rendering in themes, also see `/skrift-frontend`. For hook details, see `/skrift-events`.
 
 ## Architecture
 
