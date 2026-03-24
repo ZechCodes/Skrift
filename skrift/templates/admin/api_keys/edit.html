@@ -1,0 +1,171 @@
+{% extends "admin/base.html" %}
+
+{% block title %}{{ "Edit" if api_key else "New" }} API Key - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>{{ "Edit" if api_key else "New" }} API Key</h1>
+    <p>{{ "Update key settings" if api_key else "Generate a new API key for programmatic access" }}</p>
+</hgroup>
+
+{% if new_api_key %}
+<style nonce="{{ csp_nonce() }}">
+.sk-secret-reveal {
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: 0.5rem;
+}
+.sk-secret-reveal p { margin: 0 0 0.5rem; }
+.sk-secret-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+.sk-secret-masked {
+    font-size: 0.95rem;
+    padding: 0.25rem 0.5rem;
+    background: var(--sk-color-bg-subtle, #f8f9fa);
+    border-radius: 0.25rem;
+}
+</style>
+<div class="sk-secret-reveal">
+    <p><strong>API Key</strong> — save this now, it won't be shown again</p>
+    <div class="sk-secret-row">
+        <code class="sk-secret-masked">{{ new_api_key[:12] }}••••••••••••</code>
+        <span hidden id="sk-key-full">{{ new_api_key }}</span>
+        <button type="button" class="sk-btn-outline sk-btn-small" onclick="copyValue(this, document.getElementById('sk-key-full').textContent)">Copy Key</button>
+    </div>
+    <p><strong>Refresh Token</strong> — save this too for key rotation</p>
+    <div class="sk-secret-row">
+        <code class="sk-secret-masked">{{ new_refresh_token[:12] }}••••••••••••</code>
+        <span hidden id="sk-refresh-full">{{ new_refresh_token }}</span>
+        <button type="button" class="sk-btn-outline sk-btn-small" onclick="copyValue(this, document.getElementById('sk-refresh-full').textContent)">Copy Refresh Token</button>
+    </div>
+</div>
+<script nonce="{{ csp_nonce() }}">
+function copyValue(btn, text) {
+    navigator.clipboard.writeText(text).then(function() {
+        var orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = orig; }, 2000);
+    });
+}
+</script>
+{% endif %}
+
+{% if api_key %}
+<div style="margin-bottom: 1.5rem; padding: 1rem; background: var(--sk-color-bg-subtle, #f8f9fa); border-radius: 0.5rem;">
+    <p><strong>Key Prefix:</strong> <code>{{ api_key.key_prefix }}...</code></p>
+    <p><strong>User:</strong> {{ api_key.user.name or api_key.user.email }}</p>
+    <p><strong>Created:</strong> {{ api_key.created_at.strftime("%Y-%m-%d %H:%M UTC") }}</p>
+    {% if api_key.last_used_at %}
+    <p><strong>Last Used:</strong> {{ api_key.last_used_at.strftime("%Y-%m-%d %H:%M UTC") }}{% if api_key.last_used_ip %} from {{ api_key.last_used_ip }}{% endif %}</p>
+    {% endif %}
+    <form method="post" action="/admin/api-keys/{{ api_key.id }}/rotate" style="display: inline;">
+        {{ csrf_field() }}
+        <button type="submit" class="sk-btn-outline sk-btn-small" onclick="return confirm('Rotate this key? The current key and refresh token will stop working immediately.')">Rotate Key</button>
+    </form>
+</div>
+{% if not new_api_key %}
+<script nonce="{{ csp_nonce() }}">
+function copyValue(btn, text) {
+    navigator.clipboard.writeText(text).then(function() {
+        var orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = orig; }, 2000);
+    });
+}
+</script>
+{% endif %}
+{% endif %}
+
+<form method="post" action="/admin/api-keys/{{ api_key.id ~ '/edit' if api_key else 'new' }}">
+    {{ csrf_field() }}
+
+    {% if not api_key %}
+    <label>
+        User
+        <select name="user_id" required>
+            <option value="">Select a user...</option>
+            {% for user in users %}
+            <option value="{{ user.id }}">{{ user.name or user.email }} ({{ user.email }})</option>
+            {% endfor %}
+        </select>
+    </label>
+    {% endif %}
+
+    <label>
+        Display Name
+        <input type="text" name="display_name" value="{{ api_key.display_name if api_key else '' }}" required placeholder="My Integration">
+    </label>
+
+    <label>
+        Description <small class="sk-text-muted">(optional)</small>
+        <textarea name="description" rows="2" placeholder="What this key is used for">{{ api_key.description if api_key and api_key.description else '' }}</textarea>
+    </label>
+
+    <label>
+        Expiration <small class="sk-text-muted">(optional, leave blank for no expiration)</small>
+        <input type="datetime-local" name="expires_at" value="{{ api_key.expires_at.strftime('%Y-%m-%dT%H:%M') if api_key and api_key.expires_at else '' }}">
+    </label>
+
+    <fieldset>
+        <legend>Scoped Permissions <small class="sk-text-muted">— leave all unchecked to inherit user's full permissions</small></legend>
+        {% for perm in available_permissions %}
+        <label>
+            <input type="checkbox" name="perm_{{ perm }}" {% if api_key and perm in api_key.scoped_permission_list %}checked{% endif %}>
+            <span>{{ perm }}</span>
+        </label>
+        {% endfor %}
+    </fieldset>
+
+    <fieldset>
+        <legend>Scoped Roles <small class="sk-text-muted">— leave all unchecked to inherit user's full roles</small></legend>
+        {% for role_name, role_def in available_roles.items() %}
+        <label>
+            <input type="checkbox" name="role_{{ role_name }}" {% if api_key and role_name in api_key.scoped_role_list %}checked{% endif %}>
+            <span>
+                <strong>{{ role_def.display_name or role_name }}</strong>
+                {% if role_def.description %}
+                <small class="sk-text-muted"> — {{ role_def.description }}</small>
+                {% endif %}
+            </span>
+        </label>
+        {% endfor %}
+    </fieldset>
+
+    {% if api_key %}
+    <label>
+        <input type="checkbox" name="is_active" {% if api_key.is_active %}checked{% endif %}>
+        Active
+    </label>
+    {% endif %}
+
+    <div class="sk-form-actions">
+        <button type="submit">{{ "Update Key" if api_key else "Create Key" }}</button>
+        <a href="/admin/api-keys" role="button" class="sk-btn-outline">Cancel</a>
+    </div>
+</form>
+
+{% if api_key %}
+<hr>
+<details>
+    <summary>Danger Zone</summary>
+    <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+        {% if api_key.is_active %}
+        <form method="post" action="/admin/api-keys/{{ api_key.id }}/revoke">
+            {{ csrf_field() }}
+            <button type="submit" class="sk-btn-danger" onclick="return confirm('Revoke this key? It will immediately stop working.')">Revoke Key</button>
+        </form>
+        {% endif %}
+        <form method="post" action="/admin/api-keys/{{ api_key.id }}/delete">
+            {{ csrf_field() }}
+            <button type="submit" class="sk-btn-danger" onclick="return confirm('Permanently delete this key? This cannot be undone.')">Delete Key</button>
+        </form>
+    </div>
+</details>
+{% endif %}
+{% endblock %}

@@ -161,7 +161,7 @@ def load_controllers() -> list:
 
         # Auto-expand AdminController to include split sub-controllers
         if class_name == "AdminController" and module_path == "skrift.admin.controller":
-            for sub_name in ("UserAdminController", "SettingsAdminController", "MediaAdminController", "OAuth2ClientAdminController"):
+            for sub_name in ("UserAdminController", "SettingsAdminController", "MediaAdminController", "OAuth2ClientAdminController", "APIKeyAdminController"):
                 sub_class = getattr(module, sub_name, None)
                 if sub_class and sub_class not in controllers:
                     controllers.append(sub_class)
@@ -832,6 +832,16 @@ def create_app() -> ASGIApp:
     from skrift.lib.notification_backends import InMemoryBackend, load_backend
     from skrift.lib.notifications import notifications as notification_service
 
+    # API auth controller — only registered when api_keys are enabled
+    from skrift.controllers.api_auth import APIAuthController
+
+    api_auth_handlers: list = []
+    if settings.api_keys.enabled:
+        api_auth_handlers.append(APIAuthController)
+        # Exempt refresh endpoint from CSRF since it uses bearer-token auth
+        if settings.csrf is not None:
+            settings.csrf.exclude.append("/api/auth/refresh")
+
     # OAuth2 controller — only registered when oauth2 is enabled
     oauth2_handlers: list = []
     if settings.oauth2_enabled:
@@ -908,7 +918,7 @@ def create_app() -> ASGIApp:
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
-        route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *webhook_handlers, *controllers],
+        route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *api_auth_handlers, *webhook_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,

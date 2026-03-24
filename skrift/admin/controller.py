@@ -16,6 +16,7 @@ from skrift.admin.users import UserAdminController  # noqa: F401
 from skrift.admin.settings import SettingsAdminController  # noqa: F401
 from skrift.admin.media import MediaAdminController  # noqa: F401
 from skrift.admin.oauth2_clients import OAuth2ClientAdminController  # noqa: F401
+from skrift.admin.api_keys import APIKeyAdminController  # noqa: F401
 
 
 class AdminController(Controller):

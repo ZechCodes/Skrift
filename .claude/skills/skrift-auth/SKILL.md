@@ -94,7 +94,7 @@ class ArticleController(Controller):
 
 | Role | Permissions | Notes |
 |------|-------------|-------|
-| `admin` | `administrator`, `manage-users`, `manage-pages`, `modify-site`, `manage-oauth-clients` | Bypasses all checks |
+| `admin` | `administrator`, `manage-users`, `manage-pages`, `modify-site`, `manage-oauth-clients`, `manage-api-keys` | Bypasses all checks |
 | `editor` | `view-drafts`, `manage-pages`, `create-pages`, `manage-media` | All pages |
 | `author` | `view-drafts`, `edit-own-pages`, `delete-own-pages`, `create-pages`, `upload-media` | Own pages |
 | `moderator` | `view-drafts`, `manage-pages`, `create-pages`, `manage-media` | Moderate content |

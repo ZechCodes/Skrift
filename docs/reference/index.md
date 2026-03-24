@@ -58,6 +58,14 @@ Technical reference documentation for Skrift.
 
     [:octicons-arrow-right-24: OAuth2 Server](oauth2-server.md)
 
+-   :material-key-chain:{ .lg .middle } **API Keys**
+
+    ---
+
+    Programmatic authentication with bearer tokens, permission scoping, and key rotation via refresh tokens.
+
+    [:octicons-arrow-right-24: API Keys](api-keys.md)
+
 </div>
 
 ## Styling
@@ -97,6 +105,7 @@ Technical reference documentation for Skrift.
 | [OAuth Providers](auth-providers.md) | Authentication setup |
 | [Security Features](security-features.md) | Security implementation details |
 | [OAuth2 Server](oauth2-server.md) | Authorization server, token revocation, OIDC discovery |
+| [API Keys](api-keys.md) | Bearer token authentication with scoping and rotation |
 | [CSS Framework](css-framework.md) | Styling classes and components |
 | [Sitemap & Robots.txt](sitemap-robots.md) | SEO sitemap and crawler directives |
 | [Template System](../guides/custom-templates.md) | Template hierarchy and blocks |

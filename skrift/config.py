@@ -312,6 +312,15 @@ class SiteConfig(BaseModel):
     page_types: list[PageTypeConfig] = []
 
 
+class APIKeyConfig(BaseModel):
+    """API key authentication configuration."""
+
+    enabled: bool = True
+    default_expiration_days: int = 365
+    max_keys_per_user: int = 10
+    refresh_token_expiration_days: int = 30
+
+
 class NotificationsConfig(BaseModel):
     """Notification backend configuration."""
 
@@ -419,6 +428,9 @@ class Settings(BaseSettings):
 
     # OAuth2 Authorization Server enabled flag
     oauth2_enabled: bool = False
+
+    # API key configuration
+    api_keys: APIKeyConfig = APIKeyConfig()
 
     # Session config (loaded from app.yaml)
     session: SessionConfig = SessionConfig()
