@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from skrift.db.base import Base
 
 if TYPE_CHECKING:
+    from skrift.db.models.api_key import APIKey
     from skrift.db.models.oauth_account import OAuthAccount
     from skrift.db.models.page import Page
     from skrift.db.models.role import Role
@@ -33,4 +34,7 @@ class User(Base):
     pages: Mapped[list["Page"]] = relationship("Page", back_populates="user")
     roles: Mapped[list["Role"]] = relationship(
         "Role", secondary="user_roles", back_populates="users", lazy="selectin"
+    )
+    api_keys: Mapped[list["APIKey"]] = relationship(
+        "APIKey", back_populates="user", cascade="all, delete-orphan"
     )

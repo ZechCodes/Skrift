@@ -1,0 +1,67 @@
+{% extends "admin/base.html" %}
+
+{% block title %}API Keys - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>API Keys</h1>
+    <p>Manage API keys for programmatic access</p>
+</hgroup>
+
+<div class="sk-form-actions" style="margin-bottom: 1rem;">
+    <a href="/admin/api-keys/new" role="button">New API Key</a>
+</div>
+
+<table class="sk-admin-table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Key Prefix</th>
+            <th>User</th>
+            <th>Status</th>
+            <th>Last Used</th>
+            <th>Expires</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for key in api_keys %}
+        <tr>
+            <td>{{ key.display_name }}</td>
+            <td><code>{{ key.key_prefix }}...</code></td>
+            <td>{{ key.user.name or key.user.email or "Unknown" }}</td>
+            <td>
+                {% if not key.is_active %}
+                    <span class="sk-text-muted">Revoked</span>
+                {% elif key.is_expired %}
+                    <span class="sk-text-muted">Expired</span>
+                {% else %}
+                    <span class="sk-role-badge">Active</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if key.last_used_at %}
+                    {{ key.last_used_at.strftime("%Y-%m-%d %H:%M") }}
+                {% else %}
+                    <span class="sk-text-muted">Never</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if key.expires_at %}
+                    {{ key.expires_at.strftime("%Y-%m-%d") }}
+                {% else %}
+                    <span class="sk-text-muted">Never</span>
+                {% endif %}
+            </td>
+            <td>
+                <a href="/admin/api-keys/{{ key.id }}/edit" role="button" class="sk-btn-outline sk-btn-small">Edit</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not api_keys %}
+<p class="sk-no-items">No API keys created yet.</p>
+{% endif %}
+{% endblock %}
