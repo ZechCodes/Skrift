@@ -296,8 +296,8 @@ class TestCSPNonce:
         return send
 
     @pytest.mark.asyncio
-    async def test_csp_nonce_added_to_script_src(self, captured_messages):
-        """When csp_nonce=True, nonce is added to script-src but style-src is untouched."""
+    async def test_csp_nonce_replaces_unsafe_inline(self, captured_messages):
+        """When csp_nonce=True, 'unsafe-inline' in style-src is replaced with nonce."""
         csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
 
         async def app(scope, receive, send):
@@ -318,10 +318,10 @@ class TestCSPNonce:
         response_start = captured_messages[0]
         header_dict = dict(response_start["headers"])
         csp_header = header_dict[b"content-security-policy"].decode()
-        # style-src should keep 'unsafe-inline' (nonces block inline style attributes)
-        assert "style-src 'self' 'unsafe-inline'" in csp_header
-        # script-src should have the nonce
+        assert "'unsafe-inline'" not in csp_header
         assert "'nonce-" in csp_header
+        # style-src should have the nonce
+        assert "style-src 'self' 'nonce-" in csp_header
 
     @pytest.mark.asyncio
     async def test_csp_nonce_false_keeps_unsafe_inline(self, captured_messages):
