@@ -3,8 +3,8 @@
 {% block title %}Authentication Setup - Skrift{% endblock %}
 
 {% block content %}
-<h2>Authentication Providers</h2>
-<p class="description">Configure at least one OAuth provider for user authentication.</p>
+<h2>Authentication Methods</h2>
+<p class="description">Configure at least one primary authentication method. Bundled methods include OAuth, dummy, and passkey.</p>
 
 <form method="post" action="/setup/auth">
     <div class="form-group">
@@ -15,33 +15,37 @@
 
     <hr style="margin: 2rem 0;">
 
-    {% for key, provider in providers.items() %}
-    <div class="provider-card{% if key in configured_providers %} enabled{% endif %}" id="provider-{{ key }}">
+    {% for key, method in methods.items() %}
+    <div class="provider-card{% if key in configured_methods %} enabled{% endif %}" id="provider-{{ key }}">
         <div class="provider-header" onclick="toggleProvider('{{ key }}')">
-            <input type="checkbox" name="{{ key }}_enabled" id="{{ key }}_enabled" {% if key in configured_providers %}checked{% endif %} onclick="event.stopPropagation(); toggleProvider('{{ key }}')">
-            <h3>{{ provider.name }}</h3>
+            <input type="checkbox" name="{{ key }}_enabled" id="{{ key }}_enabled" {% if key in configured_methods %}checked{% endif %} onclick="event.stopPropagation(); toggleProvider('{{ key }}')">
+            <h3>{{ method.name }}</h3>
         </div>
         <div class="provider-fields">
             <div class="provider-instructions">
                 <details>
                     <summary>Setup Instructions</summary>
-                    <pre>{{ provider.instructions }}</pre>
-                    <p><a href="{{ provider.console_url }}" target="_blank" rel="noopener">Open Developer Console</a></p>
+                    <pre>{{ method.instructions }}</pre>
+                    {% if method.console_url %}
+                    <p><a href="{{ method.console_url }}" target="_blank" rel="noopener">Open Developer Console</a></p>
+                    {% endif %}
                 </details>
             </div>
 
+            {% if method.auth_method_type == 'oauth' %}
             <div class="form-group">
                 <label>Redirect URI (copy this to your OAuth app settings)</label>
                 <div class="redirect-url" id="redirect-url-{{ key }}">{{ redirect_base_url }}/auth/{{ key }}/callback</div>
             </div>
+            {% endif %}
 
-            {% for field in provider.fields %}
+            {% for field in method.fields %}
             <div class="form-group">
                 <label for="{{ key }}_{{ field.key }}">{{ field.label }}{% if not field.optional %} *{% endif %}</label>
                 <input type="{{ field.type }}"
                        id="{{ key }}_{{ field.key }}"
                        name="{{ key }}_{{ field.key }}"
-                       value="{{ configured_providers.get(key, {}).get(field.key, '') }}"
+                       value="{{ configured_methods.get(key, {}).get(field.key, '') }}"
                        {% if field.placeholder %}placeholder="{{ field.placeholder }}"{% endif %}
                        {% if not field.optional %}required{% endif %}>
                 <div class="form-group env-toggle">
@@ -88,14 +92,16 @@
     // Update redirect URLs when base URL changes
     document.getElementById('redirect_base_url').addEventListener('input', function() {
         const baseUrl = this.value;
-        {% for key in providers.keys() %}
+        {% for key in methods.keys() %}
+        {% if methods[key].auth_method_type == 'oauth' %}
         document.getElementById('redirect-url-{{ key }}').textContent = baseUrl + '/auth/{{ key }}/callback';
+        {% endif %}
         {% endfor %}
     });
 
     // Initialize required attributes based on initial state
     document.addEventListener('DOMContentLoaded', function() {
-        {% for key in providers.keys() %}
+        {% for key in methods.keys() %}
         const card{{ key }} = document.getElementById('provider-{{ key }}');
         const checkbox{{ key }} = document.getElementById('{{ key }}_enabled');
         const fields{{ key }} = card{{ key }}.querySelectorAll('.provider-fields input[type="text"], .provider-fields input[type="password"]');

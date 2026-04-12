@@ -126,12 +126,39 @@ class TestSaveAuth:
         with patch("skrift.setup.controller.load_config", return_value={
             "auth": {
                 "redirect_base_url": "https://configured.example.com",
-                "providers": {},
+                "methods": {},
             }
         }):
             result = await SetupController.auth_step.fn(controller, request)
 
         assert result.context["redirect_base_url"] == "https://configured.example.com"
+
+    @pytest.mark.asyncio
+    async def test_auth_step_reads_configured_methods(self):
+        """Should expose configured auth methods from app config."""
+        from skrift.setup.controller import SetupController
+
+        controller = SetupController(owner=MagicMock())
+        request = MagicMock()
+        request.session = {}
+        request.headers = {}
+        request.url.scheme = "http"
+        request.url.netloc = "current.example.com"
+
+        with patch("skrift.setup.controller.load_config", return_value={
+            "auth": {
+                "methods": {
+                    "google": {
+                        "type": "oauth",
+                        "client_id": "id",
+                        "client_secret": "secret",
+                    }
+                }
+            }
+        }):
+            result = await SetupController.auth_step.fn(controller, request)
+
+        assert "google" in result.context["configured_methods"]
 
     @pytest.mark.asyncio
     async def test_no_providers_returns_error(self):
@@ -151,6 +178,75 @@ class TestSaveAuth:
             result = await SetupController.save_auth.fn(controller, request)
             assert result.url == "/setup/auth"
             assert "at least one" in request.session["setup_error"]
+
+    @pytest.mark.asyncio
+    async def test_save_auth_writes_methods(self):
+        """Should persist auth config using auth.methods semantics."""
+        from skrift.setup.controller import SetupController
+        from skrift.setup.state import SetupStep
+
+        controller = SetupController(owner=MagicMock())
+        request = MagicMock()
+        request.session = {}
+        request.form = AsyncMock(return_value={
+            "redirect_base_url": "https://example.com",
+            "google_enabled": "on",
+            "google_client_id": "id",
+            "google_client_secret": "secret",
+        })
+
+        provider = MagicMock()
+        provider.fields = [{"key": "client_id"}, {"key": "client_secret"}]
+
+        with patch("skrift.setup.controller.get_all_providers", return_value={"google": provider}), \
+             patch("skrift.setup.controller.update_auth_config") as mock_update, \
+             patch("skrift.setup.controller.get_first_incomplete_step", new_callable=AsyncMock) as mock_step:
+            mock_step.return_value = SetupStep.SITE
+            result = await SetupController.save_auth.fn(controller, request)
+
+        assert result.url == "/setup/site"
+        assert mock_update.call_args.kwargs["methods"] == {
+            "google": {
+                "type": "oauth",
+                "client_id": "id",
+                "client_secret": "secret",
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_save_auth_writes_passkey_method(self):
+        """Should persist passkey primary auth config from setup UI."""
+        from skrift.setup.controller import SetupController
+        from skrift.setup.state import SetupStep
+
+        controller = SetupController(owner=MagicMock())
+        request = MagicMock()
+        request.session = {}
+        request.form = AsyncMock(return_value={
+            "redirect_base_url": "https://example.com",
+            "passkey_enabled": "on",
+            "passkey_label": "Passkey",
+            "passkey_factor_key": "",
+        })
+
+        provider = MagicMock()
+        provider.fields = [{"key": "label", "optional": True}, {"key": "factor_key", "optional": True}]
+        provider.auth_method_type = "passkey"
+
+        with patch("skrift.setup.controller.get_all_providers", return_value={"passkey": provider}), \
+             patch("skrift.setup.controller.update_auth_config") as mock_update, \
+             patch("skrift.setup.controller.get_first_incomplete_step", new_callable=AsyncMock) as mock_step:
+            mock_step.return_value = SetupStep.SITE
+            result = await SetupController.save_auth.fn(controller, request)
+
+        assert result.url == "/setup/site"
+        assert mock_update.call_args.kwargs["methods"] == {
+            "passkey": {
+                "type": "passkey",
+                "label": "Passkey",
+                "factor_key": "passkey",
+            }
+        }
 
     @pytest.mark.asyncio
     async def test_unexpected_error_is_generic_and_logged(self):
@@ -271,6 +367,25 @@ class TestAdminStep:
         assert result.context["step"] == 5
         assert result.context["total_steps"] == 5
         assert result.context["previous_step_path"] == "/setup/theme"
+
+    @pytest.mark.asyncio
+    async def test_setup_login_renders_passkey_admin_form(self):
+        """Passkey setup admin flow should render the passkey template."""
+        from skrift.setup.controller import SetupController
+
+        controller = SetupController(owner=MagicMock())
+        request = MagicMock()
+        request.session = {}
+
+        with patch("skrift.setup.controller.load_config", return_value={
+            "auth": {"methods": {"passkey": {"type": "passkey"}}}
+        }), \
+             patch("skrift.setup.controller._admin_step_number", return_value=5), \
+             patch("skrift.setup.controller._total_steps", return_value=5), \
+             patch("skrift.setup.controller._get_previous_setup_step_path", return_value="/setup/theme"):
+            result = await SetupController.setup_oauth_login.fn(controller, request, "passkey")
+
+        assert result.template_name == "setup/passkey_login.html"
 
 
 class TestSetupOAuthCallback:

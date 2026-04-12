@@ -204,6 +204,108 @@ class SkriftProviderConfig(BaseModel):
 ProviderConfig = OAuthProviderConfig | DummyProviderConfig | SkriftProviderConfig
 
 
+class SecondFactorSettings(BaseModel):
+    """Second-factor authentication configuration."""
+
+    enabled: bool = False
+    challenge_on_enrolled: bool = False
+    methods: dict[str, dict] = {}
+
+    def get_method_keys(self) -> list[str]:
+        """Return configured second-factor method keys."""
+        return list(self.methods.keys())
+
+    def get_method_type(self, key: str) -> str:
+        """Resolve the configured second-factor method type."""
+        config = self.methods.get(key, {})
+        if isinstance(config, dict):
+            return config.get("type", "") or key
+        return key
+
+    def get_method_config(self, key: str) -> dict:
+        """Get the raw config dict for a second-factor method key."""
+        config = self.methods.get(key, {})
+        return dict(config) if isinstance(config, dict) else {}
+
+
+def _method_config_from_provider_config(name: str, config: dict) -> dict:
+    """Derive an auth.methods entry from a legacy auth.providers entry."""
+    config = dict(config)
+    provider_type = config.get("provider", "") or name
+    method_type = "dummy" if provider_type == "dummy" else "oauth"
+    method_config = dict(config)
+    method_config["type"] = method_type
+    if method_type == "oauth" and provider_type != name:
+        method_config["provider"] = provider_type
+    elif method_type == "dummy":
+        method_config.pop("provider", None)
+    return method_config
+
+
+def _provider_config_from_method_config(name: str, config: dict) -> dict | None:
+    """Derive an auth.providers entry from an auth.methods entry when possible."""
+    config = dict(config)
+    method_type = config.pop("type", "") or "oauth"
+
+    if method_type == "dummy":
+        return {"provider": "dummy"}
+    if method_type == "oauth":
+        provider_type = config.get("provider", "") or name
+        provider_config = dict(config)
+        if provider_type != name:
+            provider_config["provider"] = provider_type
+        return provider_config
+    return None
+
+
+def get_auth_method_configs(auth_config: dict | None) -> dict[str, dict]:
+    """Normalize raw auth config to auth.methods shape."""
+    if not auth_config:
+        return {}
+
+    methods = auth_config.get("methods", {})
+    providers = auth_config.get("providers", {})
+    normalized: dict[str, dict] = {}
+
+    if isinstance(methods, dict):
+        for name, config in methods.items():
+            if isinstance(config, dict):
+                normalized[name] = dict(config)
+
+    if isinstance(providers, dict):
+        for name, config in providers.items():
+            if name in normalized or not isinstance(config, dict):
+                continue
+            normalized[name] = _method_config_from_provider_config(name, config)
+
+    return normalized
+
+
+def get_auth_provider_configs(auth_config: dict | None) -> dict[str, dict]:
+    """Normalize raw auth config to auth.providers shape for OAuth-compatible code."""
+    if not auth_config:
+        return {}
+
+    providers = auth_config.get("providers", {})
+    normalized: dict[str, dict] = {}
+
+    if isinstance(providers, dict):
+        for name, config in providers.items():
+            if isinstance(config, dict):
+                normalized[name] = dict(config)
+
+    methods = auth_config.get("methods", {})
+    if isinstance(methods, dict):
+        for name, config in methods.items():
+            if name in normalized or not isinstance(config, dict):
+                continue
+            provider_config = _provider_config_from_method_config(name, config)
+            if provider_config is not None:
+                normalized[name] = provider_config
+
+    return normalized
+
+
 class SecurityHeadersConfig(BaseModel):
     """Security response headers configuration.
 
@@ -333,8 +435,12 @@ class AuthConfig(BaseModel):
 
     redirect_base_url: str = "http://localhost:8000"
     allowed_redirect_domains: list[str] = []
+    second_factors: SecondFactorSettings = SecondFactorSettings()
+    methods: dict[str, dict] = {}
     providers: dict[str, ProviderConfig] = {}
     _provider_types: dict[str, str] = PrivateAttr(default_factory=dict)
+    _method_types: dict[str, str] = PrivateAttr(default_factory=dict)
+    _method_configs: dict[str, dict] = PrivateAttr(default_factory=dict)
 
     @classmethod
     def _resolve_provider_type(cls, key: str, config: dict) -> str:
@@ -354,6 +460,22 @@ class AuthConfig(BaseModel):
         return OAuthProviderConfig(**config)
 
     def __init__(self, **data):
+        # Convert raw auth.methods/auth.providers to a unified internal model.
+        method_types = {}
+        method_configs = {}
+        raw_methods = {}
+
+        if isinstance(data.get("methods"), dict) or isinstance(data.get("providers"), dict):
+            raw_methods = get_auth_method_configs(data)
+            data["methods"] = raw_methods
+            provider_dicts = get_auth_provider_configs(data)
+            data["providers"] = provider_dicts
+
+            for name, config in raw_methods.items():
+                method_type = config.get("type", "") or "oauth"
+                method_types[name] = method_type
+                method_configs[name] = dict(config)
+
         # Convert raw provider dicts to appropriate config objects
         provider_types = {}
         if "providers" in data and isinstance(data["providers"], dict):
@@ -368,10 +490,31 @@ class AuthConfig(BaseModel):
             data["providers"] = parsed_providers
         super().__init__(**data)
         self._provider_types = provider_types
+        self._method_types = method_types
+        self._method_configs = method_configs
 
     def get_provider_type(self, key: str) -> str:
         """Get the provider type for a config key. Falls back to key itself."""
         return self._provider_types.get(key, key)
+
+    def get_primary_auth_method_type(self, key: str) -> str:
+        """Map provider-oriented config to the current primary-auth method type."""
+        if key in self._method_types:
+            return self._method_types[key]
+        provider_type = self.get_provider_type(key)
+        if provider_type == "dummy":
+            return "dummy"
+        return "oauth"
+
+    def get_method_config(self, key: str) -> dict:
+        """Get the raw config dict for a primary auth method key."""
+        return dict(self._method_configs.get(key, {}))
+
+    def get_method_keys(self) -> list[str]:
+        """Return configured auth method keys in config order."""
+        if self.methods:
+            return list(self.methods.keys())
+        return list(self.providers.keys())
 
     def get_redirect_uri(self, provider: str) -> str:
         """Get the OAuth callback URL for a provider."""
@@ -491,11 +634,11 @@ def is_config_valid() -> tuple[bool, str | None]:
             if not os.environ.get(env_var):
                 return False, f"Database environment variable ${env_var} not set"
 
-        # Check auth providers
+        # Check auth methods/providers
         auth_config = config.get("auth", {})
-        providers = auth_config.get("providers", {})
-        if not providers:
-            return False, "No authentication providers configured"
+        methods = get_auth_method_configs(auth_config)
+        if not methods:
+            return False, "No authentication methods configured"
 
         return True, None
     except Exception as e:

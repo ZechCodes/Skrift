@@ -18,9 +18,31 @@ class OAuthProviderInfo:
     fields: list[dict]
     instructions: str
     icon: str = ""
+    auth_method_type: str = "oauth"
 
 
 OAUTH_PROVIDERS = {
+    "passkey": OAuthProviderInfo(
+        name="Passkey",
+        auth_url="",
+        token_url="",
+        userinfo_url="",
+        scopes=[],
+        console_url="",
+        fields=[
+            {"key": "label", "label": "Button Label", "type": "text", "optional": True},
+            {
+                "key": "factor_key",
+                "label": "Enrollment Key",
+                "type": "text",
+                "placeholder": "passkey",
+                "optional": True,
+            },
+        ],
+        instructions="Enable discoverable WebAuthn passkey sign-in. Existing users can sign in with enrolled passkeys, and new users can create an account with a passkey.",
+        icon="passkey",
+        auth_method_type="passkey",
+    ),
     "google": OAuthProviderInfo(
         name="Google",
         auth_url="https://accounts.google.com/o/oauth2/v2/auth",
@@ -187,7 +209,7 @@ def get_provider_info(provider: str) -> OAuthProviderInfo | None:
 
 
 def get_all_providers() -> dict[str, OAuthProviderInfo]:
-    """Get all available OAuth providers (excluding dev-only providers)."""
+    """Get all setup-configurable auth methods (excluding dev-only providers)."""
     return {k: v for k, v in OAUTH_PROVIDERS.items() if k != DUMMY_PROVIDER_KEY}
 
 
@@ -206,10 +228,15 @@ def validate_no_dummy_auth_in_production() -> None:
     if config is None:
         return
 
-    providers = config.get("auth", {}).get("providers", {})
-    is_dummy = DUMMY_PROVIDER_KEY in providers
+    from skrift.config import get_auth_method_configs
+
+    methods = get_auth_method_configs(config.get("auth", {}))
+    is_dummy = any(
+        key == DUMMY_PROVIDER_KEY or (isinstance(cfg, dict) and cfg.get("type") == DUMMY_PROVIDER_KEY)
+        for key, cfg in methods.items()
+    )
     if not is_dummy:
-        for cfg in providers.values():
+        for cfg in methods.values():
             if isinstance(cfg, dict) and cfg.get("provider") == "dummy":
                 is_dummy = True
                 break
@@ -221,7 +248,7 @@ def validate_no_dummy_auth_in_production() -> None:
                 "\n"
                 "======================================================================\n"
                 "SECURITY ERROR: Dummy auth provider is configured in production.\n"
-                "Remove 'dummy' from auth.providers in app.yaml.\n"
+                "Remove 'dummy' from auth.methods/auth.providers in app.yaml.\n"
                 "Server will NOT start.\n"
                 "======================================================================\n\n"
             )

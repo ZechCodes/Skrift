@@ -1,0 +1,203 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Passkeys - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .passkey-shell {
+        max-width: 720px;
+        margin: 2rem auto;
+        display: grid;
+        gap: 1.5rem;
+    }
+
+    .passkey-card {
+        padding: 1.5rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.96));
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.07);
+    }
+
+    .passkey-card h2 {
+        margin-top: 0;
+    }
+
+    .passkey-list {
+        display: grid;
+        gap: 0.875rem;
+        margin-top: 1rem;
+    }
+
+    .passkey-item {
+        padding: 1rem 1.125rem;
+        border-radius: 0.875rem;
+        background: #f8fafc;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+    }
+
+    .passkey-meta {
+        color: var(--sk-color-muted, #52525b);
+        font-size: 0.9rem;
+    }
+
+    .passkey-form {
+        display: grid;
+        gap: 0.875rem;
+        margin-top: 1rem;
+    }
+
+    .passkey-input {
+        width: 100%;
+        padding: 0.85rem 1rem;
+        border-radius: 0.8rem;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        font: inherit;
+    }
+
+    .passkey-status {
+        min-height: 1.4rem;
+        color: var(--sk-color-muted, #52525b);
+        font-size: 0.95rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="passkey-shell">
+    <article class="passkey-card">
+        <header>
+            <h1>Passkeys</h1>
+            <p>Register a passkey for {{ user.email or user.name or "your account" }}.</p>
+        </header>
+
+        {% if descriptor.is_available %}
+        <form id="passkey-registration-form" class="passkey-form">
+            {{ csrf_field() }}
+            <label>
+                <span>Label</span>
+                <input type="text" class="passkey-input" name="display_name" placeholder="MacBook Pro, YubiKey, iPhone">
+            </label>
+            <button type="submit" class="sk-btn">Add Passkey</button>
+        </form>
+        <p id="passkey-status" class="passkey-status"></p>
+        {% else %}
+        <p>{{ descriptor.availability_note or "Passkey verification is not available in this environment." }}</p>
+        {% endif %}
+    </article>
+
+    <article class="passkey-card">
+        <h2>Registered Passkeys</h2>
+        <div class="passkey-list">
+            {% for enrollment in enrollments %}
+            <div class="passkey-item">
+                <strong>{{ enrollment.display_name or "Unnamed Passkey" }}</strong>
+                <div class="passkey-meta">
+                    Added {{ enrollment.enrolled_at.strftime('%Y-%m-%d %H:%M') if enrollment.enrolled_at else "recently" }}
+                    {% if enrollment.last_used_at %}
+                    • Last used {{ enrollment.last_used_at.strftime('%Y-%m-%d %H:%M') }}
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <p class="passkey-meta">No passkeys registered yet.</p>
+            {% endfor %}
+        </div>
+    </article>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+function base64urlToBuffer(value) {
+    const padding = "=".repeat((4 - value.length % 4) % 4);
+    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(base64);
+    return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+
+function bufferToBase64url(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    bytes.forEach(byte => {
+        binary += String.fromCharCode(byte);
+    });
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function normalizeRegistrationOptions(options) {
+    options.challenge = base64urlToBuffer(options.challenge);
+    options.user.id = base64urlToBuffer(options.user.id);
+    options.excludeCredentials = (options.excludeCredentials || []).map(credential => ({
+        ...credential,
+        id: base64urlToBuffer(credential.id),
+    }));
+    return options;
+}
+
+function serializeRegistrationCredential(credential) {
+    return {
+        id: credential.id,
+        rawId: bufferToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+            attestationObject: bufferToBase64url(credential.response.attestationObject),
+            clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+            transports: credential.response.getTransports ? credential.response.getTransports() : [],
+        },
+    };
+}
+
+const registrationForm = document.getElementById("passkey-registration-form");
+const statusNode = document.getElementById("passkey-status");
+
+if (registrationForm) {
+    registrationForm.addEventListener("submit", async event => {
+        event.preventDefault();
+        if (!window.PublicKeyCredential) {
+            statusNode.textContent = "This browser does not support passkeys.";
+            return;
+        }
+
+        statusNode.textContent = "Preparing passkey registration...";
+        const formData = new FormData(registrationForm);
+        const optionsResponse = await fetch("/auth/passkeys/options", {
+            method: "POST",
+            body: formData,
+            credentials: "same-origin",
+        });
+        const optionsPayload = await optionsResponse.json();
+        if (!optionsResponse.ok) {
+            statusNode.textContent = optionsPayload.error || "Unable to begin passkey registration.";
+            return;
+        }
+
+        try {
+            const credential = await navigator.credentials.create({
+                publicKey: normalizeRegistrationOptions(optionsPayload.options),
+            });
+            const completionData = new FormData();
+            completionData.append("_csrf", optionsPayload.csrf_token || formData.get("_csrf"));
+            completionData.append("display_name", formData.get("display_name") || "");
+            completionData.append("credential", JSON.stringify(serializeRegistrationCredential(credential)));
+
+            const completionResponse = await fetch("/auth/passkeys/complete", {
+                method: "POST",
+                body: completionData,
+                credentials: "same-origin",
+            });
+            const completionPayload = await completionResponse.json();
+            if (!completionResponse.ok) {
+                statusNode.textContent = completionPayload.error || "Unable to complete passkey registration.";
+                return;
+            }
+
+            statusNode.textContent = "Passkey added successfully. Reloading...";
+            window.location.reload();
+        } catch (error) {
+            statusNode.textContent = error?.message || "Passkey registration was cancelled.";
+        }
+    });
+}
+</script>
+{% endblock %}

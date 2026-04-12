@@ -1,0 +1,94 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Verify Sign-In - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .verify-container {
+        max-width: 440px;
+        margin: 2rem auto;
+    }
+
+    .verify-card {
+        padding: 2rem;
+        border: 1px solid var(--sk-color-border, #d4d4d8);
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
+    }
+
+    .verify-meta {
+        margin: 1rem 0 1.5rem;
+        color: var(--sk-color-muted, #52525b);
+        font-size: 0.95rem;
+    }
+
+    .verify-methods {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+    }
+
+    .verify-method {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1rem 1.25rem;
+        border-radius: 0.875rem;
+        background: linear-gradient(135deg, #f8fafc, #eef2ff);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        text-decoration: none;
+        color: inherit;
+    }
+
+    .verify-method strong {
+        display: block;
+        margin-bottom: 0.2rem;
+    }
+
+    .verify-method span {
+        color: var(--sk-color-muted, #52525b);
+        font-size: 0.9rem;
+    }
+
+    .verify-arrow {
+        font-size: 1.25rem;
+        color: #334155;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="verify-container">
+    <article class="verify-card">
+        <header>
+            <h1>Verify Your Sign-In</h1>
+        </header>
+
+        <p>One more step is required before this session is fully signed in.</p>
+
+        <p class="verify-meta">
+            {% if pending_auth.email %}
+            Signed in as <strong>{{ pending_auth.email }}</strong>
+            {% elif pending_auth.name %}
+            Signed in as <strong>{{ pending_auth.name }}</strong>
+            {% else %}
+            Complete your configured verification method below.
+            {% endif %}
+        </p>
+
+        <div class="verify-methods">
+            {% for method in methods %}
+            <a href="{{ method.verify_path }}" class="verify-method">
+                <div>
+                    <strong>{{ method.name }}</strong>
+                    <span>{{ method.factor_type|replace('_', ' ')|title }}</span>
+                </div>
+                <span class="verify-arrow" aria-hidden="true">&rarr;</span>
+            </a>
+            {% endfor %}
+        </div>
+    </article>
+</div>
+{% endblock %}

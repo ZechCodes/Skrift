@@ -1,0 +1,134 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Verify Passkey - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .verify-shell {
+        max-width: 520px;
+        margin: 2rem auto;
+    }
+
+    .verify-card {
+        padding: 2rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(239, 246, 255, 0.96));
+        box-shadow: 0 20px 48px rgba(15, 23, 42, 0.08);
+    }
+
+    .verify-status {
+        min-height: 1.4rem;
+        margin-top: 1rem;
+        color: var(--sk-color-muted, #52525b);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="verify-shell">
+    <article class="verify-card">
+        <header>
+            <h1>{{ descriptor.name }}</h1>
+        </header>
+        <p>Use your registered passkey to finish signing in{% if pending_auth.email %} as <strong>{{ pending_auth.email }}</strong>{% endif %}.</p>
+
+        <form id="passkey-verify-form">
+            {{ csrf_field() }}
+            <button type="submit" class="sk-btn">Verify With Passkey</button>
+        </form>
+        <p id="verify-status" class="verify-status"></p>
+    </article>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+function base64urlToBuffer(value) {
+    const padding = "=".repeat((4 - value.length % 4) % 4);
+    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(base64);
+    return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+
+function bufferToBase64url(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    bytes.forEach(byte => {
+        binary += String.fromCharCode(byte);
+    });
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function normalizeAuthenticationOptions(options) {
+    options.challenge = base64urlToBuffer(options.challenge);
+    options.allowCredentials = (options.allowCredentials || []).map(credential => ({
+        ...credential,
+        id: base64urlToBuffer(credential.id),
+    }));
+    return options;
+}
+
+function serializeAssertion(credential) {
+    return {
+        id: credential.id,
+        rawId: bufferToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+            clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+            authenticatorData: bufferToBase64url(credential.response.authenticatorData),
+            signature: bufferToBase64url(credential.response.signature),
+            userHandle: credential.response.userHandle ? bufferToBase64url(credential.response.userHandle) : null,
+        },
+    };
+}
+
+const verifyForm = document.getElementById("passkey-verify-form");
+const verifyStatus = document.getElementById("verify-status");
+
+verifyForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!window.PublicKeyCredential) {
+        verifyStatus.textContent = "This browser does not support passkeys.";
+        return;
+    }
+
+    verifyStatus.textContent = "Preparing verification...";
+    const formData = new FormData(verifyForm);
+    const optionsResponse = await fetch("/auth/verify/{{ factor_key }}/options", {
+        method: "POST",
+        body: formData,
+        credentials: "same-origin",
+    });
+    const optionsPayload = await optionsResponse.json();
+    if (!optionsResponse.ok) {
+        verifyStatus.textContent = optionsPayload.error || "Unable to start passkey verification.";
+        return;
+    }
+
+    try {
+        const credential = await navigator.credentials.get({
+            publicKey: normalizeAuthenticationOptions(optionsPayload.options),
+        });
+        const completionData = new FormData();
+        completionData.append("_csrf", optionsPayload.csrf_token || formData.get("_csrf"));
+        completionData.append("credential", JSON.stringify(serializeAssertion(credential)));
+
+        const completionResponse = await fetch("/auth/verify/{{ factor_key }}/complete", {
+            method: "POST",
+            body: completionData,
+            credentials: "same-origin",
+        });
+        const completionPayload = await completionResponse.json();
+        if (!completionResponse.ok) {
+            verifyStatus.textContent = completionPayload.error || "Passkey verification failed.";
+            return;
+        }
+
+        window.location.href = completionPayload.redirect || "/";
+    } catch (error) {
+        verifyStatus.textContent = error?.message || "Passkey verification was cancelled.";
+    }
+});
+</script>
+{% endblock %}

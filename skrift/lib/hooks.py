@@ -314,6 +314,7 @@ AFTER_USER_CREATED = "after_user_created"
 AFTER_USER_CREATED_DB = "after_user_created_db"
 AFTER_USER_UPDATE = "after_user_update"
 LOGIN_REDIRECT = "login_redirect"
+AUTH_PENDING_AUTHENTICATION = "auth_pending_authentication"
 
 # Role hooks
 AFTER_ROLE_ASSIGNED = "after_role_assigned"
