@@ -44,6 +44,8 @@ from skrift.app_factory import (
     update_template_directories,
 )
 from skrift.config import get_config_path, get_settings, is_config_valid
+from skrift.lib.trusted_proxy import TrustedProxyManager
+from skrift.middleware.client_ip import ClientIPMiddleware
 from skrift.middleware.rate_limit import RateLimitMiddleware
 from skrift.middleware.security import SecurityHeadersMiddleware
 from skrift.db.base import Base
@@ -559,6 +561,7 @@ def _build_site_app(
     db_config: SQLAlchemyAsyncConfig,
     session_config,
     csrf_config,
+    client_ip_middleware: list,
     security_middleware: list,
     rate_limit_middleware: list,
     user_middleware: list,
@@ -566,6 +569,7 @@ def _build_site_app(
     themes_dir: Path,
     site_static_dir: Path,
     package_static_dir: Path,
+    trusted_proxy_manager: TrustedProxyManager | None = None,
     page_types: list | None = None,
     storage_manager=None,
 ) -> ASGIApp:
@@ -622,6 +626,7 @@ def _build_site_app(
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[
             DefineMiddleware(SessionCleanupMiddleware),
+            *client_ip_middleware,
             *security_middleware,
             *rate_limit_middleware,
             session_config.middleware,
@@ -634,6 +639,8 @@ def _build_site_app(
         debug=settings.debug,
     )
     site_app.state.storage_manager = storage_manager
+    if trusted_proxy_manager is not None:
+        site_app.state.trusted_proxy_manager = trusted_proxy_manager
 
     from skrift.middleware.static import StaticFilesMiddleware
     return StaticFilesMiddleware(
@@ -732,6 +739,14 @@ def create_app() -> ASGIApp:
                     cache_authenticated=settings.security_headers.cache_authenticated,
                 )
             ]
+
+    # Trusted proxy / client IP resolution — runs before rate limiting so the
+    # resolved IP is already on scope["state"] by the time the limiter keys.
+    trusted_proxy_manager = TrustedProxyManager(settings.trusted_proxy)
+    logger.info("Trusted proxies: %s", trusted_proxy_manager.get())
+    client_ip_middleware = [
+        DefineMiddleware(ClientIPMiddleware, manager=trusted_proxy_manager)
+    ]
 
     # Rate limiting middleware
     rate_limit_middleware = []
@@ -899,6 +914,8 @@ def create_app() -> ASGIApp:
         notification_service.set_backend(backend)
         await backend.start()
 
+        await trusted_proxy_manager.start()
+
         # Register Web Push fallback hook (only when PushController is enabled)
         if _push_enabled:
             try:
@@ -916,13 +933,14 @@ def create_app() -> ASGIApp:
         """Stop notification backend and storage on shutdown."""
         await notification_service._get_backend().stop()
         await storage_manager.close()
+        await trusted_proxy_manager.stop()
 
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
         route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *api_auth_handlers, *webhook_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
+        middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream", compression_facade=SafeGzipCompression),
         csrf_config=csrf_config,
@@ -931,6 +949,7 @@ def create_app() -> ASGIApp:
     )
     app.state.webhook_secret = settings.notifications.webhook_secret
     app.state.storage_manager = storage_manager
+    app.state.trusted_proxy_manager = trusted_proxy_manager
 
     from skrift.middleware.storage import StorageFilesMiddleware
     from skrift.middleware.static import StaticFilesMiddleware
@@ -975,6 +994,7 @@ def create_app() -> ASGIApp:
                 db_config=db_config,
                 session_config=session_config,
                 csrf_config=csrf_config,
+                client_ip_middleware=client_ip_middleware,
                 security_middleware=security_middleware,
                 rate_limit_middleware=rate_limit_middleware,
                 user_middleware=user_middleware,
@@ -982,6 +1002,7 @@ def create_app() -> ASGIApp:
                 themes_dir=themes_dir,
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
+                trusted_proxy_manager=trusted_proxy_manager,
                 page_types=subdomain_page_types.pop(site_cfg.subdomain, []),
                 storage_manager=storage_manager,
             )
@@ -996,6 +1017,7 @@ def create_app() -> ASGIApp:
                 db_config=db_config,
                 session_config=session_config,
                 csrf_config=csrf_config,
+                client_ip_middleware=client_ip_middleware,
                 security_middleware=security_middleware,
                 rate_limit_middleware=rate_limit_middleware,
                 user_middleware=user_middleware,
@@ -1003,6 +1025,7 @@ def create_app() -> ASGIApp:
                 themes_dir=themes_dir,
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
+                trusted_proxy_manager=trusted_proxy_manager,
                 page_types=pts,
                 storage_manager=storage_manager,
             )

@@ -61,12 +61,23 @@ class TestGetClientIP:
             scope["client"] = client
         return scope
 
-    def test_uses_x_forwarded_for_first_entry(self):
+    def test_ignores_x_forwarded_for_without_middleware(self):
+        """Without ClientIPMiddleware resolving state, raw XFF is ignored.
+
+        Regression guard for #120: naively reading XFF from the scope is
+        spoofable. The resolver runs in middleware and populates
+        ``scope["state"]["client_ip"]``.
+        """
         scope = self._make_scope(
-            headers={"x-forwarded-for": "10.0.0.1, 10.0.0.2"},
+            headers={"x-forwarded-for": "1.2.3.4"},
             client=("192.168.1.1", 12345),
         )
-        assert get_client_ip(scope) == "10.0.0.1"
+        assert get_client_ip(scope) == "192.168.1.1"
+
+    def test_uses_resolved_state_when_present(self):
+        scope = self._make_scope(client=("10.0.0.5", 12345))
+        scope["state"] = {"client_ip": "203.0.113.7", "client_ip_source": "xff"}
+        assert get_client_ip(scope) == "203.0.113.7"
 
     def test_falls_back_to_client(self):
         scope = self._make_scope(client=("192.168.1.1", 12345))

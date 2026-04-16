@@ -51,6 +51,8 @@ include = [
     "skrift/alembic/**/*",
     "skrift/alembic.ini",
     "skrift/claude_skill/**/*.md",
+    "skrift/data/**/*.txt",
+    "skrift/data/**/*.json",
 ]
 exclude = [
     "**/__pycache__",

@@ -2,6 +2,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
@@ -379,6 +380,36 @@ class RateLimitConfig(BaseModel):
     paths: dict[str, int] = {}  # per-path-prefix overrides, e.g. {"/api": 120}
 
 
+class TrustedProxySourceConfig(BaseModel):
+    """Pluggable source that publishes a list of proxy CIDRs over HTTP."""
+
+    name: str
+    url: str
+    format: Literal["text", "json", "cidr-list"] = "text"
+    path: str | None = None  # JSONPath-like selector for "json" format (e.g. "prefixes[*].ip_prefix")
+    refresh_interval: str = "1h"  # duration string: "30m", "1h", "24h"
+    fallback: str | None = None  # absolute path to a bundled CIDR file
+
+
+class TrustedProxyConfig(BaseModel):
+    """Trust model for resolving the client IP from XFF / proxy headers.
+
+    The resolver treats the socket peer as ground truth and only honors
+    forwarding headers when the peer sits inside the trusted set.
+    """
+
+    trusted: list[str] = []  # explicit CIDRs + bare IPs
+    trust_private_networks: bool | None = None  # None = auto (True if containerized)
+    client_ip_header: str = "x-forwarded-for"
+    cdn_header: str | None = None  # e.g. "cf-connecting-ip"; auto-set by `cdn` preset
+    cdn: str | None = None  # preset key: "cloudflare" | "fastly" | "cloudfront"
+    max_hops: int = 5
+    strict: bool = False  # reject unresolvable chains with 400
+    explicit: bool = False  # disable all auto-detection (K8s, Docker, loopback, RFC1918)
+    disabled_sources: list[str] = []  # named sources/presets to exclude
+    sources: list[TrustedProxySourceConfig] = []
+
+
 class RedisConfig(BaseModel):
     """Redis connection configuration (shared across features)."""
 
@@ -587,6 +618,9 @@ class Settings(BaseSettings):
     # Rate limit config (loaded from app.yaml)
     rate_limit: RateLimitConfig = RateLimitConfig()
 
+    # Trusted proxy / client IP resolution (loaded from app.yaml)
+    trusted_proxy: TrustedProxyConfig = TrustedProxyConfig()
+
     # Redis config (loaded from app.yaml)
     redis: RedisConfig = RedisConfig()
 
@@ -685,6 +719,9 @@ def get_settings() -> Settings:
 
     if "rate_limit" in app_config:
         kwargs["rate_limit"] = RateLimitConfig(**app_config["rate_limit"])
+
+    if "trusted_proxy" in app_config:
+        kwargs["trusted_proxy"] = TrustedProxyConfig(**app_config["trusted_proxy"])
 
     if "redis" in app_config:
         kwargs["redis"] = RedisConfig(**app_config["redis"])

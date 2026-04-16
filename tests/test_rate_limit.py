@@ -207,40 +207,72 @@ class TestRateLimitMiddleware:
         assert called
 
     @pytest.mark.asyncio
-    async def test_x_forwarded_for_header(self):
-        """Uses x-forwarded-for header for IP when present."""
+    async def test_x_forwarded_for_ignored_without_trust(self):
+        """Spoofed XFF from untrusted peer must not influence rate limit keys.
+
+        Regression test for #120: previously, any client could send
+        ``X-Forwarded-For`` to appear as a different IP and bypass per-IP
+        limits. Now, without ClientIPMiddleware setting scope state, the
+        limiter falls back to the socket peer — so spoofed XFF is ignored.
+        """
         middleware = RateLimitMiddleware(
             self._make_app(), requests_per_minute=1
         )
 
-        scope = {
+        scope_a = {
             "type": "http",
             "method": "GET",
             "path": "/",
-            "headers": [(b"x-forwarded-for", b"192.168.1.1, 10.0.0.1")],
+            "headers": [(b"x-forwarded-for", b"1.2.3.4")],
+            "client": ("127.0.0.1", 0),
+        }
+        scope_b = {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [(b"x-forwarded-for", b"5.6.7.8")],
             "client": ("127.0.0.1", 0),
         }
 
-        # First request from forwarded IP
+        # First request passes
         captured = []
-        await middleware(scope, None, self._make_send(captured))
+        await middleware(scope_a, None, self._make_send(captured))
         assert captured[0]["status"] == 200
 
-        # Second request from same forwarded IP should be blocked
+        # Second request with a DIFFERENT spoofed XFF still counts against
+        # the same (socket-peer) bucket — rate limit enforced.
         captured = []
-        await middleware(scope, None, self._make_send(captured))
+        await middleware(scope_b, None, self._make_send(captured))
         assert captured[0]["status"] == 429
 
-        # But a different forwarded IP should pass
-        scope2 = {
-            "type": "http",
-            "method": "GET",
-            "path": "/",
-            "headers": [(b"x-forwarded-for", b"192.168.1.2")],
-            "client": ("127.0.0.1", 0),
-        }
+    @pytest.mark.asyncio
+    async def test_rate_limit_keys_on_resolved_client_ip(self):
+        """When ClientIPMiddleware has resolved a client IP, the limiter uses it."""
+        middleware = RateLimitMiddleware(
+            self._make_app(), requests_per_minute=1
+        )
+
+        def scope_with_resolved_ip(ip: str) -> dict:
+            return {
+                "type": "http",
+                "method": "GET",
+                "path": "/",
+                "headers": [],
+                "client": ("10.0.0.5", 0),
+                "state": {"client_ip": ip, "client_ip_source": "xff"},
+            }
+
+        # Two requests from the same resolved IP
         captured = []
-        await middleware(scope2, None, self._make_send(captured))
+        await middleware(scope_with_resolved_ip("203.0.113.7"), None, self._make_send(captured))
+        assert captured[0]["status"] == 200
+        captured = []
+        await middleware(scope_with_resolved_ip("203.0.113.7"), None, self._make_send(captured))
+        assert captured[0]["status"] == 429
+
+        # Different resolved IP gets its own bucket
+        captured = []
+        await middleware(scope_with_resolved_ip("198.51.100.9"), None, self._make_send(captured))
         assert captured[0]["status"] == 200
 
 
