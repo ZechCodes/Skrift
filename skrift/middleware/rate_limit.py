@@ -2,12 +2,18 @@
 
 Implements per-client-IP sliding window rate limiting. Auth paths get stricter
 limits, and custom per-path-prefix overrides are supported.
+
+The counter backend is injected — in-memory by default, Redis when configured.
+See :mod:`skrift.lib.sliding_window` and
+:mod:`skrift.lib.sliding_window_redis`.
 """
+
+from __future__ import annotations
 
 from litestar.types import ASGIApp, Receive, Scope, Send
 
 from skrift.lib.client_ip import get_client_ip
-from skrift.lib.sliding_window import SlidingWindowCounter
+from skrift.lib.sliding_window import InMemorySlidingWindowCounter, SlidingWindowCounter
 
 
 class RateLimitMiddleware:
@@ -18,6 +24,8 @@ class RateLimitMiddleware:
         requests_per_minute: Default limit for all paths.
         auth_requests_per_minute: Stricter limit for /auth/* paths.
         paths: Dict of path-prefix -> requests_per_minute overrides.
+        counter: Optional pre-built counter. Falls back to an in-memory
+            counter when ``None`` — convenient for tests.
     """
 
     def __init__(
@@ -26,12 +34,13 @@ class RateLimitMiddleware:
         requests_per_minute: int = 60,
         auth_requests_per_minute: int = 10,
         paths: dict[str, int] | None = None,
+        counter: SlidingWindowCounter | None = None,
     ) -> None:
         self.app = app
         self.requests_per_minute = requests_per_minute
         self.auth_requests_per_minute = auth_requests_per_minute
         self.paths = paths or {}
-        self._counter = SlidingWindowCounter(window=60.0)
+        self._counter: SlidingWindowCounter = counter or InMemorySlidingWindowCounter(window=60.0)
 
     def _get_limit(self, path: str) -> tuple[str, int]:
         """Determine the rate limit and bucket suffix for a path.
@@ -62,7 +71,7 @@ class RateLimitMiddleware:
         ip = get_client_ip(scope)
         bucket_suffix, limit = self._get_limit(path)
         key = f"{ip}:{bucket_suffix}"
-        allowed, retry_after = self._counter.check_and_record(key, limit)
+        allowed, retry_after = await self._counter.check_and_record(key, limit)
 
         if not allowed:
             await send({

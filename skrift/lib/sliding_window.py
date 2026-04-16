@@ -1,13 +1,39 @@
-"""Per-key sliding window counter using monotonic timestamps."""
+"""Per-key sliding window counter.
+
+Used for rate limiting and failed-auth tracking. Two backends implement the
+:class:`SlidingWindowCounter` protocol:
+
+* :class:`InMemorySlidingWindowCounter` — process-local dict. Fast, but each
+  worker keeps its own counts, so limits don't add up across replicas.
+* :class:`~skrift.lib.sliding_window_redis.RedisSlidingWindowCounter` —
+  Redis-backed sorted sets, atomic via Lua. Counts are shared across
+  replicas.
+
+Callers see an async interface so the middleware doesn't need to care
+which backend it's talking to.
+"""
+
+from __future__ import annotations
 
 import time
+from typing import Protocol
 
 
-class SlidingWindowCounter:
-    """Tracks per-key hit counts within a sliding time window.
+class SlidingWindowCounter(Protocol):
+    """Async interface both backends implement."""
 
-    Used for rate limiting and failed-auth tracking. Periodically prunes
-    stale entries to bound memory usage.
+    async def check_and_record(self, key: str, limit: int) -> tuple[bool, int]: ...
+
+    async def record(self, key: str) -> None: ...
+
+    async def count(self, key: str) -> int: ...
+
+
+class InMemorySlidingWindowCounter:
+    """Process-local sliding window counter.
+
+    Tracks per-key hit counts within a sliding time window. Periodically
+    prunes stale entries to bound memory usage.
     """
 
     def __init__(self, window: float = 60.0, cleanup_interval: float = 60.0) -> None:
@@ -29,13 +55,13 @@ class SlidingWindowCounter:
         for key in stale_keys:
             del self._buckets[key]
 
-    def record(self, key: str) -> None:
+    async def record(self, key: str) -> None:
         """Record a hit for *key*."""
         now = time.monotonic()
         self._cleanup_stale(now)
         self._buckets.setdefault(key, []).append(now)
 
-    def count(self, key: str) -> int:
+    async def count(self, key: str) -> int:
         """Return the number of hits for *key* within the current window."""
         now = time.monotonic()
         self._cleanup_stale(now)
@@ -46,10 +72,10 @@ class SlidingWindowCounter:
         self._buckets[key] = [t for t in timestamps if t > cutoff]
         return len(self._buckets[key])
 
-    def check_and_record(self, key: str, limit: int) -> tuple[bool, int]:
+    async def check_and_record(self, key: str, limit: int) -> tuple[bool, int]:
         """Check if *key* is within *limit* and record if allowed.
 
-        Returns (allowed, retry_after_seconds). If allowed, retry_after is 0.
+        Returns ``(allowed, retry_after_seconds)``. If allowed, retry_after is 0.
         """
         now = time.monotonic()
         self._cleanup_stale(now)

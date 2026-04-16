@@ -44,6 +44,7 @@ from skrift.app_factory import (
     update_template_directories,
 )
 from skrift.config import get_config_path, get_settings, is_config_valid
+from skrift.lib.sliding_window import InMemorySlidingWindowCounter, SlidingWindowCounter
 from skrift.lib.trusted_proxy import TrustedProxyManager
 from skrift.middleware.client_ip import ClientIPMiddleware
 from skrift.middleware.rate_limit import RateLimitMiddleware
@@ -748,6 +749,38 @@ def create_app() -> ASGIApp:
         DefineMiddleware(ClientIPMiddleware, manager=trusted_proxy_manager)
     ]
 
+    # Sliding-window counter backend (shared by rate limit + failed-auth limiter).
+    # Redis is used when settings.redis.url is set; otherwise falls back to a
+    # process-local counter (not shared across replicas).
+    _redis_client = None
+    if settings.redis.url:
+        try:
+            from redis.asyncio import from_url as _redis_from_url
+
+            from skrift.lib.sliding_window_redis import RedisSlidingWindowCounter
+
+            _redis_client = _redis_from_url(settings.redis.url)
+            _rate_limit_counter: SlidingWindowCounter = RedisSlidingWindowCounter(
+                _redis_client,
+                window=60.0,
+                prefix=settings.redis.make_key("skrift", "ratelimit"),
+            )
+            _failed_auth_counter: SlidingWindowCounter = RedisSlidingWindowCounter(
+                _redis_client,
+                window=60.0,
+                prefix=settings.redis.make_key("skrift", "failed_auth"),
+            )
+            logger.info("Rate limiter backend: Redis (%s)", settings.redis.url)
+        except ImportError:
+            logger.warning(
+                "redis.asyncio not available; falling back to in-memory rate limiter"
+            )
+            _rate_limit_counter = InMemorySlidingWindowCounter(window=60.0)
+            _failed_auth_counter = InMemorySlidingWindowCounter(window=60.0)
+    else:
+        _rate_limit_counter = InMemorySlidingWindowCounter(window=60.0)
+        _failed_auth_counter = InMemorySlidingWindowCounter(window=60.0)
+
     # Rate limiting middleware
     rate_limit_middleware = []
     if settings.rate_limit.enabled:
@@ -757,6 +790,7 @@ def create_app() -> ASGIApp:
                 requests_per_minute=settings.rate_limit.requests_per_minute,
                 auth_requests_per_minute=settings.rate_limit.auth_requests_per_minute,
                 paths=settings.rate_limit.paths,
+                counter=_rate_limit_counter,
             )
         ]
 
@@ -934,6 +968,11 @@ def create_app() -> ASGIApp:
         await notification_service._get_backend().stop()
         await storage_manager.close()
         await trusted_proxy_manager.stop()
+        if _redis_client is not None:
+            try:
+                await _redis_client.aclose()
+            except Exception:
+                logger.debug("Redis client close failed", exc_info=True)
 
     app = Litestar(
         on_startup=[on_startup],
@@ -950,6 +989,11 @@ def create_app() -> ASGIApp:
     app.state.webhook_secret = settings.notifications.webhook_secret
     app.state.storage_manager = storage_manager
     app.state.trusted_proxy_manager = trusted_proxy_manager
+
+    # Install the shared failed-auth limiter on app.state so the notification
+    # webhook uses the Redis-backed counter when configured.
+    from skrift.controllers.notification_webhook import _FailedAuthLimiter
+    app.state.failed_auth_limiter = _FailedAuthLimiter(counter=_failed_auth_counter)
 
     from skrift.middleware.storage import StorageFilesMiddleware
     from skrift.middleware.static import StaticFilesMiddleware

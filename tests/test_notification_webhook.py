@@ -17,31 +17,31 @@ from skrift.lib.notifications import NotificationMode, NotificationService
 
 
 class TestFailedAuthLimiter:
-    def test_not_blocked_initially(self):
+    async def test_not_blocked_initially(self):
         limiter = _FailedAuthLimiter(max_failures=2, window=60.0)
-        assert limiter.is_blocked("1.2.3.4") is False
+        assert await limiter.is_blocked("1.2.3.4") is False
 
-    def test_blocked_after_max_failures(self):
+    async def test_blocked_after_max_failures(self):
         limiter = _FailedAuthLimiter(max_failures=2, window=60.0)
-        limiter.record_failure("1.2.3.4")
-        assert limiter.is_blocked("1.2.3.4") is False
-        limiter.record_failure("1.2.3.4")
-        assert limiter.is_blocked("1.2.3.4") is True
+        await limiter.record_failure("1.2.3.4")
+        assert await limiter.is_blocked("1.2.3.4") is False
+        await limiter.record_failure("1.2.3.4")
+        assert await limiter.is_blocked("1.2.3.4") is True
 
-    def test_different_ips_independent(self):
+    async def test_different_ips_independent(self):
         limiter = _FailedAuthLimiter(max_failures=1, window=60.0)
-        limiter.record_failure("1.2.3.4")
-        assert limiter.is_blocked("1.2.3.4") is True
-        assert limiter.is_blocked("5.6.7.8") is False
+        await limiter.record_failure("1.2.3.4")
+        assert await limiter.is_blocked("1.2.3.4") is True
+        assert await limiter.is_blocked("5.6.7.8") is False
 
-    def test_failures_expire(self):
+    async def test_failures_expire(self):
         import time
 
         limiter = _FailedAuthLimiter(max_failures=1, window=0.05)
-        limiter.record_failure("1.2.3.4")
-        assert limiter.is_blocked("1.2.3.4") is True
+        await limiter.record_failure("1.2.3.4")
+        assert await limiter.is_blocked("1.2.3.4") is True
         time.sleep(0.06)
-        assert limiter.is_blocked("1.2.3.4") is False
+        assert await limiter.is_blocked("1.2.3.4") is False
 
 
 # ---------------------------------------------------------------------------
