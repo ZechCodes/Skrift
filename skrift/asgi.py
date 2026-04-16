@@ -664,13 +664,9 @@ def create_app() -> ASGIApp:
     observability.configure(settings)
     observability.instrument_httpx()
 
-    # Load controllers from app.yaml
-    controllers = load_controllers()
-
-    # Load middleware from app.yaml
-    user_middleware = load_middleware()
-
-    # Database schema configuration
+    # Database schema configuration — must run BEFORE load_controllers(),
+    # otherwise ForeignKey("users.id") in downstream models resolves against
+    # the wrong (None) schema and later lookups fail with NoReferencedTableError.
     if settings.db.db_schema:
         if "sqlite" in settings.db.url:
             raise ValueError(
@@ -678,6 +674,12 @@ def create_app() -> ASGIApp:
                 "For dev environments, use app.dev.yaml to override the database configuration."
             )
         Base.metadata.schema = settings.db.db_schema
+
+    # Load controllers from app.yaml
+    controllers = load_controllers()
+
+    # Load middleware from app.yaml
+    user_middleware = load_middleware()
 
     # Database configuration
     if "sqlite" in settings.db.url:
