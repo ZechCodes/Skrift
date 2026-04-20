@@ -461,6 +461,25 @@ class NotificationsConfig(BaseModel):
     webhook_secret: str = ""  # empty = webhook disabled
 
 
+class EmailConfig(BaseModel):
+    """Outbound transactional email configuration."""
+
+    backend: str = ""  # empty = NullEmailBackend; or "module:ClassName" import string
+    from_address: str = ""
+    reply_to: str = ""
+    # Absolute URL used when rendering links into email bodies. Falls back to
+    # ``auth.redirect_base_url`` when empty.
+    public_base_url: str = ""
+
+    # SMTP connection (used by SMTPEmailBackend)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_starttls: bool = True
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_timeout: float = 10.0
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration."""
 
@@ -627,6 +646,9 @@ class Settings(BaseSettings):
     # Notifications config (loaded from app.yaml)
     notifications: NotificationsConfig = NotificationsConfig()
 
+    # Email config (loaded from app.yaml)
+    email: EmailConfig = EmailConfig()
+
     # Logfire observability config (loaded from app.yaml)
     logfire: LogfireConfig = LogfireConfig()
 
@@ -728,6 +750,9 @@ def get_settings() -> Settings:
 
     if "notifications" in app_config:
         kwargs["notifications"] = NotificationsConfig(**app_config["notifications"])
+
+    if "email" in app_config:
+        kwargs["email"] = EmailConfig(**app_config["email"])
 
     if "logfire" in app_config:
         kwargs["logfire"] = LogfireConfig(**app_config["logfire"])
