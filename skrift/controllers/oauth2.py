@@ -227,8 +227,8 @@ class OAuth2Controller(Controller):
         client_secret = form_data.get("client_secret", "")
         code_verifier = form_data.get("code_verifier", "")
 
-        # Verify auth code (no revocation check needed — codes are single-use by expiry)
-        payload = verify_signed_token(code, settings.secret_key)
+        # Verify auth code — revocation-aware so replays of a consumed code fail.
+        payload = await verify_oauth_token(code, settings.secret_key, db_session)
         if not payload or payload.get("type") != "code":
             return _json_error("invalid_grant", "Invalid or expired authorization code")
 
@@ -255,6 +255,12 @@ class OAuth2Controller(Controller):
                 return _json_error("invalid_grant", "code_verifier required")
             if not _verify_pkce(code_verifier, stored_challenge):
                 return _json_error("invalid_grant", "PKCE verification failed")
+
+        # Revoke the auth code before issuing tokens so a concurrent replay fails.
+        code_jti = payload.get("jti")
+        if code_jti:
+            code_exp = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
+            await oauth2_service.revoke_token(db_session, code_jti, "code", code_exp)
 
         scope = payload.get("scope", "")
 
