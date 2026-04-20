@@ -37,10 +37,18 @@ def _mock_client(
     allowed_scopes=None,
     is_active=True,
 ):
-    """Create a mock OAuth2Client model."""
+    """Create a mock OAuth2Client model.
+
+    ``client_secret`` is the *plaintext* the test form will submit; the
+    mock's stored-column value is the hashed form so
+    ``verify_client_secret`` matches. Pass ``client_secret=""`` for public
+    (secretless) clients.
+    """
+    from skrift.auth.client_secret import hash_client_secret
+
     mc = MagicMock()
     mc.client_id = client_id
-    mc.client_secret = client_secret
+    mc.client_secret = hash_client_secret(client_secret) if client_secret else ""
     mc.display_name = f"Test App ({client_id})"
     mc.is_active = is_active
     mc.redirect_uri_list = redirect_uris or ["http://localhost/cb"]

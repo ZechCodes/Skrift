@@ -23,8 +23,15 @@ def _settings():
 
 
 def _client(secret="s"):
+    """Mock OAuth2Client row.
+
+    ``secret`` is the plaintext the test form submits; the mock stores the
+    hashed form so the controller's ``verify_client_secret`` call matches.
+    """
+    from skrift.auth.client_secret import hash_client_secret
+
     client = MagicMock()
-    client.client_secret = secret
+    client.client_secret = hash_client_secret(secret) if secret else ""
     client.redirect_uri_list = ["http://localhost/cb"]
     return client
 

@@ -1,15 +1,31 @@
 """OAuth2 authorization server database service."""
 
 import secrets
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from skrift.auth.client_secret import hash_client_secret
 from skrift.db.models.oauth2_client import OAuth2Client
 from skrift.db.models.revoked_token import RevokedToken
 from skrift.lib.hooks import hooks
+
+
+@dataclass(slots=True)
+class ClientCreateResult:
+    """Returned by ``create_client`` — carries the one-time plaintext secret.
+
+    The plaintext is only ever returned here (and from
+    :func:`regenerate_client_secret`). After the admin flashes it through the
+    UI, only the hashed column value is retained, so the plaintext cannot
+    be recovered from the database.
+    """
+
+    client: OAuth2Client
+    plaintext_secret: str
 
 
 async def get_client_by_client_id(db_session: AsyncSession, client_id: str) -> OAuth2Client | None:
@@ -36,11 +52,16 @@ async def create_client(
     display_name: str,
     redirect_uris: list[str],
     allowed_scopes: list[str],
-) -> OAuth2Client:
-    """Create a new OAuth2 client with auto-generated credentials."""
+) -> ClientCreateResult:
+    """Create a new OAuth2 client with auto-generated credentials.
+
+    Returns the client plus the one-time plaintext secret so the caller can
+    show it to the operator. Only the hashed form is persisted.
+    """
+    plaintext_secret = secrets.token_urlsafe(48)
     client = OAuth2Client(
         client_id=secrets.token_urlsafe(24),
-        client_secret=secrets.token_urlsafe(48),
+        client_secret=hash_client_secret(plaintext_secret),
         display_name=display_name,
         redirect_uris="\n".join(redirect_uris),
         allowed_scopes="\n".join(allowed_scopes),
@@ -48,7 +69,7 @@ async def create_client(
     db_session.add(client)
     await db_session.commit()
     await hooks.do_action("after_oauth2_client_created", client)
-    return client
+    return ClientCreateResult(client=client, plaintext_secret=plaintext_secret)
 
 
 async def update_client(
@@ -87,9 +108,13 @@ async def delete_client(db_session: AsyncSession, client_id: UUID) -> None:
 
 
 async def regenerate_client_secret(db_session: AsyncSession, client: OAuth2Client) -> str:
-    """Regenerate a client's secret and return the new value."""
+    """Regenerate a client's secret and return the new plaintext value.
+
+    Only the hashed form is stored on the client row; the plaintext is
+    returned once so the admin UI can flash it to the operator.
+    """
     new_secret = secrets.token_urlsafe(48)
-    client.client_secret = new_secret
+    client.client_secret = hash_client_secret(new_secret)
     await db_session.commit()
     await hooks.do_action("after_oauth2_client_secret_regenerated", client)
     return new_secret

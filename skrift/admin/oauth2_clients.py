@@ -85,13 +85,16 @@ class OAuth2ClientAdminController(Controller):
             if form_data.get(f"scope_{scope_name}") == "on":
                 allowed_scopes.append(scope_name)
 
-        client = await oauth2_service.create_client(
+        result = await oauth2_service.create_client(
             db_session, display_name, redirect_uris, allowed_scopes
         )
 
-        request.session["new_secret"] = client.client_secret
+        # The plaintext secret is returned once and flashed via the session so
+        # the admin can copy it from the next page render. After that, only
+        # the hashed column value remains.
+        request.session["new_secret"] = result.plaintext_secret
         flash_success(request, f"Client '{display_name}' created")
-        return Redirect(path=f"/admin/oauth-clients/{client.id}/edit")
+        return Redirect(path=f"/admin/oauth-clients/{result.client.id}/edit")
 
     @get(
         "/oauth-clients/{client_db_id:uuid}/edit",

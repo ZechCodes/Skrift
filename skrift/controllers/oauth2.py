@@ -7,7 +7,6 @@ instance can act as an identity hub for spoke sites.
 
 import base64
 import hashlib
-import hmac
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -15,17 +14,13 @@ from litestar import Controller, Request, get, post
 from litestar.response import Redirect, Response, Template as TemplateResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from skrift.auth.client_secret import verify_client_secret
 from skrift.auth.scopes import SCOPE_DEFINITIONS
 from skrift.auth.session_keys import SESSION_USER_EMAIL, SESSION_USER_ID, SESSION_USER_NAME, SESSION_USER_PICTURE_URL
 from skrift.auth.tokens import create_signed_token, verify_signed_token
 from skrift.config import get_settings
 from skrift.db.services import oauth2_service
 from skrift.forms import verify_csrf
-
-
-def _verify_client_secret(submitted: str, stored: str) -> bool:
-    """Constant-time comparison of OAuth2 client secrets."""
-    return hmac.compare_digest(str(submitted), str(stored))
 
 # Token lifetimes
 AUTH_CODE_TTL = 600        # 10 minutes
@@ -245,7 +240,7 @@ class OAuth2Controller(Controller):
 
         # Confidential client: validate secret (constant-time)
         if client.client_secret:
-            if not _verify_client_secret(client_secret, client.client_secret):
+            if not verify_client_secret(client_secret, client.client_secret):
                 return _json_error("invalid_client", "Invalid client_secret")
 
         # PKCE validation
@@ -319,7 +314,7 @@ class OAuth2Controller(Controller):
 
         # Confidential client: validate secret (constant-time)
         if client.client_secret:
-            if not _verify_client_secret(client_secret, client.client_secret):
+            if not verify_client_secret(client_secret, client.client_secret):
                 return _json_error("invalid_client", "Invalid client_secret")
 
         scope = payload.get("scope", "")
@@ -444,7 +439,7 @@ class OAuth2Controller(Controller):
         if not client:
             return _json_error("invalid_client", "Unknown client_id")
 
-        if client.client_secret and not _verify_client_secret(client_secret, client.client_secret):
+        if client.client_secret and not verify_client_secret(client_secret, client.client_secret):
             return _json_error("invalid_client", "Invalid client_secret")
 
         if not token_str:
