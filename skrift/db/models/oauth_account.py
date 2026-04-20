@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, JSON, String, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from skrift.db.base import Base
@@ -34,6 +34,11 @@ class OAuthAccount(Base):
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     provider_account_id: Mapped[str] = mapped_column(String(255), nullable=False)
     provider_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Whether the provider attested this email as verified at link time.
+    # Used both for audit and to decide whether future auto-linking is safe.
+    provider_email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     provider_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, nullable=True, default=None
     )
