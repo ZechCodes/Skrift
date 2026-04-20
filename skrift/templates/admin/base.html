@@ -45,7 +45,12 @@
             </div>
             <div class="sk-sidebar-user">
                 <div class="sk-sidebar-name">{{ user.name or user.email }}</div>
-                <div class="sk-sidebar-role"><a href="/auth/logout">Logout</a></div>
+                <div class="sk-sidebar-role">
+                    <form method="post" action="/auth/logout" class="sk-inline-logout">
+                        {{ csrf_field() }}
+                        <button type="submit" class="sk-linklike">Logout</button>
+                    </form>
+                </div>
             </div>
             {% endif %}
         </div>

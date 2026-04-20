@@ -1078,8 +1078,24 @@ class AuthController(Controller):
         )
 
     @get("/logout")
+    async def logout_confirm(self, request: Request) -> TemplateResponse:
+        """Render a confirm form that POSTs back to /auth/logout with a CSRF token.
+
+        GET is safe: a drive-by ``<img src="/auth/logout">`` no longer ends the
+        session. Logout only happens on the CSRF-protected POST below.
+        """
+        template_name = resolve_template_name(
+            request.app.template_engine, "logout_confirm.html", "auth/logout_confirm.html"
+        )
+        return TemplateResponse(template_name, context={})
+
+    @post("/logout")
     async def logout(self, request: Request) -> Redirect | TemplateResponse:
         """Clear session and redirect to home, or render logout template if available."""
+        if not await verify_csrf(request):
+            flash_error(request, "Invalid request. Please try again.")
+            return Redirect(path="/auth/logout")
+
         await hooks.do_action("before_logout", request)
         request.session.clear()
         try:

@@ -198,7 +198,7 @@ class TestOAuthLogin:
 
 class TestLogout:
     @pytest.mark.asyncio
-    async def test_clears_session(self):
+    async def test_post_with_valid_csrf_clears_session(self):
         from skrift.controllers.auth import AuthController
 
         auth = AuthController(owner=MagicMock())
@@ -206,8 +206,46 @@ class TestLogout:
         request = MagicMock()
         request.session = session
 
-        result = await AuthController.logout.fn(auth, request)
+        async def _valid_csrf(_req):
+            return True
+
+        with patch("skrift.controllers.auth.verify_csrf", new=_valid_csrf):
+            await AuthController.logout.fn(auth, request)
+
         assert len(session) == 0
+
+    @pytest.mark.asyncio
+    async def test_post_without_csrf_preserves_session(self):
+        from skrift.controllers.auth import AuthController
+
+        auth = AuthController(owner=MagicMock())
+        session = {"user_id": "123", "user_name": "test"}
+        request = MagicMock()
+        request.session = session
+
+        async def _invalid_csrf(_req):
+            return False
+
+        with patch("skrift.controllers.auth.verify_csrf", new=_invalid_csrf):
+            await AuthController.logout.fn(auth, request)
+
+        # CSRF failure must not end the session — prevents drive-by logout.
+        assert session["user_id"] == "123"
+
+    @pytest.mark.asyncio
+    async def test_get_renders_confirm_without_clearing_session(self):
+        from skrift.controllers.auth import AuthController
+
+        auth = AuthController(owner=MagicMock())
+        session = {"user_id": "123", "user_name": "test"}
+        request = MagicMock()
+        request.session = session
+
+        with patch("skrift.controllers.auth.resolve_template_name", return_value="auth/logout_confirm.html"):
+            await AuthController.logout_confirm.fn(auth, request)
+
+        # GET must be safe — no side effects on session.
+        assert session["user_id"] == "123"
 
 
 class TestFinalizePrimaryLogin:
@@ -399,6 +437,7 @@ class TestPrimaryPasskeyAuth:
         settings = MagicMock()
         settings.auth.get_method_keys.return_value = ["passkey"]
         settings.auth.get_primary_auth_method_type.return_value = "passkey"
+        db_session = AsyncMock()
 
         with patch(
             "skrift.controllers.auth.get_settings",
@@ -411,6 +450,7 @@ class TestPrimaryPasskeyAuth:
             result = await AuthController.begin_primary_method_registration.fn(
                 controller,
                 request,
+                db_session,
                 "passkey",
             )
 
