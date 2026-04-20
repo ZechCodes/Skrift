@@ -652,6 +652,38 @@ def _build_site_app(
     )
 
 
+def _validate_passkey_config_if_enabled(settings) -> None:
+    """Raise at startup when passkeys are enabled without a pinned RP hostname.
+
+    Scans ``auth.methods`` and ``auth.second_factors`` for any passkey-typed
+    entry; when present, requires ``settings.domain`` or a full
+    ``auth.redirect_base_url`` so :func:`_resolve_rp_id` never falls back to
+    the untrusted request hostname.
+    """
+    auth = settings.auth
+    has_passkey_primary = any(
+        auth.get_primary_auth_method_type(key) == "passkey"
+        for key in auth.get_method_keys()
+    )
+    has_passkey_second_factor = auth.second_factors.enabled and any(
+        auth.second_factors.get_method_type(key) == "passkey"
+        for key in auth.second_factors.get_method_keys()
+    )
+    if not (has_passkey_primary or has_passkey_second_factor):
+        return
+
+    from skrift.auth.second_factors.passkey_service import (
+        PasskeyStateError,
+        validate_passkey_origin_config,
+    )
+    try:
+        validate_passkey_origin_config(settings)
+    except PasskeyStateError as exc:
+        raise RuntimeError(
+            f"Invalid passkey configuration: {exc}"
+        ) from exc
+
+
 def create_app() -> ASGIApp:
     """Create and configure the main Litestar application.
 
@@ -667,6 +699,11 @@ def create_app() -> ASGIApp:
     validate_no_dummy_auth_in_production()
 
     settings = get_settings()
+
+    # Fail fast when passkeys are enabled without a pinned relying-party
+    # hostname. A spoofed Host header could otherwise steer registrations
+    # and assertions to the wrong RP ID.
+    _validate_passkey_config_if_enabled(settings)
 
     from skrift.lib import observability
     observability.configure(settings)

@@ -72,6 +72,15 @@ def _bytes_to_base64url(value: bytes) -> str:
 
 
 def _resolve_origin(request, settings) -> str:
+    """Resolve the WebAuthn origin.
+
+    Prefers the explicitly configured ``auth.redirect_base_url`` so that a
+    spoofed Host header cannot steer registrations/assertions to the wrong
+    origin. Falls back to the request base URL only when no explicit config
+    is set; deployments with passkeys enabled must configure one of
+    ``settings.domain`` or ``auth.redirect_base_url`` — the startup check in
+    :func:`validate_passkey_origin_config` enforces this.
+    """
     origin = settings.auth.redirect_base_url.rstrip("/")
     if origin:
         return origin
@@ -79,15 +88,42 @@ def _resolve_origin(request, settings) -> str:
 
 
 def _resolve_rp_id(request, settings) -> str:
+    """Resolve the WebAuthn Relying Party ID.
+
+    Only reads from trusted configuration. The previous fallback to
+    ``request.url.hostname`` has been removed because a spoofed Host header
+    would otherwise let an attacker pick the RP ID.
+    """
     if settings.domain:
         return settings.domain.strip()
     origin = _resolve_origin(request, settings)
     parsed = urlparse(origin)
     if parsed.hostname:
         return parsed.hostname
-    if request.url.hostname:
-        return request.url.hostname
-    raise PasskeyStateError("Unable to determine WebAuthn relying party ID")
+    raise PasskeyStateError(
+        "Unable to determine WebAuthn relying party ID: set 'domain' or "
+        "'auth.redirect_base_url' in your app config"
+    )
+
+
+def validate_passkey_origin_config(settings) -> None:
+    """Fail fast at startup if passkey methods are enabled without a pinned origin.
+
+    Call from the app factory after settings are loaded. Raises
+    :class:`PasskeyStateError` when neither ``settings.domain`` nor
+    ``settings.auth.redirect_base_url`` supplies a hostname.
+    """
+    if settings.domain and settings.domain.strip():
+        return
+    origin = (settings.auth.redirect_base_url or "").rstrip("/")
+    if origin:
+        parsed = urlparse(origin)
+        if parsed.hostname:
+            return
+    raise PasskeyStateError(
+        "Passkey authentication requires a pinned relying-party hostname. "
+        "Set 'domain' or a full 'auth.redirect_base_url' in your app config."
+    )
 
 
 def _resolve_rp_name(settings) -> str:
