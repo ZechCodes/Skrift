@@ -375,6 +375,8 @@ class TestTokenExchange:
         with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
              patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
             mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
+            mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            mock_svc.revoke_token = AsyncMock(return_value=None)
             result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
         assert result.status_code == 200
@@ -437,6 +439,8 @@ class TestTokenExchange:
         with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
              patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
             mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
+            mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            mock_svc.revoke_token = AsyncMock(return_value=None)
             result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
         assert result.status_code == 200
