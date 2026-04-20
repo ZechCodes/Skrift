@@ -131,6 +131,23 @@ async def _get_authenticated_user(request: Request, db_session: AsyncSession) ->
     return result.scalar_one_or_none()
 
 
+def _csrf_error(request: Request, error: str, *, status_code: int = 400) -> Response:
+    """JSON error that always includes the current CSRF token.
+
+    ``verify_csrf`` rotates the session token on success, so error responses
+    emitted *after* CSRF validation must return the new token — otherwise the
+    client's hidden ``_csrf`` field goes stale and the next submit fails with
+    ``invalid_csrf``.
+    """
+    return Response(
+        content={
+            "error": error,
+            "csrf_token": request.session.get(CSRF_SESSION_KEY, ""),
+        },
+        status_code=status_code,
+    )
+
+
 async def _create_primary_passkey_signup_login(
     db_session: AsyncSession,
     *,
@@ -510,14 +527,14 @@ class AuthController(Controller):
         if provider not in settings.auth.get_method_keys():
             raise NotFoundException(f"Provider {provider} not configured")
         if settings.auth.get_primary_auth_method_type(provider) != "passkey":
-            return Response(content={"error": "unsupported_method"}, status_code=400)
+            return _csrf_error(request, "unsupported_method")
         if not await verify_csrf(request):
-            return Response(content={"error": "invalid_csrf"}, status_code=400)
+            return _csrf_error(request, "invalid_csrf")
 
         try:
             options = begin_primary_passkey_authentication(request, settings, provider)
         except PasskeyRuntimeUnavailableError as exc:
-            return Response(content={"error": str(exc)}, status_code=503)
+            return _csrf_error(request, str(exc), status_code=503)
 
         return Response(
             content={
@@ -530,6 +547,7 @@ class AuthController(Controller):
     async def begin_primary_method_registration(
         self,
         request: Request,
+        db_session: AsyncSession,
         provider: str,
     ) -> Response:
         """Return browser registration options for primary passkey signup."""
@@ -537,15 +555,23 @@ class AuthController(Controller):
         if provider not in settings.auth.get_method_keys():
             raise NotFoundException(f"Provider {provider} not configured")
         if settings.auth.get_primary_auth_method_type(provider) != "passkey":
-            return Response(content={"error": "unsupported_method"}, status_code=400)
+            return _csrf_error(request, "unsupported_method")
         if not await verify_csrf(request):
-            return Response(content={"error": "invalid_csrf"}, status_code=400)
+            return _csrf_error(request, "invalid_csrf")
 
         form_data = await request.form()
         email = str(form_data.get("email", "")).strip().lower()
         name = str(form_data.get("name", "")).strip() or None
         if not email:
-            return Response(content={"error": "email_required"}, status_code=400)
+            return _csrf_error(request, "email_required")
+
+        # Check for duplicate email BEFORE returning registration options — otherwise
+        # the browser prompts for passkey creation and the authenticator saves the
+        # credential even though the signup will fail in /register/complete, leaving
+        # an orphan entry in the user's password manager.
+        existing = await db_session.execute(select(User).where(User.email == email))
+        if existing.scalar_one_or_none() is not None:
+            return _csrf_error(request, "An account with that email already exists")
 
         try:
             options = begin_primary_passkey_registration(
@@ -556,7 +582,7 @@ class AuthController(Controller):
                 name=name,
             )
         except PasskeyRuntimeUnavailableError as exc:
-            return Response(content={"error": str(exc)}, status_code=503)
+            return _csrf_error(request, str(exc), status_code=503)
 
         return Response(
             content={
@@ -577,23 +603,23 @@ class AuthController(Controller):
         if provider not in settings.auth.get_method_keys():
             raise NotFoundException(f"Provider {provider} not configured")
         if settings.auth.get_primary_auth_method_type(provider) != "passkey":
-            return Response(content={"error": "unsupported_method"}, status_code=400)
+            return _csrf_error(request, "unsupported_method")
         if not await verify_csrf(request):
-            return Response(content={"error": "invalid_csrf"}, status_code=400)
+            return _csrf_error(request, "invalid_csrf")
 
         signup_state = get_primary_passkey_registration_state(request)
         if signup_state is None or signup_state.method_key != provider:
-            return Response(content={"error": "registration_state_missing"}, status_code=400)
+            return _csrf_error(request, "registration_state_missing")
 
         form_data = await request.form()
         credential_raw = str(form_data.get("credential", "")).strip()
         if not credential_raw:
-            return Response(content={"error": "credential_required"}, status_code=400)
+            return _csrf_error(request, "credential_required")
 
         try:
             credential = json.loads(credential_raw)
         except json.JSONDecodeError:
-            return Response(content={"error": "invalid_credential"}, status_code=400)
+            return _csrf_error(request, "invalid_credential")
 
         try:
             registration = complete_primary_passkey_registration(
@@ -612,9 +638,9 @@ class AuthController(Controller):
                 registration_result=registration,
             )
         except PasskeyRuntimeUnavailableError as exc:
-            return Response(content={"error": str(exc)}, status_code=503)
+            return _csrf_error(request, str(exc), status_code=503)
         except (PasskeyStateError, PasskeyVerificationError, ValueError) as exc:
-            return Response(content={"error": str(exc)}, status_code=400)
+            return _csrf_error(request, str(exc))
 
         redirect = await _finalize_primary_login(
             request,
@@ -658,23 +684,23 @@ class AuthController(Controller):
         if provider not in settings.auth.get_method_keys():
             raise NotFoundException(f"Provider {provider} not configured")
         if settings.auth.get_primary_auth_method_type(provider) != "passkey":
-            return Response(content={"error": "unsupported_method"}, status_code=400)
+            return _csrf_error(request, "unsupported_method")
         if not await verify_csrf(request):
-            return Response(content={"error": "invalid_csrf"}, status_code=400)
+            return _csrf_error(request, "invalid_csrf")
 
         form_data = await request.form()
         credential_raw = str(form_data.get("credential", "")).strip()
         if not credential_raw:
-            return Response(content={"error": "credential_required"}, status_code=400)
+            return _csrf_error(request, "credential_required")
 
         try:
             credential = json.loads(credential_raw)
         except json.JSONDecodeError:
-            return Response(content={"error": "invalid_credential"}, status_code=400)
+            return _csrf_error(request, "invalid_credential")
 
         credential_id = str(credential.get("id") or credential.get("rawId") or "").strip()
         if not credential_id:
-            return Response(content={"error": "credential_id_required"}, status_code=400)
+            return _csrf_error(request, "credential_id_required")
 
         factor_key = _get_passkey_factor_key_for_method(settings, provider)
         enrollment = await get_second_factor_enrollment_by_credential_id(
@@ -683,7 +709,7 @@ class AuthController(Controller):
             credential_id=credential_id,
         )
         if enrollment is None:
-            return Response(content={"error": "credential_not_found"}, status_code=404)
+            return _csrf_error(request, "credential_not_found", status_code=404)
 
         try:
             verification = complete_primary_passkey_authentication(
@@ -694,9 +720,9 @@ class AuthController(Controller):
                 credential=credential,
             )
         except PasskeyRuntimeUnavailableError as exc:
-            return Response(content={"error": str(exc)}, status_code=503)
+            return _csrf_error(request, str(exc), status_code=503)
         except (PasskeyStateError, PasskeyVerificationError) as exc:
-            return Response(content={"error": str(exc)}, status_code=400)
+            return _csrf_error(request, str(exc))
 
         login_result = await find_login_result_for_passkey_credential(
             db_session,
@@ -705,7 +731,7 @@ class AuthController(Controller):
             credential_id=credential_id,
         )
         if login_result is None:
-            return Response(content={"error": "credential_not_found"}, status_code=404)
+            return _csrf_error(request, "credential_not_found", status_code=404)
 
         touch_second_factor_enrollment(
             enrollment,

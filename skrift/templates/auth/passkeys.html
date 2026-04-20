@@ -14,11 +14,12 @@
     .passkey-card {
         padding: 1.5rem;
         border-radius: 1rem;
-        border: 1px solid rgba(148, 163, 184, 0.22);
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.96));
-        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.07);
+        border: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.08));
+        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3);
     }
 
+    .passkey-card h1,
     .passkey-card h2 {
         margin-top: 0;
     }
@@ -32,12 +33,12 @@
     .passkey-item {
         padding: 1rem 1.125rem;
         border-radius: 0.875rem;
-        background: #f8fafc;
-        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: var(--sk-color-surface-hover, rgba(255, 255, 255, 0.07));
+        border: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.08));
     }
 
     .passkey-meta {
-        color: var(--sk-color-muted, #52525b);
+        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.6));
         font-size: 0.9rem;
     }
 
@@ -51,13 +52,25 @@
         width: 100%;
         padding: 0.85rem 1rem;
         border-radius: 0.8rem;
-        border: 1px solid rgba(148, 163, 184, 0.35);
+        border: 1px solid var(--sk-color-border-hover, rgba(255, 255, 255, 0.14));
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--sk-color-text, #E8ECF4);
         font: inherit;
+    }
+
+    .passkey-input::placeholder {
+        color: var(--sk-color-muted, rgba(255, 255, 255, 0.4));
+    }
+
+    .passkey-input:focus {
+        outline: none;
+        border-color: var(--sk-color-accent, #34D399);
+        background: rgba(255, 255, 255, 0.05);
     }
 
     .passkey-status {
         min-height: 1.4rem;
-        color: var(--sk-color-muted, #52525b);
+        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.6));
         font-size: 0.95rem;
     }
 </style>

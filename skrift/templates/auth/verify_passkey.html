@@ -12,15 +12,19 @@
     .verify-card {
         padding: 2rem;
         border-radius: 1rem;
-        border: 1px solid rgba(148, 163, 184, 0.2);
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(239, 246, 255, 0.96));
-        box-shadow: 0 20px 48px rgba(15, 23, 42, 0.08);
+        border: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.08));
+        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.35);
+    }
+
+    .verify-card h1 {
+        margin: 0 0 0.5rem;
     }
 
     .verify-status {
         min-height: 1.4rem;
         margin-top: 1rem;
-        color: var(--sk-color-muted, #52525b);
+        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.6));
     }
 </style>
 {% endblock %}
