@@ -8,6 +8,7 @@ from litestar.exceptions import NotFoundException
 from litestar.response import Template as TemplateResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from skrift.db.models.user import User
 from skrift.db.services import page_service
@@ -26,7 +27,11 @@ class SiteController(Controller):
         user_id = request.session.get("user_id")
         if not user_id:
             return None
-        result = await db_session.execute(select(User).where(User.id == UUID(user_id)))
+        result = await db_session.execute(
+            select(User)
+            .where(User.id == UUID(user_id))
+            .options(selectinload(User.second_factor_enrollments))
+        )
         return result.scalar_one_or_none()
 
     async def _get_nav_pages(self, db_session: AsyncSession) -> list:
