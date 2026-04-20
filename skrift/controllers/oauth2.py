@@ -359,7 +359,23 @@ class OAuth2Controller(Controller):
                 "Refresh token family has been revoked",
             )
 
-        scope = payload.get("scope", "")
+        original_scope = payload.get("scope", "")
+        original_scope_set = set(original_scope.split())
+
+        # Scope binding: an optional `scope` form parameter must be a subset
+        # of the originally granted scope. Downgrades are allowed; anything
+        # outside the original grant is an `invalid_scope` error.
+        requested_scope = form_data.get("scope", "").strip()
+        if requested_scope:
+            requested_scope_set = set(requested_scope.split())
+            if not requested_scope_set.issubset(original_scope_set):
+                return _json_error(
+                    "invalid_scope",
+                    "Requested scope exceeds originally granted scope",
+                )
+            effective_scope = " ".join(sorted(requested_scope_set))
+        else:
+            effective_scope = original_scope
 
         # Revoke the old refresh token (normal rotation path).
         if old_jti:
@@ -375,13 +391,13 @@ class OAuth2Controller(Controller):
             "name": "",
             "picture_url": "",
             "client_id": client_id,
-            "scope": scope,
+            "scope": effective_scope,
         }
         refresh_payload = {
             "type": "refresh",
             "user_id": payload["user_id"],
             "client_id": client_id,
-            "scope": scope,
+            "scope": effective_scope,
             "family_id": family_id,
         }
 
@@ -394,7 +410,7 @@ class OAuth2Controller(Controller):
                 "refresh_token": new_refresh_token,
                 "token_type": "bearer",
                 "expires_in": ACCESS_TOKEN_TTL,
-                "scope": scope,
+                "scope": effective_scope,
             },
             status_code=200,
             media_type="application/json",
