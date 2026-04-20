@@ -568,10 +568,16 @@ class AuthController(Controller):
         # Check for duplicate email BEFORE returning registration options — otherwise
         # the browser prompts for passkey creation and the authenticator saves the
         # credential even though the signup will fail in /register/complete, leaving
-        # an orphan entry in the user's password manager.
+        # an orphan entry in the user's password manager. The response is a
+        # generic `invalid_request` so an attacker cannot probe whether a given
+        # email is already registered; the real reason is logged for diagnostics.
         existing = await db_session.execute(select(User).where(User.email == email))
         if existing.scalar_one_or_none() is not None:
-            return _csrf_error(request, "An account with that email already exists")
+            logger.info(
+                "Passkey signup rejected: email already registered (email_hash=%s)",
+                hashlib.sha256(email.encode()).hexdigest()[:16],
+            )
+            return _csrf_error(request, "invalid_request")
 
         try:
             options = begin_primary_passkey_registration(
@@ -709,7 +715,11 @@ class AuthController(Controller):
             credential_id=credential_id,
         )
         if enrollment is None:
-            return _csrf_error(request, "credential_not_found", status_code=404)
+            logger.info(
+                "Primary passkey login: credential not enrolled (credential_id=%s)",
+                credential_id[:16],
+            )
+            return _csrf_error(request, "invalid_credential")
 
         try:
             verification = complete_primary_passkey_authentication(
@@ -731,7 +741,11 @@ class AuthController(Controller):
             credential_id=credential_id,
         )
         if login_result is None:
-            return _csrf_error(request, "credential_not_found", status_code=404)
+            logger.info(
+                "Primary passkey login: enrollment lacks bound user (credential_id=%s)",
+                credential_id[:16],
+            )
+            return _csrf_error(request, "invalid_credential")
 
         touch_second_factor_enrollment(
             enrollment,
@@ -1004,8 +1018,12 @@ class AuthController(Controller):
         )
         user = result.scalar_one_or_none()
         if user is None:
+            logger.info(
+                "Second-factor options: pending-auth user not found (user_id=%s)",
+                pending_auth.user_id,
+            )
             clear_pending_authentication(request)
-            return Response(content={"error": "user_not_found"}, status_code=404)
+            return Response(content={"error": "invalid_request"}, status_code=400)
 
         enrollments = await list_second_factor_enrollments_for_factor(
             db_session,
@@ -1013,7 +1031,12 @@ class AuthController(Controller):
             factor_key,
         )
         if not enrollments:
-            return Response(content={"error": "no_enrollments"}, status_code=400)
+            logger.info(
+                "Second-factor options: user has no enrollments for factor (user_id=%s, factor=%s)",
+                pending_auth.user_id,
+                factor_key,
+            )
+            return Response(content={"error": "invalid_request"}, status_code=400)
 
         try:
             options = begin_passkey_authentication_flow(
@@ -1056,8 +1079,12 @@ class AuthController(Controller):
         )
         user = result.scalar_one_or_none()
         if user is None:
+            logger.info(
+                "Second-factor complete: pending-auth user not found (user_id=%s)",
+                pending_auth.user_id,
+            )
             clear_pending_authentication(request)
-            return Response(content={"error": "user_not_found"}, status_code=404)
+            return Response(content={"error": "invalid_request"}, status_code=400)
 
         form_data = await request.form()
         credential_raw = str(form_data.get("credential", "")).strip()
@@ -1079,7 +1106,12 @@ class AuthController(Controller):
             credential_id=credential_id,
         )
         if enrollment is None or str(enrollment.user_id) != pending_auth.user_id:
-            return Response(content={"error": "credential_not_found"}, status_code=404)
+            logger.info(
+                "Second-factor complete: credential not found or not owned (credential_id=%s, user_id=%s)",
+                credential_id[:16],
+                pending_auth.user_id,
+            )
+            return Response(content={"error": "invalid_credential"}, status_code=400)
 
         try:
             verification = complete_passkey_authentication_flow(

@@ -467,8 +467,11 @@ class TestPrimaryPasskeyRegistration:
         assert resp.status_code == 404
 
     def test_duplicate_email_rejects_second_signup(self, client, engine):
-        """If a user with the email already exists, signup fails with 400."""
-        # Pre-seed a user with the target email
+        """Duplicate email must be rejected up front at /register/options so
+        the browser never prompts for a passkey that can't be used (orphan
+        credential in the user's password manager). The response must be a
+        generic ``invalid_request`` — a distinct "already exists" error
+        would leak whether an email is registered (H3)."""
         import asyncio
         from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -481,15 +484,16 @@ class TestPrimaryPasskeyRegistration:
         _run(_seed())
 
         csrf = _seed_csrf(client)
-        # Duplicate email must be rejected up front — at the /register/options
-        # step — so the browser never prompts for a passkey that can't be used
-        # (which would leave an orphan credential in the user's password manager).
         resp = client.post(
             "/auth/passkey/register/options",
             data={"email": "taken@example.com", CSRF_FIELD_NAME: csrf},
         )
         assert resp.status_code == 400
-        assert "already exists" in resp.json()["error"].lower()
+        body = resp.json()
+        assert body["error"] == "invalid_request"
+        # Do not leak that the email is already registered.
+        assert "already" not in body["error"].lower()
+        assert "exists" not in body["error"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +547,9 @@ class TestPrimaryPasskeyAuthentication:
         session = client.get_session_data()
         assert session.get("user_email") == "existing@example.com"
 
-    def test_login_with_unknown_credential_returns_404(self, client):
+    def test_login_with_unknown_credential_returns_generic_invalid_credential(self, client):
+        """Unknown credentials must not return a distinct 404/error code —
+        that would let an attacker enumerate enrolled credential IDs (H3)."""
         csrf = _seed_csrf(client)
         resp = client.post("/auth/passkey/options", data={CSRF_FIELD_NAME: csrf})
         next_csrf = resp.json()["csrf_token"]
@@ -557,8 +563,8 @@ class TestPrimaryPasskeyAuthentication:
                 CSRF_FIELD_NAME: next_csrf,
             },
         )
-        assert resp.status_code == 404
-        assert resp.json()["error"] == "credential_not_found"
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_credential"
 
     def test_login_complete_rejects_credential_without_id(self, client):
         csrf = _seed_csrf(client)
@@ -792,10 +798,150 @@ class TestSecondFactorPasskeyVerification:
                 CSRF_FIELD_NAME: next_csrf,
             },
         )
-        assert resp.status_code == 404
-        assert resp.json()["error"] == "credential_not_found"
+        # Generic `invalid_credential` (400) — NOT the distinct 404/
+        # `credential_not_found` that would let an attacker enumerate whose
+        # credentials live on the server (H3).
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_credential"
 
         # Session must still be pending — NOT promoted
         session = client.get_session_data()
         assert "user_id" not in session
         assert session.get("pending_auth_user_id") == user_b_id
+
+
+# ---------------------------------------------------------------------------
+# H3 enumeration hygiene — the remaining oracle sites
+# ---------------------------------------------------------------------------
+
+
+class TestPasskeyEnumerationHygiene:
+    """All public passkey endpoints must return a single generic error shape
+    for the branches that check the DB, so an attacker cannot probe whether
+    an email/user/credential exists. The real reason is logged server-side
+    (asserted below via caplog) so operators can still diagnose failures."""
+
+    def _seed_pending_auth(self, client, *, user_id: str):
+        from time import time as _time
+        from uuid import uuid4 as _uuid4
+
+        client.set_session_data(
+            {
+                "pending_auth_id": _uuid4().hex,
+                "pending_auth_method": "dummy",
+                "pending_auth_method_type": "oauth",
+                "pending_auth_stage": "second_factor_required",
+                "pending_auth_user_id": user_id,
+                "pending_auth_expires_at": int(_time()) + 900,
+                CSRF_SESSION_KEY: "enum-csrf",
+            }
+        )
+
+    def test_verify_options_with_deleted_pending_user_returns_generic(self, client, caplog):
+        """pending_auth carries a user_id that no longer exists in the DB
+        (race condition or admin-delete). Response must be a flat
+        ``invalid_request`` at 400 — not ``user_not_found`` at 404."""
+        import logging
+        from uuid import uuid4 as _uuid4
+
+        missing_id = str(_uuid4())
+        self._seed_pending_auth(client, user_id=missing_id)
+
+        with caplog.at_level(logging.INFO, logger="skrift.controllers.auth"):
+            resp = client.post(
+                "/auth/verify/passkey/options",
+                data={CSRF_FIELD_NAME: "enum-csrf"},
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_request"
+        # Session's pending_auth must be cleared so the attacker cannot retry.
+        assert "pending_auth_user_id" not in client.get_session_data()
+        # Ops visibility: the real reason should show up in the server log.
+        assert any(
+            "pending-auth user not found" in r.getMessage() for r in caplog.records
+        )
+
+    def test_verify_options_with_zero_enrollments_returns_generic(self, client, engine, caplog):
+        """A real user with no passkey enrollments looks identical to any
+        other verification failure — no ``no_enrollments`` leak."""
+        import logging
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        async def _seed_bare_user():
+            await _ensure_schema(engine)
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                user = User(email="bare@example.com", name="Bare")
+                session.add(user)
+                await session.commit()
+                return str(user.id)
+
+        user_id = _run(_seed_bare_user())
+        self._seed_pending_auth(client, user_id=user_id)
+
+        with caplog.at_level(logging.INFO, logger="skrift.controllers.auth"):
+            resp = client.post(
+                "/auth/verify/passkey/options",
+                data={CSRF_FIELD_NAME: "enum-csrf"},
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_request"
+        assert any(
+            "no enrollments" in r.getMessage().lower() for r in caplog.records
+        )
+
+    def test_verify_complete_with_deleted_pending_user_returns_generic(self, client, caplog):
+        """Same invariant for /verify/{factor}/complete — deleted user in
+        pending_auth must surface as ``invalid_request`` 400."""
+        import logging
+        from uuid import uuid4 as _uuid4
+
+        self._seed_pending_auth(client, user_id=str(_uuid4()))
+
+        with caplog.at_level(logging.INFO, logger="skrift.controllers.auth"):
+            resp = client.post(
+                "/auth/verify/passkey/complete",
+                data={
+                    "credential": json.dumps(
+                        {"id": "x", "rawId": "x", "type": "public-key", "response": {}}
+                    ),
+                    CSRF_FIELD_NAME: "enum-csrf",
+                },
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_request"
+        assert any(
+            "pending-auth user not found" in r.getMessage() for r in caplog.records
+        )
+
+    def test_signup_duplicate_email_log_does_not_include_plaintext_email(self, client, engine, caplog):
+        """The server-side log for duplicate signup must not itself enumerate
+        the email — we log an SHA-256 prefix, never the raw address."""
+        import logging
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        async def _seed():
+            await _ensure_schema(engine)
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                session.add(User(email="sensitive@example.com", name="U"))
+                await session.commit()
+
+        _run(_seed())
+
+        csrf = _seed_csrf(client)
+        with caplog.at_level(logging.INFO, logger="skrift.controllers.auth"):
+            resp = client.post(
+                "/auth/passkey/register/options",
+                data={"email": "sensitive@example.com", CSRF_FIELD_NAME: csrf},
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_request"
+        # Log must fire for ops visibility, but must not contain the
+        # plaintext email.
+        matched = [r for r in caplog.records if "email already registered" in r.getMessage()]
+        assert matched, "expected a diagnostic log for duplicate-email signup"
+        for record in matched:
+            assert "sensitive@example.com" not in record.getMessage()
