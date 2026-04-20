@@ -465,6 +465,7 @@ class TestRefreshTokenGrant:
             "user_id": "user-123",
             "client_id": "abc",
             "scope": "openid",
+            "family_id": "fam-xyz",
         }, SECRET, REFRESH_TOKEN_TTL)
 
         controller = OAuth2Controller(owner=MagicMock())
@@ -480,24 +481,31 @@ class TestRefreshTokenGrant:
         with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
              patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
             mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            mock_svc.is_family_revoked = AsyncMock(return_value=False)
             mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
             mock_svc.revoke_token = AsyncMock()
+            mock_svc.revoke_family = AsyncMock()
             result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
         assert result.status_code == 200
         body = result.content
         assert "access_token" in body
         assert "refresh_token" in body
-        # Verify old refresh token was revoked
+        # Normal rotation: old refresh jti is revoked, family is NOT revoked.
         mock_svc.revoke_token.assert_called_once()
+        mock_svc.revoke_family.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_revoked_refresh_token_rejected(self):
+    async def test_refresh_reuse_detected_revokes_whole_family(self):
+        """A presented refresh whose jti is already revoked is the RFC 6749
+        §10.4 compromise signal. Mass-revoke the family and reject."""
         settings = _make_settings()
         refresh = create_signed_token({
             "type": "refresh",
             "user_id": "user-123",
             "client_id": "abc",
+            "scope": "openid",
+            "family_id": "fam-reuse",
         }, SECRET, REFRESH_TOKEN_TTL)
 
         controller = OAuth2Controller(owner=MagicMock())
@@ -513,9 +521,56 @@ class TestRefreshTokenGrant:
         with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
              patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
             mock_svc.is_token_revoked = AsyncMock(return_value=True)
+            mock_svc.is_family_revoked = AsyncMock(return_value=False)
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=_mock_client())
+            mock_svc.revoke_family = AsyncMock()
+            mock_svc.revoke_token = AsyncMock()
             result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
         assert result.status_code == 400
+        assert result.content["error"] == "invalid_grant"
+        # The whole family must have been revoked exactly once, before issuing
+        # any new tokens (there are no new tokens on this path).
+        mock_svc.revoke_family.assert_awaited_once_with(db_session, "fam-reuse")
+        mock_svc.revoke_token.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_refresh_with_already_revoked_family_rejected(self):
+        """Family marked revoked on a prior reuse detection: subsequent
+        siblings must be rejected without issuing tokens."""
+        settings = _make_settings()
+        refresh = create_signed_token({
+            "type": "refresh",
+            "user_id": "user-123",
+            "client_id": "abc",
+            "scope": "openid",
+            "family_id": "fam-dead",
+        }, SECRET, REFRESH_TOKEN_TTL)
+
+        controller = OAuth2Controller(owner=MagicMock())
+        request = MagicMock()
+        request.form = AsyncMock(return_value={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh,
+            "client_id": "abc",
+            "client_secret": "secret",
+        })
+        db_session = AsyncMock()
+
+        with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
+             patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+            mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            mock_svc.is_family_revoked = AsyncMock(return_value=True)
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=_mock_client())
+            mock_svc.revoke_family = AsyncMock()
+            mock_svc.revoke_token = AsyncMock()
+            result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
+
+        assert result.status_code == 400
+        assert result.content["error"] == "invalid_grant"
+        mock_svc.revoke_token.assert_not_called()
+        # Don't re-add the family — it's already revoked.
+        mock_svc.revoke_family.assert_not_called()
 
 
 class TestUserInfo:

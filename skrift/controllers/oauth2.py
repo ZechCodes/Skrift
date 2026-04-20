@@ -7,6 +7,7 @@ instance can act as an identity hub for spoke sites.
 
 import base64
 import hashlib
+import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -259,6 +260,10 @@ class OAuth2Controller(Controller):
 
         scope = payload.get("scope", "")
 
+        # Stamp a fresh family id so later refresh rotations can detect reuse
+        # (presenting a previously-rotated token) and mass-revoke the lineage.
+        family_id = uuid.uuid4().hex
+
         # Issue tokens
         access_payload = {
             "type": "access",
@@ -274,6 +279,7 @@ class OAuth2Controller(Controller):
             "user_id": payload["user_id"],
             "client_id": client_id,
             "scope": scope,
+            "family_id": family_id,
         }
 
         access_token = create_signed_token(access_payload, settings.secret_key, ACCESS_TOKEN_TTL)
@@ -292,15 +298,29 @@ class OAuth2Controller(Controller):
         )
 
     async def _handle_refresh_token(self, form_data, db_session: AsyncSession) -> Response:
-        """Handle grant_type=refresh_token."""
+        """Handle grant_type=refresh_token with RFC 6749 §10.4 reuse detection.
+
+        Three outcomes for a presented refresh token:
+
+        1. **Reuse detected** — the token's ``jti`` is already revoked (i.e.
+           it has been rotated away on a previous call). Treat this as the
+           compromise indicator described in §10.4: add the whole ``family_id``
+           to :class:`RevokedFamily` so any sibling refresh still in the wild
+           also stops working, then return ``invalid_grant``.
+        2. **Family already revoked** — reuse was detected on a prior call.
+           Reject without touching state.
+        3. **Normal rotation** — revoke this jti, issue new access + refresh
+           tokens carrying the same ``family_id`` so the chain is still
+           trackable.
+        """
         settings = get_settings()
 
         refresh_token_str = form_data.get("refresh_token", "")
         client_id = form_data.get("client_id", "")
         client_secret = form_data.get("client_secret", "")
 
-        # Verify refresh token (with revocation check)
-        payload = await verify_oauth_token(refresh_token_str, settings.secret_key, db_session)
+        # Signature-only verify (don't conflate "expired/bad" with "revoked").
+        payload = verify_signed_token(refresh_token_str, settings.secret_key)
         if not payload or payload.get("type") != "refresh":
             return _json_error("invalid_grant", "Invalid or expired refresh token")
 
@@ -317,15 +337,37 @@ class OAuth2Controller(Controller):
             if not verify_client_secret(client_secret, client.client_secret):
                 return _json_error("invalid_client", "Invalid client_secret")
 
+        old_jti = payload.get("jti")
+        family_id = payload.get("family_id", "")
+
+        # Reuse detection: a presented refresh whose jti has already been
+        # rotated away is the §10.4 compromise indicator. Kill the whole
+        # family so sibling tokens stop working too.
+        if old_jti and await oauth2_service.is_token_revoked(db_session, old_jti):
+            if family_id:
+                await oauth2_service.revoke_family(db_session, family_id)
+            return _json_error(
+                "invalid_grant",
+                "Refresh token reuse detected; token family revoked",
+            )
+
+        # Family-level revocation check covers the race where reuse was
+        # detected on a concurrent request.
+        if family_id and await oauth2_service.is_family_revoked(db_session, family_id):
+            return _json_error(
+                "invalid_grant",
+                "Refresh token family has been revoked",
+            )
+
         scope = payload.get("scope", "")
 
-        # Revoke the old refresh token
-        old_jti = payload.get("jti")
+        # Revoke the old refresh token (normal rotation path).
         if old_jti:
             expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
             await oauth2_service.revoke_token(db_session, old_jti, "refresh", expires_at)
 
-        # Issue new access + refresh tokens (token rotation)
+        # Issue new access + refresh tokens (token rotation); stay on the
+        # same family so future rotations remain linkable for reuse checks.
         access_payload = {
             "type": "access",
             "user_id": payload["user_id"],
@@ -340,6 +382,7 @@ class OAuth2Controller(Controller):
             "user_id": payload["user_id"],
             "client_id": client_id,
             "scope": scope,
+            "family_id": family_id,
         }
 
         access_token = create_signed_token(access_payload, settings.secret_key, ACCESS_TOKEN_TTL)

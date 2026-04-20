@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.client_secret import hash_client_secret
 from skrift.db.models.oauth2_client import OAuth2Client
+from skrift.db.models.revoked_family import RevokedFamily
 from skrift.db.models.revoked_token import RevokedToken
 from skrift.lib.hooks import hooks
 
@@ -149,3 +150,40 @@ async def cleanup_expired_revocations(db_session: AsyncSession) -> int:
     )
     await db_session.commit()
     return result.rowcount
+
+
+async def revoke_family(db_session: AsyncSession, family_id: str) -> None:
+    """Record a refresh-token family as revoked.
+
+    Called when reuse detection fires (someone presented a refresh token
+    whose ``jti`` had already been rotated away). Future refresh requests
+    for any sibling in the family must fail.
+
+    Safe to call repeatedly — the table has a unique constraint on
+    ``family_id`` so we swallow the ``IntegrityError`` path. In practice
+    the caller checks first, so the duplicate path is cold.
+    """
+    if not family_id:
+        return
+    existing = await db_session.execute(
+        select(RevokedFamily.id).where(RevokedFamily.family_id == family_id)
+    )
+    if existing.scalar_one_or_none() is not None:
+        return
+    revoked = RevokedFamily(
+        family_id=family_id,
+        revoked_at=datetime.now(tz=datetime.now().astimezone().tzinfo),
+    )
+    db_session.add(revoked)
+    await db_session.commit()
+    await hooks.do_action("after_token_family_revoked", family_id)
+
+
+async def is_family_revoked(db_session: AsyncSession, family_id: str) -> bool:
+    """Check if a refresh-token family has been mass-revoked."""
+    if not family_id:
+        return False
+    result = await db_session.execute(
+        select(RevokedFamily.id).where(RevokedFamily.family_id == family_id)
+    )
+    return result.scalar_one_or_none() is not None
