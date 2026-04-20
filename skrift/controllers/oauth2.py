@@ -434,22 +434,19 @@ class OAuth2Controller(Controller):
         if not payload or payload.get("type") != "access":
             return _json_error("invalid_token", "Invalid or expired access token", status_code=401)
 
-        # Build claims based on granted scopes
+        # Build claims strictly from granted scopes. A token minted with
+        # no scopes gets only `sub` — prior backwards-compat code returned
+        # the full profile + email, which silently defeated scope filtering.
         scope_str = payload.get("scope", "")
         granted_scopes = scope_str.split() if scope_str else []
 
-        # Collect allowed claims from scope definitions
         allowed_claims: set[str] = set()
         for s in granted_scopes:
             defn = SCOPE_DEFINITIONS.get(s)
             if defn:
                 allowed_claims.update(defn.claims)
 
-        # If no scopes specified, return all claims (backwards compatibility)
-        if not granted_scopes:
-            allowed_claims = {"sub", "email", "name", "picture"}
-
-        # Always include sub
+        # Always include sub — the minimum subject identifier required by OIDC.
         claims: dict = {"sub": payload["user_id"]}
 
         if "email" in allowed_claims:
