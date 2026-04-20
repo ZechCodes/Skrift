@@ -33,6 +33,10 @@ if TYPE_CHECKING:
 PENDING_AUTH_TTL_SECONDS = 900
 PENDING_AUTH_STAGE_PRIMARY_VERIFIED = "primary_verified"
 PENDING_AUTH_STAGE_SECOND_FACTOR_REQUIRED = "second_factor_required"
+# Set when an OAuth provider returned a matching-email identity without
+# attesting verification. The user must prove control of the email by
+# clicking a one-time link before the OAuth account is actually linked.
+PENDING_AUTH_STAGE_EMAIL_LINK_REQUIRED = "email_link_required"
 
 _PENDING_AUTH_SESSION_KEYS = (
     SESSION_PENDING_AUTH_ID,

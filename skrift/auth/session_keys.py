@@ -30,3 +30,9 @@ SESSION_PASSKEY_PRIMARY_REGISTRATION_METHOD = "passkey_primary_registration_meth
 SESSION_PASSKEY_PRIMARY_REGISTRATION_EMAIL = "passkey_primary_registration_email"
 SESSION_PASSKEY_PRIMARY_REGISTRATION_NAME = "passkey_primary_registration_name"
 SESSION_PASSKEY_PRIMARY_REGISTRATION_USER_HANDLE = "passkey_primary_registration_user_handle"
+
+# Deferred OAuth account linking — set while the user awaits an email-link
+# challenge to prove control of an existing account's email address.
+SESSION_PENDING_LINK_METADATA = "pending_link_metadata"
+SESSION_PENDING_LINK_TOKENS = "pending_link_tokens"
+SESSION_PENDING_LINK_EMAIL = "pending_link_email"

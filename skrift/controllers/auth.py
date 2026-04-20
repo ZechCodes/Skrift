@@ -18,10 +18,22 @@ from litestar.response import Redirect, Response, Template as TemplateResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from skrift.auth.email_link import (
+    begin_email_link_challenge,
+    build_claim_url,
+    clear_pending_link_state,
+    expiry_from_payload,
+    get_pending_link_masked_email,
+    pop_pending_link_metadata,
+    pop_pending_link_tokens,
+    verify_link_token,
+)
 from skrift.auth.identities import ResolvedPrimaryIdentity
 from skrift.auth.methods import get_primary_auth_method
 from skrift.auth.oauth_account_service import (
+    EmailVerificationRequired,
     LoginResult,
+    complete_verified_email_link,
     create_login_result_for_new_user,
     find_login_result_for_passkey_credential,
     find_or_create_user_for_identity,
@@ -376,11 +388,19 @@ class AuthController(Controller):
             )
             raise
 
-        login_result = await find_or_create_user_for_identity(
+        resolution = await find_or_create_user_for_identity(
             db_session,
             completion.identity,
             tokens=completion.tokens,
         )
+
+        if isinstance(resolution, EmailVerificationRequired):
+            # Email match without provider attestation — defer the actual
+            # OAuth account link until the user proves control of the inbox
+            # by clicking a short-lived signed URL.
+            await db_session.commit()
+            return await self._begin_email_link_challenge(request, settings, resolution)
+
         await db_session.commit()
 
         flash_success(request, "Successfully logged in!")
@@ -388,9 +408,53 @@ class AuthController(Controller):
             request,
             db_session,
             settings,
-            login_result,
+            resolution,
             identity=completion.identity,
         )
+
+    async def _begin_email_link_challenge(
+        self,
+        request: Request,
+        settings,
+        resolution: EmailVerificationRequired,
+    ) -> Redirect:
+        """Start the deferred-link email challenge and redirect to the pending page."""
+        from skrift.auth.session_service import (
+            PENDING_AUTH_STAGE_EMAIL_LINK_REQUIRED,
+            begin_pending_authentication,
+        )
+
+        pending_auth = begin_pending_authentication(
+            request,
+            method_key=resolution.identity.method_key,
+            method_type=resolution.identity.method_type,
+            identity=resolution.identity,
+            user_id=resolution.existing_user_id,
+            is_new_user=False,
+            stage=PENDING_AUTH_STAGE_EMAIL_LINK_REQUIRED,
+        )
+
+        email_backend = request.app.state.email_backend
+        try:
+            await begin_email_link_challenge(
+                request,
+                settings=settings,
+                email_backend=email_backend,
+                resolution=resolution,
+                pending_auth_id=pending_auth.pending_auth_id,
+                template_engine=request.app.template_engine.engine,
+            )
+        except Exception:
+            logger.exception("Failed to dispatch email link challenge")
+            clear_pending_authentication(request)
+            clear_pending_link_state(request)
+            flash_error(
+                request,
+                "We couldn't send the confirmation email. Please try again.",
+            )
+            return Redirect(path="/auth/login")
+
+        return Redirect(path="/auth/verify-email/pending")
 
     @get("/login")
     async def login_page(
@@ -1044,19 +1108,26 @@ class AuthController(Controller):
         oauth_id = f"dummy_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
         dummy_metadata = {"id": oauth_id, "email": email, "name": name}
 
-        login_result = await find_or_create_user_for_identity(
-            db_session,
-            ResolvedPrimaryIdentity(
-                method_key=DUMMY_PROVIDER_KEY,
-                method_type="dummy",
-                subject_id=oauth_id,
-                email=email,
-                name=name,
-                picture_url=None,
-                raw_metadata=dummy_metadata,
-                provided_fields={"email", "name"},
-            ),
+        # Dummy is dev-only (blocked in production). Treat its emails as
+        # verified so the account-linking email challenge doesn't fire during
+        # local development where no mailer is configured.
+        dummy_identity = ResolvedPrimaryIdentity(
+            method_key=DUMMY_PROVIDER_KEY,
+            method_type="dummy",
+            subject_id=oauth_id,
+            email=email,
+            name=name,
+            picture_url=None,
+            raw_metadata=dummy_metadata,
+            provided_fields={"email", "name"},
+            email_verified=True,
         )
+        login_result = await find_or_create_user_for_identity(
+            db_session, dummy_identity
+        )
+        # Dummy path never returns EmailVerificationRequired because
+        # ``email_verified=True`` on the identity.
+        assert isinstance(login_result, LoginResult)
         await db_session.commit()
 
         flash_success(request, "Successfully logged in!")
@@ -1065,17 +1136,109 @@ class AuthController(Controller):
             db_session,
             settings,
             login_result,
-            identity=ResolvedPrimaryIdentity(
-                method_key=login_result.method_key,
-                method_type=login_result.method_type,
-                subject_id=oauth_id,
-                email=email,
-                name=name,
-                picture_url=None,
-                raw_metadata=dummy_metadata,
-                provided_fields={"email", "name"},
-            ),
+            identity=dummy_identity,
         )
+
+    @get("/verify-email/pending")
+    async def verify_email_pending(self, request: Request) -> TemplateResponse | Redirect:
+        """Render the 'check your inbox' page after an OAuth email challenge starts."""
+        masked = get_pending_link_masked_email(request)
+        if masked is None:
+            flash_error(request, "No pending sign-in. Please start again.")
+            return Redirect(path="/auth/login")
+        template_name = resolve_template_name(
+            request.app.template_engine,
+            "verify_email_pending.html",
+            "auth/verify_email_pending.html",
+        )
+        return TemplateResponse(template_name, context={"masked_email": masked})
+
+    @get("/verify-email/claim/{token:str}")
+    async def verify_email_claim(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        token: str,
+    ) -> Redirect | TemplateResponse:
+        """Complete the deferred OAuth account link after email verification.
+
+        Strict checks (short-circuit on any failure with the same template):
+          1. Token signature + expiry + ``purpose`` field.
+          2. Revocation (via ``oauth2_service.is_token_revoked``).
+          3. Session's pending-auth ID matches the token's bound ID — this is
+             the primary defense against cross-browser / cross-user link
+             interception; only the browser that started the OAuth flow can
+             complete the link.
+          4. The target user exists.
+        """
+        from skrift.db.services import oauth2_service
+
+        settings = get_settings()
+
+        def _invalid() -> TemplateResponse:
+            template_name = resolve_template_name(
+                request.app.template_engine,
+                "verify_email_invalid.html",
+                "auth/verify_email_invalid.html",
+            )
+            return TemplateResponse(template_name, context={})
+
+        payload = verify_link_token(token, settings.secret_key)
+        if payload is None:
+            return _invalid()
+
+        jti = payload.get("jti")
+        if jti and await oauth2_service.is_token_revoked(db_session, jti):
+            return _invalid()
+
+        pending_auth = get_pending_authentication(request)
+        if pending_auth is None:
+            return _invalid()
+        if pending_auth.pending_auth_id != payload.get("pending_auth_id"):
+            return _invalid()
+
+        target_user_id = payload.get("user_id_to_link")
+        if not target_user_id:
+            return _invalid()
+
+        metadata = pop_pending_link_metadata(request)
+        tokens = pop_pending_link_tokens(request)
+
+        identity = ResolvedPrimaryIdentity(
+            method_key=str(payload.get("provider_key", "")),
+            method_type=str(payload.get("method_type", "oauth")),
+            subject_id=str(payload.get("subject_id", "")),
+            email=payload.get("email") or None,
+            name=payload.get("name") or None,
+            picture_url=payload.get("picture_url") or None,
+            raw_metadata=metadata,
+            provided_fields={"email"} if payload.get("email") else set(),
+            email_verified=True,
+        )
+
+        try:
+            login_result = await complete_verified_email_link(
+                db_session,
+                existing_user_id=str(target_user_id),
+                identity=identity,
+                tokens=tokens,
+            )
+        except ValueError:
+            return _invalid()
+
+        if jti:
+            await oauth2_service.revoke_token(
+                db_session, jti, "email_verify", expiry_from_payload(payload)
+            )
+
+        await db_session.commit()
+
+        clear_pending_link_state(request)
+        clear_pending_authentication(request)
+        finalize_authenticated_session(request, login_result.user)
+        flash_success(request, "Your account is linked.")
+
+        return await _build_post_login_redirect(request, settings, login_result)
 
     @get("/logout")
     async def logout_confirm(self, request: Request) -> TemplateResponse:

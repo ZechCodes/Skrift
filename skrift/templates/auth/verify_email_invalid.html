@@ -1,0 +1,11 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Link expired - {{ site_name() }}{% endblock %}
+
+{% block content %}
+<section style="max-width: 480px; margin: 4rem auto; padding: 2rem; text-align: center;">
+    <h1>This link can't be used</h1>
+    <p>The confirmation link is expired, already used, or was opened in a different browser than the one you signed in with.</p>
+    <p>Start over by <a href="/auth/login">signing in again</a>. If you keep seeing this message, contact the site owner.</p>
+</section>
+{% endblock %}

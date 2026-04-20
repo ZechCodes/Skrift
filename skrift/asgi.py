@@ -964,6 +964,10 @@ def create_app() -> ASGIApp:
     else:
         backend = InMemoryBackend()
 
+    # Email backend setup (separate abstraction from notifications)
+    from skrift.lib.email_backends import build_email_backend
+    email_backend = build_email_backend(settings.email)
+
     async def on_startup(_app: Litestar) -> None:
         """Sync roles, load site settings, and start notification backend on startup."""
         try:
@@ -985,6 +989,8 @@ def create_app() -> ASGIApp:
         notification_service.set_backend(backend)
         await backend.start()
 
+        await email_backend.start()
+
         await trusted_proxy_manager.start()
 
         # Register Web Push fallback hook (only when PushController is enabled)
@@ -1003,6 +1009,7 @@ def create_app() -> ASGIApp:
     async def on_shutdown(_app: Litestar) -> None:
         """Stop notification backend and storage on shutdown."""
         await notification_service._get_backend().stop()
+        await email_backend.stop()
         await storage_manager.close()
         await trusted_proxy_manager.stop()
         if _redis_client is not None:
@@ -1026,6 +1033,7 @@ def create_app() -> ASGIApp:
     app.state.webhook_secret = settings.notifications.webhook_secret
     app.state.storage_manager = storage_manager
     app.state.trusted_proxy_manager = trusted_proxy_manager
+    app.state.email_backend = email_backend
 
     # Install the shared failed-auth limiter on app.state so the notification
     # webhook uses the Redis-backed counter when configured.

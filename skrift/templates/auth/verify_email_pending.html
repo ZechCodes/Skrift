@@ -1,0 +1,36 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Check your email - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .verify-email-shell {
+        max-width: 480px;
+        margin: 4rem auto;
+        padding: 2rem;
+        border-radius: 1rem;
+        border: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.08));
+        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+        text-align: center;
+    }
+    .verify-email-shell h1 { margin-top: 0; }
+    .verify-email-meta {
+        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.6));
+        font-size: 0.9rem;
+        margin-top: 1.5rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="verify-email-shell">
+    <h1>Check your email</h1>
+    {% if masked_email %}
+    <p>We sent a confirmation link to <strong>{{ masked_email }}</strong>.</p>
+    {% else %}
+    <p>We sent you a confirmation link.</p>
+    {% endif %}
+    <p>Open it in this browser to finish linking your sign-in method. The link expires in 15 minutes.</p>
+    <p class="verify-email-meta">If you didn't start this sign-in, you can close this tab and ignore the email.</p>
+</section>
+{% endblock %}

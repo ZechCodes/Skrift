@@ -908,16 +908,27 @@ class SetupController(Controller):
         dummy_metadata = {"id": oauth_id, "email": email, "name": name}
 
         from skrift.auth.providers import NormalizedUserData
+        # Setup is a one-shot admin-creation flow guarded by `validate_no_dummy_auth_in_production`;
+        # treat the email as verified so account creation doesn't route through
+        # the email challenge (no mailer may be configured yet during setup).
         user_data = NormalizedUserData(
-            oauth_id=oauth_id, email=email, name=name, picture_url=None
+            oauth_id=oauth_id,
+            email=email,
+            name=name,
+            picture_url=None,
+            email_verified=True,
         )
 
         async with get_setup_db_session() as db_session:
-            from skrift.auth.oauth_account_service import find_or_create_oauth_user
-            login_result = await find_or_create_oauth_user(
+            from skrift.auth.oauth_account_service import (
+                LoginResult,
+                find_or_create_oauth_user,
+            )
+            resolution = await find_or_create_oauth_user(
                 db_session, DUMMY_PROVIDER_KEY, user_data, dummy_metadata
             )
-            await _finalize_admin_setup(db_session, request, login_result.user)
+            assert isinstance(resolution, LoginResult)
+            await _finalize_admin_setup(db_session, request, resolution.user)
 
         return Redirect(path="/setup/complete")
 
@@ -1141,11 +1152,24 @@ class SetupAuthController(Controller):
 
         # Create user and mark setup complete
         async with get_setup_db_session() as db_session:
-            from skrift.auth.oauth_account_service import find_or_create_oauth_user
-            login_result = await find_or_create_oauth_user(
+            from skrift.auth.oauth_account_service import (
+                EmailVerificationRequired,
+                find_or_create_oauth_user,
+            )
+            resolution = await find_or_create_oauth_user(
                 db_session, provider, user_data, user_info, tokens=tokens
             )
-            await _finalize_admin_setup(db_session, request, login_result.user)
+            if isinstance(resolution, EmailVerificationRequired):
+                # Setup creates the first admin — there should be no existing
+                # user to link against. If this fires, setup is likely being
+                # re-run against a populated DB; surface a clear error rather
+                # than silently falling back.
+                _store_setup_error(
+                    request,
+                    "An account with that email already exists. Log in via the main login page instead.",
+                )
+                return Redirect(path="/setup/admin")
+            await _finalize_admin_setup(db_session, request, resolution.user)
 
         # Clear setup flag
         request.session.pop("oauth_setup", None)

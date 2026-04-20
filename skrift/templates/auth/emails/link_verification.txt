@@ -1,0 +1,10 @@
+Confirm sign-in to link your account
+
+Someone tried to sign in to your account using {{ provider_display }}. To
+finish linking that sign-in method, open this link in the same browser you
+started from:
+
+{{ claim_url }}
+
+This link expires in {{ ttl_minutes }} minutes. If you did not try to sign
+in, you can ignore this message — no action is required.
