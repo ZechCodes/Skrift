@@ -89,11 +89,11 @@ class OAuth2Controller(Controller):
         if redirect_uri not in client.redirect_uri_list:
             return _json_error("invalid_request", "redirect_uri not registered for this client")
 
-        # Public clients must use PKCE
-        if not client.client_secret and not code_challenge:
-            return _json_error("invalid_request", "Public clients must use PKCE (code_challenge required)")
-
-        if code_challenge and code_challenge_method != "S256":
+        # PKCE is required for every client (OAuth 2.1). S256 is the only
+        # accepted method — `plain` is explicitly rejected.
+        if not code_challenge:
+            return _json_error("invalid_request", "code_challenge is required")
+        if code_challenge_method != "S256":
             return _json_error("invalid_request", "Only code_challenge_method=S256 is supported")
 
         # Validate requested scopes
@@ -244,13 +244,17 @@ class OAuth2Controller(Controller):
             if not verify_client_secret(client_secret, client.client_secret):
                 return _json_error("invalid_client", "Invalid client_secret")
 
-        # PKCE validation
+        # PKCE validation: `code_challenge` is stamped on every code by
+        # `authorize_get`, so the code-grant path always requires a
+        # `code_verifier` that matches. Missing or mismatched verifiers are
+        # `invalid_grant` errors.
         stored_challenge = payload.get("code_challenge", "")
-        if stored_challenge:
-            if not code_verifier:
-                return _json_error("invalid_grant", "code_verifier required")
-            if not _verify_pkce(code_verifier, stored_challenge):
-                return _json_error("invalid_grant", "PKCE verification failed")
+        if not stored_challenge:
+            return _json_error("invalid_grant", "code_challenge missing from token")
+        if not code_verifier:
+            return _json_error("invalid_grant", "code_verifier required")
+        if not _verify_pkce(code_verifier, stored_challenge):
+            return _json_error("invalid_grant", "PKCE verification failed")
 
         # Revoke the auth code before issuing tokens so a concurrent replay fails.
         code_jti = payload.get("jti")

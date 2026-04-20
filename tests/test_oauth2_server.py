@@ -355,6 +355,7 @@ class TestTokenExchange:
     @pytest.mark.asyncio
     async def test_authorization_code_grant(self):
         settings = _make_settings()
+        verifier, challenge = _generate_pkce()
         code = create_signed_token({
             "type": "code",
             "user_id": "user-123",
@@ -364,7 +365,7 @@ class TestTokenExchange:
             "client_id": "abc",
             "redirect_uri": "http://localhost/cb",
             "scope": "openid",
-            "code_challenge": "",
+            "code_challenge": challenge,
         }, SECRET, AUTH_CODE_TTL)
 
         client = _mock_client()
@@ -376,7 +377,7 @@ class TestTokenExchange:
             "redirect_uri": "http://localhost/cb",
             "client_id": "abc",
             "client_secret": "secret",
-            "code_verifier": "",
+            "code_verifier": verifier,
         })
         db_session = AsyncMock()
 

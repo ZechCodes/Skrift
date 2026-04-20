@@ -5,6 +5,8 @@ with ``invalid_grant`` rather than succeed silently as it did when the code
 endpoint skipped revocation tracking.
 """
 
+import base64
+import hashlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +16,13 @@ from skrift.controllers.oauth2 import ACCESS_TOKEN_TTL, AUTH_CODE_TTL, OAuth2Con
 
 
 SECRET = "test-secret-key"
+
+
+def _pkce_pair():
+    verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+    return verifier, challenge
 
 
 def _settings():
@@ -36,7 +45,7 @@ def _client(secret="s"):
     return client
 
 
-def _request(code: str, *, client_secret: str = "s"):
+def _request(code: str, *, client_secret: str = "s", code_verifier: str = ""):
     request = MagicMock()
     request.form = AsyncMock(
         return_value={
@@ -45,7 +54,7 @@ def _request(code: str, *, client_secret: str = "s"):
             "redirect_uri": "http://localhost/cb",
             "client_id": "abc",
             "client_secret": client_secret,
-            "code_verifier": "",
+            "code_verifier": code_verifier,
         }
     )
     return request
@@ -53,6 +62,7 @@ def _request(code: str, *, client_secret: str = "s"):
 
 @pytest.mark.asyncio
 async def test_authorization_code_is_revoked_after_successful_exchange():
+    verifier, challenge = _pkce_pair()
     code = create_signed_token(
         {
             "type": "code",
@@ -63,14 +73,14 @@ async def test_authorization_code_is_revoked_after_successful_exchange():
             "client_id": "abc",
             "redirect_uri": "http://localhost/cb",
             "scope": "openid",
-            "code_challenge": "",
+            "code_challenge": challenge,
         },
         SECRET,
         AUTH_CODE_TTL,
     )
 
     controller = OAuth2Controller(owner=MagicMock())
-    request = _request(code)
+    request = _request(code, code_verifier=verifier)
     db_session = AsyncMock()
 
     with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()), \
@@ -91,6 +101,7 @@ async def test_authorization_code_is_revoked_after_successful_exchange():
 
 @pytest.mark.asyncio
 async def test_replaying_a_revoked_code_returns_invalid_grant():
+    verifier, challenge = _pkce_pair()
     code = create_signed_token(
         {
             "type": "code",
@@ -101,14 +112,14 @@ async def test_replaying_a_revoked_code_returns_invalid_grant():
             "client_id": "abc",
             "redirect_uri": "http://localhost/cb",
             "scope": "openid",
-            "code_challenge": "",
+            "code_challenge": challenge,
         },
         SECRET,
         AUTH_CODE_TTL,
     )
 
     controller = OAuth2Controller(owner=MagicMock())
-    request = _request(code)
+    request = _request(code, code_verifier=verifier)
     db_session = AsyncMock()
 
     with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()), \
