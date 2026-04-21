@@ -362,7 +362,12 @@ class SessionConfig(BaseModel):
 
     cookie_name: str = "session"
     cookie_domain: str | None = None  # None = exact host only
-    max_age: int = 86400  # 1 day in seconds
+    max_age: int = 86400  # 1 day in seconds — hard cookie lifetime cap
+    # Rolling idle timeout in seconds. 0 disables the check (default).
+    # When > 0, an authenticated session whose last activity is older
+    # than this is cleared on the next request and the user sees a
+    # "signed out due to inactivity" flash on the login page.
+    idle_timeout: int = 0
 
 
 class CSRFSettings(BaseModel):

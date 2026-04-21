@@ -1018,12 +1018,25 @@ def create_app() -> ASGIApp:
             except Exception:
                 logger.debug("Redis client close failed", exc_info=True)
 
+    # Idle-timeout middleware runs AFTER session_config.middleware so
+    # ``scope["session"]`` is populated. Disabled when ``idle_timeout``
+    # is 0 (the default) — the middleware short-circuits immediately.
+    session_idle_middleware = []
+    if settings.session.idle_timeout > 0:
+        from skrift.middleware.session_idle import SessionIdleMiddleware
+        session_idle_middleware = [
+            DefineMiddleware(
+                SessionIdleMiddleware,
+                idle_timeout=settings.session.idle_timeout,
+            )
+        ]
+
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
         route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *api_auth_handlers, *webhook_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
+        middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream", compression_facade=SafeGzipCompression),
         csrf_config=csrf_config,

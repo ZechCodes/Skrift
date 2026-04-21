@@ -11,6 +11,7 @@ from litestar import Request
 
 from skrift.auth.session_keys import (
     SESSION_AUTH_NEXT,
+    SESSION_IDLE_LAST_SEEN,
     SESSION_PENDING_AUTH_EMAIL,
     SESSION_PENDING_AUTH_EXPIRES_AT,
     SESSION_PENDING_AUTH_ID,
@@ -211,6 +212,9 @@ def finalize_authenticated_session(request: Request, user) -> None:
     request.session[SESSION_USER_NAME] = user.name
     request.session[SESSION_USER_EMAIL] = user.email
     request.session[SESSION_USER_PICTURE_URL] = user.picture_url
+    # Seed the idle-timeout stamp so SessionIdleMiddleware doesn't
+    # immediately evict on the request that follows login.
+    request.session[SESSION_IDLE_LAST_SEEN] = int(time())
 
     if flash is not None:
         request.session["flash"] = flash

@@ -39,6 +39,11 @@ SESSION_PASSKEY_AUTHENTICATION_EXPIRES_AT = "passkey_authentication_expires_at"
 SESSION_PASSKEY_PRIMARY_AUTH_EXPIRES_AT = "passkey_primary_auth_expires_at"
 SESSION_PASSKEY_PRIMARY_REGISTRATION_EXPIRES_AT = "passkey_primary_registration_expires_at"
 
+# Rolling idle-timeout stamp (M7) — stamped at login, refreshed by
+# SessionIdleMiddleware on activity, checked on every authenticated
+# request.
+SESSION_IDLE_LAST_SEEN = "idle_last_seen"
+
 # Deferred OAuth account linking — set while the user awaits an email-link
 # challenge to prove control of an existing account's email address.
 SESSION_PENDING_LINK_METADATA = "pending_link_metadata"
