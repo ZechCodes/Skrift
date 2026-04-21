@@ -511,13 +511,26 @@ class OAuth2Controller(Controller):
         if not payload:
             return Response(content={"active": False}, status_code=200, media_type="application/json")
 
-        result = {
-            "active": True,
-            "token_type": payload.get("type", ""),
-            "client_id": payload.get("client_id", ""),
-            "sub": payload.get("user_id", ""),
-            "scope": payload.get("scope", ""),
-            "exp": payload.get("exp"),
-        }
+        # RFC 7662 §2.2: `active` is the only required field; every other
+        # field is optional. We return the full set only when the
+        # introspecting client is the one that issued the token — any
+        # other authenticated client sees a minimal response so it
+        # cannot enumerate other clients' users or scopes.
+        token_client_id = payload.get("client_id", "")
+        if token_client_id == client.client_id:
+            result = {
+                "active": True,
+                "token_type": payload.get("type", ""),
+                "client_id": token_client_id,
+                "sub": payload.get("user_id", ""),
+                "scope": payload.get("scope", ""),
+                "exp": payload.get("exp"),
+            }
+        else:
+            result = {
+                "active": True,
+                "token_type": payload.get("type", ""),
+                "exp": payload.get("exp"),
+            }
 
         return Response(content=result, status_code=200, media_type="application/json")
