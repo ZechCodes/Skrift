@@ -28,7 +28,6 @@ from advanced_alchemy.extensions.litestar import (
 from skrift.db.session import SessionCleanupMiddleware
 from litestar import Litestar
 from litestar.config.compression import CompressionConfig
-from litestar.config.csrf import CSRFConfig as LitestarCSRFConfig
 
 from skrift.middleware.compression import SafeGzipCompression
 from litestar.middleware import DefineMiddleware
@@ -561,7 +560,6 @@ def _build_site_app(
     site_config,
     db_config: SQLAlchemyAsyncConfig,
     session_config,
-    csrf_config,
     client_ip_middleware: list,
     security_middleware: list,
     rate_limit_middleware: list,
@@ -635,7 +633,6 @@ def _build_site_app(
         ],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", compression_facade=SafeGzipCompression),
-        csrf_config=csrf_config,
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
@@ -831,18 +828,6 @@ def create_app() -> ASGIApp:
             )
         ]
 
-    # CSRF configuration (if enabled in app.yaml)
-    csrf_config = None
-    if settings.csrf is not None:
-        csrf_config = LitestarCSRFConfig(
-            secret=settings.secret_key,
-            cookie_secure=not settings.debug,
-            cookie_httponly=False,
-            cookie_samesite="lax",
-            cookie_domain=settings.session.cookie_domain,
-            exclude=settings.csrf.exclude or None,
-        )
-
     # Static files
     from skrift.lib.theme import get_themes_dir
     themes_dir = get_themes_dir()
@@ -926,36 +911,22 @@ def create_app() -> ASGIApp:
     api_auth_handlers: list = []
     if settings.api_keys.enabled:
         api_auth_handlers.append(APIAuthController)
-        # Exempt refresh endpoint from CSRF since it uses bearer-token auth
-        if settings.csrf is not None:
-            settings.csrf.exclude.append("/api/auth/refresh")
 
     # OAuth2 controller — only registered when oauth2 is enabled
     oauth2_handlers: list = []
     if settings.oauth2_enabled:
         oauth2_handlers.append(OAuth2Controller)
-        # Exempt OAuth2 API endpoints from CSRF since they're called by external clients
-        if settings.csrf is not None:
-            settings.csrf.exclude.append("/oauth/token")
-            settings.csrf.exclude.append("/oauth/revoke")
-            settings.csrf.exclude.append("/oauth/introspect")
 
-    # Exempt push subscription endpoints from CSRF (only when PushController is enabled)
+    # Push subscription controller — enablement is configured per site
     _push_enabled = any(
         isinstance(c, type) and c.__name__ == "PushController"
         for c in controllers
     )
-    if _push_enabled and settings.csrf is not None:
-        settings.csrf.exclude.append("/push/subscribe")
-        settings.csrf.exclude.append("/push/unsubscribe")
 
     # Webhook controller — only registered when a secret is configured
     webhook_handlers: list = []
     if settings.notifications.webhook_secret:
         webhook_handlers.append(NotificationsWebhookController)
-        # Exempt webhook from CSRF since it uses bearer-token auth
-        if settings.csrf is not None:
-            settings.csrf.exclude.append("/notifications/webhook")
 
     # Notification backend setup
     if settings.notifications.backend:
@@ -1039,7 +1010,6 @@ def create_app() -> ASGIApp:
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream", compression_facade=SafeGzipCompression),
-        csrf_config=csrf_config,
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
@@ -1095,7 +1065,6 @@ def create_app() -> ASGIApp:
                 site_config=site_cfg,
                 db_config=db_config,
                 session_config=session_config,
-                csrf_config=csrf_config,
                 client_ip_middleware=client_ip_middleware,
                 security_middleware=security_middleware,
                 rate_limit_middleware=rate_limit_middleware,
@@ -1118,7 +1087,6 @@ def create_app() -> ASGIApp:
                 site_config=auto_cfg,
                 db_config=db_config,
                 session_config=session_config,
-                csrf_config=csrf_config,
                 client_ip_middleware=client_ip_middleware,
                 security_middleware=security_middleware,
                 rate_limit_middleware=rate_limit_middleware,

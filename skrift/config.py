@@ -370,12 +370,6 @@ class SessionConfig(BaseModel):
     idle_timeout: int = 0
 
 
-class CSRFSettings(BaseModel):
-    """CSRF protection configuration."""
-
-    exclude: list[str] = []
-
-
 class RateLimitConfig(BaseModel):
     """Rate limiting configuration."""
 
@@ -633,9 +627,6 @@ class Settings(BaseSettings):
     # Session config (loaded from app.yaml)
     session: SessionConfig = SessionConfig()
 
-    # CSRF config (loaded from app.yaml)
-    csrf: CSRFSettings | None = None
-
     # Security headers config (loaded from app.yaml)
     security_headers: SecurityHeadersConfig = SecurityHeadersConfig()
 
@@ -737,9 +728,6 @@ def get_settings() -> Settings:
 
     if "session" in app_config:
         kwargs["session"] = SessionConfig(**app_config["session"])
-
-    if "csrf" in app_config:
-        kwargs["csrf"] = CSRFSettings(**app_config["csrf"])
 
     if "security_headers" in app_config:
         kwargs["security_headers"] = SecurityHeadersConfig(**app_config["security_headers"])
