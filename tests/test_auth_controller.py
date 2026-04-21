@@ -195,6 +195,45 @@ class TestOAuthLogin:
             with pytest.raises(NotFoundException):
                 await AuthController.oauth_login.fn(auth, request, "nonexistent")
 
+    @pytest.mark.asyncio
+    async def test_oauth_callback_error_does_not_reflect_provider_string(self, caplog):
+        """L1 — the OAuth callback must not interpolate the provider's
+        `error` query parameter into a user-facing flash. Jinja autoescape
+        catches the XSS angle in practice, but reflecting attacker-
+        influenceable content gains nothing; the raw reason is logged."""
+        import logging
+
+        from skrift.controllers.auth import AuthController
+
+        auth = AuthController(owner=MagicMock())
+        request = MagicMock()
+        request.session = {}
+        db_session = AsyncMock()
+
+        captured: list[str] = []
+
+        def _capture_flash(_req, message, dismissible=True):
+            captured.append(message)
+
+        attacker = '<script>alert("pwn")</script>'
+        with patch("skrift.controllers.auth.get_settings") as mock_settings, \
+             patch("skrift.controllers.auth.flash_error", side_effect=_capture_flash):
+            mock_settings.return_value.auth.get_method_keys.return_value = ["google"]
+
+            with caplog.at_level(logging.INFO, logger="skrift.controllers.auth"):
+                await AuthController.oauth_callback.fn(
+                    auth, request, db_session, "google", error=attacker
+                )
+
+        assert len(captured) == 1
+        rendered = captured[0]
+        # The visible message must be a static string — the attacker's
+        # payload must not appear anywhere in the rendered flash.
+        assert attacker not in rendered
+        assert "script" not in rendered.lower()
+        # Operator diagnostics: the raw reason lives in the server log.
+        assert any(attacker in record.getMessage() for record in caplog.records)
+
 
 class TestLogout:
     @pytest.mark.asyncio

@@ -386,7 +386,18 @@ class AuthController(Controller):
             raise NotFoundException(f"Provider {provider} not configured")
 
         if error:
-            flash_error(request, f"OAuth error: {error}")
+            # Do not reflect the provider's `error` parameter into the UI —
+            # it's attacker-influenceable and offers nothing the user can
+            # act on. Log the raw reason for operator diagnostics.
+            logger.info(
+                "OAuth callback surfaced provider error for '%s': %s",
+                provider,
+                error,
+            )
+            flash_error(
+                request,
+                "Authentication with that provider failed. Please try again.",
+            )
             return Redirect(path="/auth/login")
 
         method = get_primary_auth_method(provider)
