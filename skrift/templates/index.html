@@ -102,7 +102,7 @@
         <dt>Passkeys</dt>
         <dd>
             {% if user.second_factor_enrollments %}
-                {% for enrollment in user.second_factor_enrollments %}<span class="tag">{{ enrollment.display_name or enrollment.factor_key }}</span>{% endfor %}
+                {% for enrollment in user.second_factor_enrollments %}<span class="tag">{{ (enrollment.display_name or enrollment.factor_key) | e }}</span>{% endfor %}
             {% else %}
                 <span class="placeholder">none enrolled</span>
             {% endif %}

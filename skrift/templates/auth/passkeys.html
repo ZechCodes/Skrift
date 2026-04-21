@@ -104,7 +104,7 @@
         <div class="passkey-list">
             {% for enrollment in enrollments %}
             <div class="passkey-item">
-                <strong>{{ enrollment.display_name or "Unnamed Passkey" }}</strong>
+                <strong>{{ (enrollment.display_name or "Unnamed Passkey") | e }}</strong>
                 <div class="passkey-meta">
                     Added {{ enrollment.enrolled_at.strftime('%Y-%m-%d %H:%M') if enrollment.enrolled_at else "recently" }}
                     {% if enrollment.last_used_at %}
