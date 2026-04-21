@@ -109,11 +109,14 @@ class TestPasskeyService:
         assert request.session["passkey_registration_user_id"] == str(user.id)
 
     def test_complete_passkey_registration_clears_session_and_normalizes_result(self):
+        from time import time as _time
+
         request = self._make_request()
         user = MagicMock(id=uuid4(), email="user@example.com", name="User")
         settings = Settings(secret_key="test-secret")
         request.session["passkey_registration_challenge"] = "challenge-123"
         request.session["passkey_registration_user_id"] = str(user.id)
+        request.session["passkey_registration_expires_at"] = int(_time()) + 300
         verification = MagicMock(
             credential_id=b"cred-1",
             credential_public_key=b"pub-1",
@@ -172,6 +175,151 @@ class TestPasskeyService:
         assert state is not None
         assert state.email == "new@example.com"
         assert state.method_key == "passkey"
+
+
+class TestPasskeyChallengeExpiry:
+    """M4 — every begin_* stamps an expiry, every complete_* rejects stale state."""
+
+    def _make_request(self):
+        request = MagicMock()
+        request.session = {}
+        request.base_url = "http://localhost:8000/"
+        request.url.hostname = "localhost"
+        return request
+
+    def _load_symbols(self):
+        return {
+            "PublicKeyCredentialDescriptor": MagicMock(),
+            "base64url_to_bytes": lambda v: v.encode("utf-8"),
+            "generate_registration_options": MagicMock(return_value=object()),
+            "generate_authentication_options": MagicMock(return_value=object()),
+            "options_to_json": MagicMock(
+                return_value=json.dumps(
+                    {"challenge": "challenge-123", "user": {"id": "u"}, "excludeCredentials": []}
+                )
+            ),
+            "UserVerificationRequirement": MagicMock(REQUIRED="required"),
+            "verify_registration_response": MagicMock(),
+            "verify_authentication_response": MagicMock(),
+        }
+
+    def test_begin_passkey_registration_stamps_expiry_around_ttl(self):
+        from time import time as _time
+
+        from skrift.auth.second_factors.passkey_service import (
+            PASSKEY_CHALLENGE_TTL_SECONDS,
+        )
+
+        request = self._make_request()
+        settings = Settings(secret_key="test-secret")
+        user = MagicMock(id=uuid4(), email="u@example.com", name="U")
+
+        before = int(_time())
+        with patch(
+            "skrift.auth.second_factors.passkey_service._load_webauthn_symbols",
+            return_value=self._load_symbols(),
+        ):
+            begin_passkey_registration(request, settings, user, [])
+        after = int(_time())
+
+        stamped = request.session["passkey_registration_expires_at"]
+        assert before + PASSKEY_CHALLENGE_TTL_SECONDS <= stamped <= after + PASSKEY_CHALLENGE_TTL_SECONDS
+
+    @pytest.mark.parametrize(
+        "expires_at_key,complete_fn_name",
+        [
+            ("passkey_registration_expires_at", "complete_passkey_registration"),
+            ("passkey_authentication_expires_at", "complete_passkey_authentication"),
+            ("passkey_primary_auth_expires_at", "complete_primary_passkey_authentication"),
+            ("passkey_primary_registration_expires_at", "complete_primary_passkey_registration"),
+        ],
+    )
+    def test_complete_rejects_stale_challenge(self, expires_at_key, complete_fn_name):
+        """A challenge whose deadline is in the past must raise PasskeyStateError
+        before any webauthn verify call. Covers all four flows."""
+        from time import time as _time
+
+        from skrift.auth.second_factors import passkey_service
+        from skrift.auth.second_factors.passkey_service import PasskeyStateError
+
+        request = self._make_request()
+        settings = Settings(secret_key="test-secret")
+        # Populate ONLY the expiry (in the past) — the stale-check runs first,
+        # so other session keys being absent is fine.
+        request.session[expires_at_key] = int(_time()) - 1
+
+        verify_mock = MagicMock()
+        with patch(
+            "skrift.auth.second_factors.passkey_service._load_webauthn_symbols",
+            return_value={
+                "base64url_to_bytes": lambda v: b"",
+                "verify_registration_response": verify_mock,
+                "verify_authentication_response": verify_mock,
+            },
+        ):
+            fn = getattr(passkey_service, complete_fn_name)
+            # Call signature varies per flow; build the minimum set each needs.
+            if complete_fn_name == "complete_passkey_registration":
+                user = MagicMock(id=uuid4())
+                with pytest.raises(PasskeyStateError, match="expired"):
+                    fn(request, settings, user, {"response": {}})
+            elif complete_fn_name == "complete_passkey_authentication":
+                user = MagicMock(id=uuid4())
+                pending = PendingAuthState(
+                    pending_auth_id="p",
+                    method_key="m",
+                    method_type="oauth",
+                    stage=PENDING_AUTH_STAGE_SECOND_FACTOR_REQUIRED,
+                    user_id=str(user.id),
+                    expires_at=9999999999,
+                )
+                enrollment = MagicMock(public_key="", sign_count=0)
+                with pytest.raises(PasskeyStateError, match="expired"):
+                    fn(request, settings, user, pending, enrollment, {"response": {}})
+            elif complete_fn_name == "complete_primary_passkey_authentication":
+                enrollment = MagicMock(
+                    public_key="", sign_count=0, credential_id="c"
+                )
+                with pytest.raises(PasskeyStateError, match="expired"):
+                    fn(
+                        request,
+                        settings,
+                        method_key="m",
+                        enrollment=enrollment,
+                        credential={"id": "c", "response": {}},
+                    )
+            else:  # complete_primary_passkey_registration
+                with pytest.raises(PasskeyStateError, match="expired"):
+                    fn(
+                        request,
+                        settings,
+                        method_key="m",
+                        credential={"response": {}},
+                    )
+
+        # The webauthn verify must NOT have been called — we reject before.
+        verify_mock.assert_not_called()
+
+    def test_complete_treats_missing_expiry_as_expired(self):
+        """Absent expiry key (hand-edited session) is also rejected — the
+        invariant is 'every begin_* stamps one, full stop'."""
+        from skrift.auth.second_factors.passkey_service import PasskeyStateError
+
+        request = self._make_request()
+        settings = Settings(secret_key="test-secret")
+        # No expiry key at all.
+
+        with patch(
+            "skrift.auth.second_factors.passkey_service._load_webauthn_symbols",
+            return_value={"base64url_to_bytes": lambda v: b""},
+        ):
+            with pytest.raises(PasskeyStateError, match="expired or missing"):
+                complete_passkey_registration(
+                    request,
+                    settings,
+                    MagicMock(id=uuid4()),
+                    {"response": {}},
+                )
 
 
 class TestSecondFactorTransitionDecision:

@@ -31,6 +31,14 @@ SESSION_PASSKEY_PRIMARY_REGISTRATION_EMAIL = "passkey_primary_registration_email
 SESSION_PASSKEY_PRIMARY_REGISTRATION_NAME = "passkey_primary_registration_name"
 SESSION_PASSKEY_PRIMARY_REGISTRATION_USER_HANDLE = "passkey_primary_registration_user_handle"
 
+# Passkey challenge expiry (M4) — stamped by each begin_*, checked by each
+# complete_* to reject stale challenges independent of the overall session
+# lifetime.
+SESSION_PASSKEY_REGISTRATION_EXPIRES_AT = "passkey_registration_expires_at"
+SESSION_PASSKEY_AUTHENTICATION_EXPIRES_AT = "passkey_authentication_expires_at"
+SESSION_PASSKEY_PRIMARY_AUTH_EXPIRES_AT = "passkey_primary_auth_expires_at"
+SESSION_PASSKEY_PRIMARY_REGISTRATION_EXPIRES_AT = "passkey_primary_registration_expires_at"
+
 # Deferred OAuth account linking — set while the user awaits an email-link
 # challenge to prove control of an existing account's email address.
 SESSION_PENDING_LINK_METADATA = "pending_link_metadata"

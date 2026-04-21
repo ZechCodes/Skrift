@@ -6,23 +6,34 @@ import base64
 import importlib
 import json
 from dataclasses import dataclass
+from time import time
 from urllib.parse import urlparse
 from uuid import uuid4
 
 from skrift.auth.session_keys import (
     SESSION_PASSKEY_AUTHENTICATION_CHALLENGE,
+    SESSION_PASSKEY_AUTHENTICATION_EXPIRES_AT,
     SESSION_PASSKEY_AUTHENTICATION_PENDING_AUTH_ID,
     SESSION_PASSKEY_AUTHENTICATION_USER_ID,
     SESSION_PASSKEY_PRIMARY_AUTH_CHALLENGE,
+    SESSION_PASSKEY_PRIMARY_AUTH_EXPIRES_AT,
     SESSION_PASSKEY_PRIMARY_AUTH_METHOD,
     SESSION_PASSKEY_PRIMARY_REGISTRATION_CHALLENGE,
     SESSION_PASSKEY_PRIMARY_REGISTRATION_EMAIL,
+    SESSION_PASSKEY_PRIMARY_REGISTRATION_EXPIRES_AT,
     SESSION_PASSKEY_PRIMARY_REGISTRATION_METHOD,
     SESSION_PASSKEY_PRIMARY_REGISTRATION_NAME,
     SESSION_PASSKEY_PRIMARY_REGISTRATION_USER_HANDLE,
     SESSION_PASSKEY_REGISTRATION_CHALLENGE,
+    SESSION_PASSKEY_REGISTRATION_EXPIRES_AT,
     SESSION_PASSKEY_REGISTRATION_USER_ID,
 )
+
+
+# WebAuthn challenges are short-lived: five minutes is comfortably above any
+# normal user-interaction time (prompt + authenticator + round trip) but
+# cuts off "challenge mined from a stale long-lived session" replay.
+PASSKEY_CHALLENGE_TTL_SECONDS = 300
 
 
 class PasskeyRuntimeUnavailableError(RuntimeError):
@@ -69,6 +80,25 @@ class PrimaryPasskeyRegistrationState:
 
 def _bytes_to_base64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _challenge_expiry() -> int:
+    """Seconds-since-epoch deadline for a newly-issued WebAuthn challenge."""
+    return int(time()) + PASSKEY_CHALLENGE_TTL_SECONDS
+
+
+def _require_unexpired_challenge(request, expires_at_key: str) -> None:
+    """Raise :class:`PasskeyStateError` when the challenge deadline is past.
+
+    Checked at the top of each ``complete_*`` before the webauthn verify
+    call so stale session state is rejected without wasting a crypto
+    verification cycle. Missing timestamps are treated as expired — the
+    ``begin_*`` helper always stamps one, so an absent key means the
+    session's passkey state is incomplete or was hand-edited.
+    """
+    expires_at = request.session.get(expires_at_key)
+    if not isinstance(expires_at, (int, float)) or int(expires_at) <= int(time()):
+        raise PasskeyStateError("Passkey challenge expired or missing")
 
 
 def _resolve_origin(request, settings) -> str:
@@ -170,6 +200,7 @@ def clear_passkey_registration_state(request) -> None:
     """Clear registration challenge state from the session."""
     request.session.pop(SESSION_PASSKEY_REGISTRATION_CHALLENGE, None)
     request.session.pop(SESSION_PASSKEY_REGISTRATION_USER_ID, None)
+    request.session.pop(SESSION_PASSKEY_REGISTRATION_EXPIRES_AT, None)
 
 
 def clear_passkey_authentication_state(request) -> None:
@@ -177,12 +208,14 @@ def clear_passkey_authentication_state(request) -> None:
     request.session.pop(SESSION_PASSKEY_AUTHENTICATION_CHALLENGE, None)
     request.session.pop(SESSION_PASSKEY_AUTHENTICATION_USER_ID, None)
     request.session.pop(SESSION_PASSKEY_AUTHENTICATION_PENDING_AUTH_ID, None)
+    request.session.pop(SESSION_PASSKEY_AUTHENTICATION_EXPIRES_AT, None)
 
 
 def clear_primary_passkey_authentication_state(request) -> None:
     """Clear primary-auth passkey challenge state from the session."""
     request.session.pop(SESSION_PASSKEY_PRIMARY_AUTH_CHALLENGE, None)
     request.session.pop(SESSION_PASSKEY_PRIMARY_AUTH_METHOD, None)
+    request.session.pop(SESSION_PASSKEY_PRIMARY_AUTH_EXPIRES_AT, None)
 
 
 def clear_primary_passkey_registration_state(request) -> None:
@@ -192,6 +225,7 @@ def clear_primary_passkey_registration_state(request) -> None:
     request.session.pop(SESSION_PASSKEY_PRIMARY_REGISTRATION_EMAIL, None)
     request.session.pop(SESSION_PASSKEY_PRIMARY_REGISTRATION_NAME, None)
     request.session.pop(SESSION_PASSKEY_PRIMARY_REGISTRATION_USER_HANDLE, None)
+    request.session.pop(SESSION_PASSKEY_PRIMARY_REGISTRATION_EXPIRES_AT, None)
 
 
 def get_primary_passkey_registration_state(request) -> PrimaryPasskeyRegistrationState | None:
@@ -237,11 +271,14 @@ def begin_passkey_registration(request, settings, user, enrollments) -> dict:
 
     request.session[SESSION_PASSKEY_REGISTRATION_CHALLENGE] = serialized["challenge"]
     request.session[SESSION_PASSKEY_REGISTRATION_USER_ID] = str(user.id)
+    request.session[SESSION_PASSKEY_REGISTRATION_EXPIRES_AT] = _challenge_expiry()
     return serialized
 
 
 def complete_passkey_registration(request, settings, user, credential) -> PasskeyRegistrationResult:
     """Verify a registration credential against the session challenge."""
+    _require_unexpired_challenge(request, SESSION_PASSKEY_REGISTRATION_EXPIRES_AT)
+
     symbols = _load_webauthn_symbols()
     base64url_to_bytes = symbols["base64url_to_bytes"]
     verify_registration_response = symbols["verify_registration_response"]
@@ -304,6 +341,7 @@ def begin_passkey_authentication(request, settings, user, pending_auth, enrollme
     request.session[SESSION_PASSKEY_AUTHENTICATION_CHALLENGE] = serialized["challenge"]
     request.session[SESSION_PASSKEY_AUTHENTICATION_USER_ID] = str(user.id)
     request.session[SESSION_PASSKEY_AUTHENTICATION_PENDING_AUTH_ID] = pending_auth.pending_auth_id
+    request.session[SESSION_PASSKEY_AUTHENTICATION_EXPIRES_AT] = _challenge_expiry()
     return serialized
 
 
@@ -322,6 +360,7 @@ def begin_primary_passkey_authentication(request, settings, method_key: str) -> 
 
     request.session[SESSION_PASSKEY_PRIMARY_AUTH_CHALLENGE] = serialized["challenge"]
     request.session[SESSION_PASSKEY_PRIMARY_AUTH_METHOD] = method_key
+    request.session[SESSION_PASSKEY_PRIMARY_AUTH_EXPIRES_AT] = _challenge_expiry()
     return serialized
 
 
@@ -353,6 +392,7 @@ def begin_primary_passkey_registration(
     request.session[SESSION_PASSKEY_PRIMARY_REGISTRATION_EMAIL] = email
     request.session[SESSION_PASSKEY_PRIMARY_REGISTRATION_NAME] = name or ""
     request.session[SESSION_PASSKEY_PRIMARY_REGISTRATION_USER_HANDLE] = user_handle
+    request.session[SESSION_PASSKEY_PRIMARY_REGISTRATION_EXPIRES_AT] = _challenge_expiry()
     return serialized
 
 
@@ -365,6 +405,8 @@ def complete_passkey_authentication(
     credential,
 ) -> PasskeyAuthenticationResult:
     """Verify a passkey assertion against an enrolled credential."""
+    _require_unexpired_challenge(request, SESSION_PASSKEY_AUTHENTICATION_EXPIRES_AT)
+
     symbols = _load_webauthn_symbols()
     base64url_to_bytes = symbols["base64url_to_bytes"]
     verify_authentication_response = symbols["verify_authentication_response"]
@@ -414,6 +456,8 @@ def complete_primary_passkey_authentication(
     credential,
 ) -> PasskeyAuthenticationResult:
     """Verify a passkey assertion for primary sign-in."""
+    _require_unexpired_challenge(request, SESSION_PASSKEY_PRIMARY_AUTH_EXPIRES_AT)
+
     symbols = _load_webauthn_symbols()
     base64url_to_bytes = symbols["base64url_to_bytes"]
     verify_authentication_response = symbols["verify_authentication_response"]
@@ -457,6 +501,8 @@ def complete_primary_passkey_registration(
     credential,
 ) -> PasskeyRegistrationResult:
     """Verify a primary passkey signup registration response."""
+    _require_unexpired_challenge(request, SESSION_PASSKEY_PRIMARY_REGISTRATION_EXPIRES_AT)
+
     state = get_primary_passkey_registration_state(request)
     if state is None or state.method_key != method_key:
         raise PasskeyStateError("Primary passkey registration session is missing or invalid")
