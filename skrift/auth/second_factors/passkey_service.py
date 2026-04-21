@@ -1,4 +1,28 @@
-"""Passkey registration and assertion helpers."""
+"""Passkey registration and assertion helpers.
+
+Attestation policy
+------------------
+
+Registration calls pass no ``attestation`` argument to
+``webauthn.generate_registration_options``, which means the library
+default — ``"none"`` — is used. The authenticator does not return its
+hardware attestation statement, and we don't verify an attestation
+certificate chain. This is the right default for a consumer CMS:
+
+- It preserves user privacy (``"direct"`` attestation sends an
+  authenticator-specific identifier that can correlate users across
+  relying parties).
+- It simplifies enrollment (no AAGUID allowlist or metadata service).
+- Every `complete_*` still sets ``require_user_verification=True``, so
+  enrollment + authentication always require a user-present gesture
+  (biometric / PIN).
+
+If you need hardware attestation — e.g. enterprise enrollment that
+only accepts FIDO-certified authenticators — the knob is
+``attestation="direct"`` on ``generate_registration_options`` plus
+server-side chain verification against an AAGUID allowlist. That is
+out of scope for the current deployment target.
+"""
 
 from __future__ import annotations
 
