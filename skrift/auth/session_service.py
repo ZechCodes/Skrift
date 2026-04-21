@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from time import time
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from litestar import Request
+
+from skrift.forms.core import CSRF_SESSION_KEY
 
 from skrift.auth.session_keys import (
     SESSION_AUTH_NEXT,
@@ -215,6 +218,12 @@ def finalize_authenticated_session(request: Request, user) -> None:
     # Seed the idle-timeout stamp so SessionIdleMiddleware doesn't
     # immediately evict on the request that follows login.
     request.session[SESSION_IDLE_LAST_SEEN] = int(time())
+    # Reseed the CSRF token so any pre-login value is replaced with a
+    # freshly-generated one before the first authenticated form
+    # renders. `csrf_field()` would lazy-create one anyway, but doing
+    # it here leaves no window where the session is authenticated
+    # without a CSRF token.
+    request.session[CSRF_SESSION_KEY] = secrets.token_urlsafe(32)
 
     if flash is not None:
         request.session["flash"] = flash
