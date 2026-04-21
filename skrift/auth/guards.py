@@ -10,6 +10,7 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.handlers import BaseRouteHandler
 
 from skrift.auth.session_keys import SESSION_USER_ID
+from skrift.lib.client_ip import get_client_ip
 
 if TYPE_CHECKING:
     from skrift.auth.services import UserPermissions
@@ -150,17 +151,6 @@ def _extract_bearer_token(connection: ASGIConnection) -> str | None:
     return None
 
 
-def _get_client_ip(connection: ASGIConnection) -> str | None:
-    """Best-effort client IP from the connection."""
-    forwarded = connection.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    client = connection.scope.get("client")
-    if client:
-        return client[0]
-    return None
-
-
 async def _resolve_api_key_permissions(
     connection: ASGIConnection,
     bearer: str,
@@ -175,7 +165,7 @@ async def _resolve_api_key_permissions(
     session_maker = connection.app.state.session_maker_class
     async with session_maker() as db_session:
         api_key = await api_key_service.verify_api_key(
-            db_session, bearer, client_ip=_get_client_ip(connection)
+            db_session, bearer, client_ip=get_client_ip(connection.scope)
         )
         if api_key is None:
             return None, None
