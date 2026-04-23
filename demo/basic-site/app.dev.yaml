@@ -3,12 +3,23 @@ controllers:
   - skrift.controllers.auth:AuthController
   - skrift.admin.controller:AdminController
 db:
-  url: $DATABASE_URL
-  pool_size: 5
-  pool_overflow: 10
-  pool_timeout: 30
-  echo: false
+  url: sqlite+aiosqlite:///./app.db
 auth:
   redirect_base_url: http://localhost:8080
-  providers:
-    dummy: {}
+  methods:
+    passkey:
+      type: passkey
+      label: Passkey
+      factor_key: passkey
+    dummy:
+      type: dummy
+      label: Demo Login
+  second_factors:
+    enabled: true
+    challenge_on_enrolled: true
+    methods:
+      passkey:
+        type: passkey
+        label: Security Key
+rate_limit:
+  enabled: false

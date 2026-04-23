@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Confirm sign-in to link your account</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.5; color: #111; max-width: 560px; margin: 0 auto; padding: 2rem;">
+    <h1 style="font-size: 1.25rem; margin-bottom: 1rem;">Confirm sign-in to link your account</h1>
+    <p>Someone tried to sign in to your account using <strong>{{ provider_display }}</strong>. To finish linking that sign-in method, open this link in the same browser you started from:</p>
+    <p style="margin: 1.5rem 0;">
+        <a href="{{ claim_url }}" style="background: #111; color: #fff; padding: 0.75rem 1.25rem; border-radius: 0.5rem; text-decoration: none; display: inline-block;">Confirm and link account</a>
+    </p>
+    <p style="color: #555; font-size: 0.9rem;">Or paste this URL into your browser: <br><span style="word-break: break-all;">{{ claim_url }}</span></p>
+    <hr style="border: none; border-top: 1px solid #eee; margin: 2rem 0;">
+    <p style="color: #777; font-size: 0.85rem;">This link expires in {{ ttl_minutes }} minutes. If you did not try to sign in, you can ignore this message — no action is required.</p>
+</body>
+</html>

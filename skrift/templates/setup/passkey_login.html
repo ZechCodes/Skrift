@@ -1,0 +1,117 @@
+{% extends "setup/base.html" %}
+
+{% block title %}Create Admin With Passkey - Skrift{% endblock %}
+
+{% block content %}
+<h2>Create Admin Account With Passkey</h2>
+<p class="description">Create the first administrator account and bind a passkey in one step.</p>
+
+<form id="setup-passkey-form" class="setup-form">
+    {{ csrf_field() }}
+    <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required>
+    </div>
+    <div class="form-group">
+        <label for="name">Display Name</label>
+        <input type="text" id="name" name="name" placeholder="Administrator">
+    </div>
+    <div class="form-actions">
+        <a href="{{ previous_step_path }}" class="btn-secondary" role="button">Back</a>
+        <button type="submit">Create Admin With Passkey</button>
+    </div>
+</form>
+
+<p id="setup-passkey-status" class="description" style="margin-top: 1rem;"></p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function base64urlToBuffer(value) {
+    const padding = "=".repeat((4 - value.length % 4) % 4);
+    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(base64);
+    return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+
+function bufferToBase64url(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    bytes.forEach(byte => {
+        binary += String.fromCharCode(byte);
+    });
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function normalizeRegistrationOptions(options) {
+    options.challenge = base64urlToBuffer(options.challenge);
+    options.user.id = base64urlToBuffer(options.user.id);
+    options.excludeCredentials = (options.excludeCredentials || []).map(credential => ({
+        ...credential,
+        id: base64urlToBuffer(credential.id),
+    }));
+    return options;
+}
+
+function serializeRegistrationCredential(credential) {
+    return {
+        id: credential.id,
+        rawId: bufferToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+            attestationObject: bufferToBase64url(credential.response.attestationObject),
+            clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+            transports: credential.response.getTransports ? credential.response.getTransports() : [],
+        },
+    };
+}
+
+const form = document.getElementById("setup-passkey-form");
+const statusNode = document.getElementById("setup-passkey-status");
+
+form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!window.PublicKeyCredential) {
+        statusNode.textContent = "This browser does not support passkeys.";
+        return;
+    }
+
+    statusNode.textContent = "Preparing admin account creation...";
+    const formData = new FormData(form);
+    const optionsResponse = await fetch("/setup/passkey/{{ provider }}/options", {
+        method: "POST",
+        body: formData,
+        credentials: "same-origin",
+    });
+    const optionsPayload = await optionsResponse.json();
+    if (!optionsResponse.ok) {
+        statusNode.textContent = optionsPayload.error || "Unable to start passkey setup.";
+        return;
+    }
+
+    try {
+        const credential = await navigator.credentials.create({
+            publicKey: normalizeRegistrationOptions(optionsPayload.options),
+        });
+        const completionData = new FormData();
+        completionData.append("_csrf", optionsPayload.csrf_token || formData.get("_csrf"));
+        completionData.append("credential", JSON.stringify(serializeRegistrationCredential(credential)));
+
+        const completionResponse = await fetch("/setup/passkey/{{ provider }}/complete", {
+            method: "POST",
+            body: completionData,
+            credentials: "same-origin",
+        });
+        const completionPayload = await completionResponse.json();
+        if (!completionResponse.ok) {
+            statusNode.textContent = completionPayload.error || "Unable to create the admin account.";
+            return;
+        }
+
+        window.location.href = completionPayload.redirect || "/setup/complete";
+    } catch (error) {
+        statusNode.textContent = error?.message || "Passkey setup was cancelled.";
+    }
+});
+</script>
+{% endblock %}

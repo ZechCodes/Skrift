@@ -17,31 +17,31 @@ from skrift.lib.notifications import NotificationMode, NotificationService
 
 
 class TestFailedAuthLimiter:
-    def test_not_blocked_initially(self):
+    async def test_not_blocked_initially(self):
         limiter = _FailedAuthLimiter(max_failures=2, window=60.0)
-        assert limiter.is_blocked("1.2.3.4") is False
+        assert await limiter.is_blocked("1.2.3.4") is False
 
-    def test_blocked_after_max_failures(self):
+    async def test_blocked_after_max_failures(self):
         limiter = _FailedAuthLimiter(max_failures=2, window=60.0)
-        limiter.record_failure("1.2.3.4")
-        assert limiter.is_blocked("1.2.3.4") is False
-        limiter.record_failure("1.2.3.4")
-        assert limiter.is_blocked("1.2.3.4") is True
+        await limiter.record_failure("1.2.3.4")
+        assert await limiter.is_blocked("1.2.3.4") is False
+        await limiter.record_failure("1.2.3.4")
+        assert await limiter.is_blocked("1.2.3.4") is True
 
-    def test_different_ips_independent(self):
+    async def test_different_ips_independent(self):
         limiter = _FailedAuthLimiter(max_failures=1, window=60.0)
-        limiter.record_failure("1.2.3.4")
-        assert limiter.is_blocked("1.2.3.4") is True
-        assert limiter.is_blocked("5.6.7.8") is False
+        await limiter.record_failure("1.2.3.4")
+        assert await limiter.is_blocked("1.2.3.4") is True
+        assert await limiter.is_blocked("5.6.7.8") is False
 
-    def test_failures_expire(self):
+    async def test_failures_expire(self):
         import time
 
         limiter = _FailedAuthLimiter(max_failures=1, window=0.05)
-        limiter.record_failure("1.2.3.4")
-        assert limiter.is_blocked("1.2.3.4") is True
+        await limiter.record_failure("1.2.3.4")
+        assert await limiter.is_blocked("1.2.3.4") is True
         time.sleep(0.06)
-        assert limiter.is_blocked("1.2.3.4") is False
+        assert await limiter.is_blocked("1.2.3.4") is False
 
 
 # ---------------------------------------------------------------------------
@@ -61,12 +61,23 @@ class TestGetClientIP:
             scope["client"] = client
         return scope
 
-    def test_uses_x_forwarded_for_first_entry(self):
+    def test_ignores_x_forwarded_for_without_middleware(self):
+        """Without ClientIPMiddleware resolving state, raw XFF is ignored.
+
+        Regression guard for #120: naively reading XFF from the scope is
+        spoofable. The resolver runs in middleware and populates
+        ``scope["state"]["client_ip"]``.
+        """
         scope = self._make_scope(
-            headers={"x-forwarded-for": "10.0.0.1, 10.0.0.2"},
+            headers={"x-forwarded-for": "1.2.3.4"},
             client=("192.168.1.1", 12345),
         )
-        assert get_client_ip(scope) == "10.0.0.1"
+        assert get_client_ip(scope) == "192.168.1.1"
+
+    def test_uses_resolved_state_when_present(self):
+        scope = self._make_scope(client=("10.0.0.5", 12345))
+        scope["state"] = {"client_ip": "203.0.113.7", "client_ip_source": "xff"}
+        assert get_client_ip(scope) == "203.0.113.7"
 
     def test_falls_back_to_client(self):
         scope = self._make_scope(client=("192.168.1.1", 12345))

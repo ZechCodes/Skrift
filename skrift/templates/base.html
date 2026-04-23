@@ -61,7 +61,10 @@
                 {% endblock %}
                 {% if user %}
                     <a href="/admin" class="sk-nav-link">Dashboard</a>
-                    <a href="/auth/logout" class="sk-nav-link">Logout</a>
+                    <form method="post" action="/auth/logout" class="sk-inline-logout">
+                        {{ csrf_field() }}
+                        <button type="submit" class="sk-nav-link sk-linklike">Logout</button>
+                    </form>
                 {% else %}
                     <a href="/auth/login" class="sk-nav-cta">Login</a>
                 {% endif %}

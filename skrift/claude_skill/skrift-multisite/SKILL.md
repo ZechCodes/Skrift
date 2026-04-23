@@ -221,6 +221,6 @@ my-site/
 | `skrift/middleware/site_dispatch.py` | `SiteDispatcher` ASGI middleware, host/subdomain extraction |
 | `skrift/asgi.py` | `load_site_controllers()`, `_build_site_app()`, `SiteDispatcher` wiring in `create_app()` |
 | `skrift/app_factory.py` | `get_template_directories_for_theme()` — reused by site apps |
-| `skrift/controllers/auth.py` | `_is_safe_redirect_url()` — handles `*.example.com` wildcards |
+| `skrift/lib/redirects.py` | `is_safe_redirect_url()` — handles `*.example.com` wildcards |
 | `tests/test_site_dispatch.py` | SiteDispatcher unit tests |
 | `tests/test_site_config.py` | SiteConfig and Settings parsing tests |

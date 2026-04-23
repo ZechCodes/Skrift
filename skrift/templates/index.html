@@ -2,8 +2,112 @@
 
 {% block title %}Home - {{ site_name() }}{% endblock %}
 
+{% block head %}
+<style>
+    .user-card {
+        max-width: 640px;
+        margin: 2rem auto;
+        padding: 1.75rem 2rem;
+        border-radius: 1rem;
+        border: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.08));
+        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.35);
+    }
+
+    .user-card h2 {
+        margin: 0 0 1rem;
+    }
+
+    .user-card dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.5rem 1.25rem;
+        margin: 0;
+    }
+
+    .user-card dt {
+        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.6));
+        font-weight: 600;
+    }
+
+    .user-card dd {
+        margin: 0;
+        font-family: var(--sk-font-mono, ui-monospace, monospace);
+        word-break: break-all;
+    }
+
+    .user-card dd.placeholder {
+        font-family: inherit;
+        color: var(--sk-color-muted, rgba(255, 255, 255, 0.4));
+        font-style: italic;
+    }
+
+    .user-card .user-avatar {
+        width: 56px;
+        height: 56px;
+        border-radius: 999px;
+        object-fit: cover;
+        margin-bottom: 1rem;
+    }
+
+    .user-card .tag {
+        display: inline-block;
+        padding: 0.15rem 0.55rem;
+        margin: 0 0.35rem 0.35rem 0;
+        border-radius: 999px;
+        background: var(--sk-color-accent-soft, rgba(52, 211, 153, 0.12));
+        color: var(--sk-color-accent, #34D399);
+        font-size: 0.82rem;
+        font-family: inherit;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <hgroup>
     <h1>{{ site_tagline() }}</h1>
 </hgroup>
+
+{% if user %}
+<section class="user-card" aria-labelledby="user-heading">
+    <h2 id="user-heading">Signed in</h2>
+    {% if user.picture_url %}
+    <img src="{{ user.picture_url }}" alt="" class="user-avatar">
+    {% endif %}
+    <dl>
+        <dt>User ID</dt>
+        <dd>{{ user.id }}</dd>
+
+        <dt>Email</dt>
+        {% if user.email %}<dd>{{ user.email }}</dd>{% else %}<dd class="placeholder">not set</dd>{% endif %}
+
+        <dt>Name</dt>
+        {% if user.name %}<dd>{{ user.name }}</dd>{% else %}<dd class="placeholder">not set</dd>{% endif %}
+
+        <dt>Active</dt>
+        <dd>{{ "yes" if user.is_active else "no" }}</dd>
+
+        <dt>Last login</dt>
+        {% if user.last_login_at %}<dd>{{ user.last_login_at.strftime("%Y-%m-%d %H:%M:%S %Z") }}</dd>{% else %}<dd class="placeholder">never</dd>{% endif %}
+
+        <dt>Roles</dt>
+        <dd>
+            {% if user.roles %}
+                {% for role in user.roles %}<span class="tag">{{ role.name }}</span>{% endfor %}
+            {% else %}
+                <span class="placeholder">none</span>
+            {% endif %}
+        </dd>
+
+        <dt>Passkeys</dt>
+        <dd>
+            {% if user.second_factor_enrollments %}
+                {% for enrollment in user.second_factor_enrollments %}<span class="tag">{{ (enrollment.display_name or enrollment.factor_key) | e }}</span>{% endfor %}
+            {% else %}
+                <span class="placeholder">none enrolled</span>
+            {% endif %}
+        </dd>
+    </dl>
+</section>
+{% endif %}
 {% endblock %}

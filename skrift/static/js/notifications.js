@@ -183,6 +183,7 @@
             }
 
             if (this._es.readyState === EventSource.CLOSED) {
+                this._hiddenSince = null;
                 this._es = null;
                 this._connect();
                 return;

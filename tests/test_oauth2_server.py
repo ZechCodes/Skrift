@@ -37,10 +37,18 @@ def _mock_client(
     allowed_scopes=None,
     is_active=True,
 ):
-    """Create a mock OAuth2Client model."""
+    """Create a mock OAuth2Client model.
+
+    ``client_secret`` is the *plaintext* the test form will submit; the
+    mock's stored-column value is the hashed form so
+    ``verify_client_secret`` matches. Pass ``client_secret=""`` for public
+    (secretless) clients.
+    """
+    from skrift.auth.client_secret import hash_client_secret
+
     mc = MagicMock()
     mc.client_id = client_id
-    mc.client_secret = client_secret
+    mc.client_secret = hash_client_secret(client_secret) if client_secret else ""
     mc.display_name = f"Test App ({client_id})"
     mc.is_active = is_active
     mc.redirect_uri_list = redirect_uris or ["http://localhost/cb"]
@@ -347,6 +355,7 @@ class TestTokenExchange:
     @pytest.mark.asyncio
     async def test_authorization_code_grant(self):
         settings = _make_settings()
+        verifier, challenge = _generate_pkce()
         code = create_signed_token({
             "type": "code",
             "user_id": "user-123",
@@ -356,7 +365,7 @@ class TestTokenExchange:
             "client_id": "abc",
             "redirect_uri": "http://localhost/cb",
             "scope": "openid",
-            "code_challenge": "",
+            "code_challenge": challenge,
         }, SECRET, AUTH_CODE_TTL)
 
         client = _mock_client()
@@ -368,13 +377,15 @@ class TestTokenExchange:
             "redirect_uri": "http://localhost/cb",
             "client_id": "abc",
             "client_secret": "secret",
-            "code_verifier": "",
+            "code_verifier": verifier,
         })
         db_session = AsyncMock()
 
         with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
              patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
             mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
+            mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            mock_svc.revoke_token = AsyncMock(return_value=None)
             result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
         assert result.status_code == 200
@@ -437,6 +448,8 @@ class TestTokenExchange:
         with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
              patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
             mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
+            mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            mock_svc.revoke_token = AsyncMock(return_value=None)
             result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
         assert result.status_code == 200
@@ -453,6 +466,7 @@ class TestRefreshTokenGrant:
             "user_id": "user-123",
             "client_id": "abc",
             "scope": "openid",
+            "family_id": "fam-xyz",
         }, SECRET, REFRESH_TOKEN_TTL)
 
         controller = OAuth2Controller(owner=MagicMock())
@@ -468,24 +482,31 @@ class TestRefreshTokenGrant:
         with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
              patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
             mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            mock_svc.is_family_revoked = AsyncMock(return_value=False)
             mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
             mock_svc.revoke_token = AsyncMock()
+            mock_svc.revoke_family = AsyncMock()
             result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
         assert result.status_code == 200
         body = result.content
         assert "access_token" in body
         assert "refresh_token" in body
-        # Verify old refresh token was revoked
+        # Normal rotation: old refresh jti is revoked, family is NOT revoked.
         mock_svc.revoke_token.assert_called_once()
+        mock_svc.revoke_family.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_revoked_refresh_token_rejected(self):
+    async def test_refresh_reuse_detected_revokes_whole_family(self):
+        """A presented refresh whose jti is already revoked is the RFC 6749
+        §10.4 compromise signal. Mass-revoke the family and reject."""
         settings = _make_settings()
         refresh = create_signed_token({
             "type": "refresh",
             "user_id": "user-123",
             "client_id": "abc",
+            "scope": "openid",
+            "family_id": "fam-reuse",
         }, SECRET, REFRESH_TOKEN_TTL)
 
         controller = OAuth2Controller(owner=MagicMock())
@@ -501,9 +522,56 @@ class TestRefreshTokenGrant:
         with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
              patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
             mock_svc.is_token_revoked = AsyncMock(return_value=True)
+            mock_svc.is_family_revoked = AsyncMock(return_value=False)
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=_mock_client())
+            mock_svc.revoke_family = AsyncMock()
+            mock_svc.revoke_token = AsyncMock()
             result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
         assert result.status_code == 400
+        assert result.content["error"] == "invalid_grant"
+        # The whole family must have been revoked exactly once, before issuing
+        # any new tokens (there are no new tokens on this path).
+        mock_svc.revoke_family.assert_awaited_once_with(db_session, "fam-reuse")
+        mock_svc.revoke_token.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_refresh_with_already_revoked_family_rejected(self):
+        """Family marked revoked on a prior reuse detection: subsequent
+        siblings must be rejected without issuing tokens."""
+        settings = _make_settings()
+        refresh = create_signed_token({
+            "type": "refresh",
+            "user_id": "user-123",
+            "client_id": "abc",
+            "scope": "openid",
+            "family_id": "fam-dead",
+        }, SECRET, REFRESH_TOKEN_TTL)
+
+        controller = OAuth2Controller(owner=MagicMock())
+        request = MagicMock()
+        request.form = AsyncMock(return_value={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh,
+            "client_id": "abc",
+            "client_secret": "secret",
+        })
+        db_session = AsyncMock()
+
+        with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
+             patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+            mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            mock_svc.is_family_revoked = AsyncMock(return_value=True)
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=_mock_client())
+            mock_svc.revoke_family = AsyncMock()
+            mock_svc.revoke_token = AsyncMock()
+            result = await OAuth2Controller.token_exchange.fn(controller, request, db_session)
+
+        assert result.status_code == 400
+        assert result.content["error"] == "invalid_grant"
+        mock_svc.revoke_token.assert_not_called()
+        # Don't re-add the family — it's already revoked.
+        mock_svc.revoke_family.assert_not_called()
 
 
 class TestUserInfo:
@@ -648,7 +716,9 @@ class TestRevoke:
 
 class TestIntrospect:
     @pytest.mark.asyncio
-    async def test_active_token(self):
+    async def test_active_token_for_issuing_client_returns_full_response(self):
+        """When the introspecting client is the one that issued the token,
+        the full RFC 7662 response (sub, scope, client_id, ...) is returned."""
         settings = _make_settings()
         token = create_signed_token({
             "type": "access",
@@ -656,7 +726,7 @@ class TestIntrospect:
             "client_id": "abc",
             "scope": "openid",
         }, SECRET, ACCESS_TOKEN_TTL)
-        client = _mock_client()
+        client = _mock_client(client_id="abc")  # same client
 
         controller = OAuth2Controller(owner=MagicMock())
         request = MagicMock()
@@ -678,6 +748,48 @@ class TestIntrospect:
         assert body["active"] is True
         assert body["sub"] == "user-123"
         assert body["scope"] == "openid"
+        assert body["client_id"] == "abc"
+
+    @pytest.mark.asyncio
+    async def test_active_token_for_other_client_returns_minimal_response(self):
+        """L5 — a client that didn't issue the token must not learn the
+        token's user id or scope through introspection. RFC 7662 allows
+        any subset of fields beyond `active`; we keep {active, exp,
+        token_type} and drop the user-identifying fields."""
+        settings = _make_settings()
+        token = create_signed_token({
+            "type": "access",
+            "user_id": "user-123",
+            "client_id": "issuer-client",
+            "scope": "openid profile email",
+        }, SECRET, ACCESS_TOKEN_TTL)
+        # Some OTHER authenticated client introspects.
+        other_client = _mock_client(client_id="nosy-client")
+
+        controller = OAuth2Controller(owner=MagicMock())
+        request = MagicMock()
+        request.form = AsyncMock(return_value={
+            "token": token,
+            "client_id": "nosy-client",
+            "client_secret": "secret",
+        })
+        db_session = AsyncMock()
+
+        with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
+             patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=other_client)
+            mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            result = await OAuth2Controller.introspect.fn(controller, request, db_session)
+
+        assert result.status_code == 200
+        body = result.content
+        assert body["active"] is True
+        assert body["token_type"] == "access"
+        assert "exp" in body
+        # Critical: no user-id or scope leak to a non-issuing client.
+        assert "sub" not in body
+        assert "scope" not in body
+        assert "client_id" not in body
 
     @pytest.mark.asyncio
     async def test_inactive_token(self):

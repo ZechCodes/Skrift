@@ -7,6 +7,7 @@ instance can act as an identity hub for spoke sites.
 
 import base64
 import hashlib
+import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -14,6 +15,7 @@ from litestar import Controller, Request, get, post
 from litestar.response import Redirect, Response, Template as TemplateResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from skrift.auth.client_secret import verify_client_secret
 from skrift.auth.scopes import SCOPE_DEFINITIONS
 from skrift.auth.session_keys import SESSION_USER_EMAIL, SESSION_USER_ID, SESSION_USER_NAME, SESSION_USER_PICTURE_URL
 from skrift.auth.tokens import create_signed_token, verify_signed_token
@@ -87,11 +89,11 @@ class OAuth2Controller(Controller):
         if redirect_uri not in client.redirect_uri_list:
             return _json_error("invalid_request", "redirect_uri not registered for this client")
 
-        # Public clients must use PKCE
-        if not client.client_secret and not code_challenge:
-            return _json_error("invalid_request", "Public clients must use PKCE (code_challenge required)")
-
-        if code_challenge and code_challenge_method != "S256":
+        # PKCE is required for every client (OAuth 2.1). S256 is the only
+        # accepted method — `plain` is explicitly rejected.
+        if not code_challenge:
+            return _json_error("invalid_request", "code_challenge is required")
+        if code_challenge_method != "S256":
             return _json_error("invalid_request", "Only code_challenge_method=S256 is supported")
 
         # Validate requested scopes
@@ -221,8 +223,8 @@ class OAuth2Controller(Controller):
         client_secret = form_data.get("client_secret", "")
         code_verifier = form_data.get("code_verifier", "")
 
-        # Verify auth code (no revocation check needed — codes are single-use by expiry)
-        payload = verify_signed_token(code, settings.secret_key)
+        # Verify auth code — revocation-aware so replays of a consumed code fail.
+        payload = await verify_oauth_token(code, settings.secret_key, db_session)
         if not payload or payload.get("type") != "code":
             return _json_error("invalid_grant", "Invalid or expired authorization code")
 
@@ -237,20 +239,34 @@ class OAuth2Controller(Controller):
         if not client:
             return _json_error("invalid_client", "Unknown client_id")
 
-        # Confidential client: validate secret
+        # Confidential client: validate secret (constant-time)
         if client.client_secret:
-            if client_secret != client.client_secret:
+            if not verify_client_secret(client_secret, client.client_secret):
                 return _json_error("invalid_client", "Invalid client_secret")
 
-        # PKCE validation
+        # PKCE validation: `code_challenge` is stamped on every code by
+        # `authorize_get`, so the code-grant path always requires a
+        # `code_verifier` that matches. Missing or mismatched verifiers are
+        # `invalid_grant` errors.
         stored_challenge = payload.get("code_challenge", "")
-        if stored_challenge:
-            if not code_verifier:
-                return _json_error("invalid_grant", "code_verifier required")
-            if not _verify_pkce(code_verifier, stored_challenge):
-                return _json_error("invalid_grant", "PKCE verification failed")
+        if not stored_challenge:
+            return _json_error("invalid_grant", "code_challenge missing from token")
+        if not code_verifier:
+            return _json_error("invalid_grant", "code_verifier required")
+        if not _verify_pkce(code_verifier, stored_challenge):
+            return _json_error("invalid_grant", "PKCE verification failed")
+
+        # Revoke the auth code before issuing tokens so a concurrent replay fails.
+        code_jti = payload.get("jti")
+        if code_jti:
+            code_exp = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
+            await oauth2_service.revoke_token(db_session, code_jti, "code", code_exp)
 
         scope = payload.get("scope", "")
+
+        # Stamp a fresh family id so later refresh rotations can detect reuse
+        # (presenting a previously-rotated token) and mass-revoke the lineage.
+        family_id = uuid.uuid4().hex
 
         # Issue tokens
         access_payload = {
@@ -267,6 +283,7 @@ class OAuth2Controller(Controller):
             "user_id": payload["user_id"],
             "client_id": client_id,
             "scope": scope,
+            "family_id": family_id,
         }
 
         access_token = create_signed_token(access_payload, settings.secret_key, ACCESS_TOKEN_TTL)
@@ -285,15 +302,29 @@ class OAuth2Controller(Controller):
         )
 
     async def _handle_refresh_token(self, form_data, db_session: AsyncSession) -> Response:
-        """Handle grant_type=refresh_token."""
+        """Handle grant_type=refresh_token with RFC 6749 §10.4 reuse detection.
+
+        Three outcomes for a presented refresh token:
+
+        1. **Reuse detected** — the token's ``jti`` is already revoked (i.e.
+           it has been rotated away on a previous call). Treat this as the
+           compromise indicator described in §10.4: add the whole ``family_id``
+           to :class:`RevokedFamily` so any sibling refresh still in the wild
+           also stops working, then return ``invalid_grant``.
+        2. **Family already revoked** — reuse was detected on a prior call.
+           Reject without touching state.
+        3. **Normal rotation** — revoke this jti, issue new access + refresh
+           tokens carrying the same ``family_id`` so the chain is still
+           trackable.
+        """
         settings = get_settings()
 
         refresh_token_str = form_data.get("refresh_token", "")
         client_id = form_data.get("client_id", "")
         client_secret = form_data.get("client_secret", "")
 
-        # Verify refresh token (with revocation check)
-        payload = await verify_oauth_token(refresh_token_str, settings.secret_key, db_session)
+        # Signature-only verify (don't conflate "expired/bad" with "revoked").
+        payload = verify_signed_token(refresh_token_str, settings.secret_key)
         if not payload or payload.get("type") != "refresh":
             return _json_error("invalid_grant", "Invalid or expired refresh token")
 
@@ -305,20 +336,58 @@ class OAuth2Controller(Controller):
         if not client:
             return _json_error("invalid_client", "Unknown client_id")
 
-        # Confidential client: validate secret
+        # Confidential client: validate secret (constant-time)
         if client.client_secret:
-            if client_secret != client.client_secret:
+            if not verify_client_secret(client_secret, client.client_secret):
                 return _json_error("invalid_client", "Invalid client_secret")
 
-        scope = payload.get("scope", "")
-
-        # Revoke the old refresh token
         old_jti = payload.get("jti")
+        family_id = payload.get("family_id", "")
+
+        # Reuse detection: a presented refresh whose jti has already been
+        # rotated away is the §10.4 compromise indicator. Kill the whole
+        # family so sibling tokens stop working too.
+        if old_jti and await oauth2_service.is_token_revoked(db_session, old_jti):
+            if family_id:
+                await oauth2_service.revoke_family(db_session, family_id)
+            return _json_error(
+                "invalid_grant",
+                "Refresh token reuse detected; token family revoked",
+            )
+
+        # Family-level revocation check covers the race where reuse was
+        # detected on a concurrent request.
+        if family_id and await oauth2_service.is_family_revoked(db_session, family_id):
+            return _json_error(
+                "invalid_grant",
+                "Refresh token family has been revoked",
+            )
+
+        original_scope = payload.get("scope", "")
+        original_scope_set = set(original_scope.split())
+
+        # Scope binding: an optional `scope` form parameter must be a subset
+        # of the originally granted scope. Downgrades are allowed; anything
+        # outside the original grant is an `invalid_scope` error.
+        requested_scope = form_data.get("scope", "").strip()
+        if requested_scope:
+            requested_scope_set = set(requested_scope.split())
+            if not requested_scope_set.issubset(original_scope_set):
+                return _json_error(
+                    "invalid_scope",
+                    "Requested scope exceeds originally granted scope",
+                )
+            effective_scope = " ".join(sorted(requested_scope_set))
+        else:
+            effective_scope = original_scope
+
+        # Revoke the old refresh token (normal rotation path).
         if old_jti:
             expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
             await oauth2_service.revoke_token(db_session, old_jti, "refresh", expires_at)
 
-        # Issue new access + refresh tokens (token rotation)
+        # Issue new access + refresh tokens (token rotation); stay on the
+        # same family so future rotations remain linkable for reuse checks.
         access_payload = {
             "type": "access",
             "user_id": payload["user_id"],
@@ -326,13 +395,14 @@ class OAuth2Controller(Controller):
             "name": "",
             "picture_url": "",
             "client_id": client_id,
-            "scope": scope,
+            "scope": effective_scope,
         }
         refresh_payload = {
             "type": "refresh",
             "user_id": payload["user_id"],
             "client_id": client_id,
-            "scope": scope,
+            "scope": effective_scope,
+            "family_id": family_id,
         }
 
         access_token = create_signed_token(access_payload, settings.secret_key, ACCESS_TOKEN_TTL)
@@ -344,7 +414,7 @@ class OAuth2Controller(Controller):
                 "refresh_token": new_refresh_token,
                 "token_type": "bearer",
                 "expires_in": ACCESS_TOKEN_TTL,
-                "scope": scope,
+                "scope": effective_scope,
             },
             status_code=200,
             media_type="application/json",
@@ -364,22 +434,19 @@ class OAuth2Controller(Controller):
         if not payload or payload.get("type") != "access":
             return _json_error("invalid_token", "Invalid or expired access token", status_code=401)
 
-        # Build claims based on granted scopes
+        # Build claims strictly from granted scopes. A token minted with
+        # no scopes gets only `sub` — prior backwards-compat code returned
+        # the full profile + email, which silently defeated scope filtering.
         scope_str = payload.get("scope", "")
         granted_scopes = scope_str.split() if scope_str else []
 
-        # Collect allowed claims from scope definitions
         allowed_claims: set[str] = set()
         for s in granted_scopes:
             defn = SCOPE_DEFINITIONS.get(s)
             if defn:
                 allowed_claims.update(defn.claims)
 
-        # If no scopes specified, return all claims (backwards compatibility)
-        if not granted_scopes:
-            allowed_claims = {"sub", "email", "name", "picture"}
-
-        # Always include sub
+        # Always include sub — the minimum subject identifier required by OIDC.
         claims: dict = {"sub": payload["user_id"]}
 
         if "email" in allowed_claims:
@@ -432,7 +499,7 @@ class OAuth2Controller(Controller):
         if not client:
             return _json_error("invalid_client", "Unknown client_id")
 
-        if client.client_secret and client_secret != client.client_secret:
+        if client.client_secret and not verify_client_secret(client_secret, client.client_secret):
             return _json_error("invalid_client", "Invalid client_secret")
 
         if not token_str:
@@ -444,13 +511,26 @@ class OAuth2Controller(Controller):
         if not payload:
             return Response(content={"active": False}, status_code=200, media_type="application/json")
 
-        result = {
-            "active": True,
-            "token_type": payload.get("type", ""),
-            "client_id": payload.get("client_id", ""),
-            "sub": payload.get("user_id", ""),
-            "scope": payload.get("scope", ""),
-            "exp": payload.get("exp"),
-        }
+        # RFC 7662 §2.2: `active` is the only required field; every other
+        # field is optional. We return the full set only when the
+        # introspecting client is the one that issued the token — any
+        # other authenticated client sees a minimal response so it
+        # cannot enumerate other clients' users or scopes.
+        token_client_id = payload.get("client_id", "")
+        if token_client_id == client.client_id:
+            result = {
+                "active": True,
+                "token_type": payload.get("type", ""),
+                "client_id": token_client_id,
+                "sub": payload.get("user_id", ""),
+                "scope": payload.get("scope", ""),
+                "exp": payload.get("exp"),
+            }
+        else:
+            result = {
+                "active": True,
+                "token_type": payload.get("type", ""),
+                "exp": payload.get("exp"),
+            }
 
         return Response(content=result, status_code=200, media_type="application/json")

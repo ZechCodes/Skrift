@@ -4,12 +4,12 @@
 
 {% block content %}
 <h2>Create Admin Account</h2>
-<p class="description">Sign in with one of your configured providers to create the first admin account.</p>
+<p class="description">Sign in with one of your configured authentication methods to create the first admin account.</p>
 
 <div class="oauth-buttons">
-    {% for key, provider in providers.items() %}
-    <a href="/setup/oauth/{{ key }}/login" class="oauth-btn oauth-btn-{{ provider.icon or key }}">
-        Sign in with {{ provider.name }}
+    {% for key, method in methods.items() %}
+    <a href="/setup/oauth/{{ key }}/login" class="oauth-btn oauth-btn-{{ method.icon or key }}">
+        Sign in with {{ method.name }}
     </a>
     {% endfor %}
 </div>

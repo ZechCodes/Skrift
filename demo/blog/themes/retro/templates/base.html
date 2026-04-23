@@ -34,7 +34,7 @@
                 {% endfor %}
                 {% if user %}
                 <li><a href="/admin">Admin</a></li>
-                <li><a href="/auth/logout">Logout</a></li>
+                <li><form method="post" action="/auth/logout" class="sk-inline-logout">{{ csrf_field() }}<button type="submit" class="sk-linklike">Logout</button></form></li>
                 {% else %}
                 <li><a href="/auth/login">Login</a></li>
                 {% endif %}

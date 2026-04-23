@@ -1,0 +1,35 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Log out - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .logout-shell {
+        max-width: 420px;
+        margin: 4rem auto;
+        padding: 2rem;
+        border-radius: 1rem;
+        border: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.08));
+        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+        text-align: center;
+    }
+    .logout-actions {
+        display: flex;
+        gap: 0.75rem;
+        justify-content: center;
+        margin-top: 1.5rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="logout-shell">
+    <h1>Log out?</h1>
+    <p>End your session on this device.</p>
+    <form method="post" action="/auth/logout" class="logout-actions">
+        {{ csrf_field() }}
+        <a href="/" class="sk-button sk-button-secondary">Cancel</a>
+        <button type="submit" class="sk-button sk-button-primary">Log out</button>
+    </form>
+</section>
+{% endblock %}

@@ -28,3 +28,11 @@ app.bak.yaml
 app.yaml.backup.*
 app.*.yaml.backup.*
 site/
+
+# Runtime-generated media from demo sites
+demo/*/uploads/
+
+# Local design notes and scratch mockups (not shared)
+/mockups/
+/security-review-auth.md
+/skrift-s3-design.md

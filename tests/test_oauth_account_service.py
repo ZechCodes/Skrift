@@ -9,11 +9,14 @@ from skrift.auth.providers import NormalizedUserData
 
 @pytest.fixture
 def user_data():
+    # Provider-verified email — exercises the auto-link path. Unverified
+    # variants have their own tests that assert EmailVerificationRequired.
     return NormalizedUserData(
         oauth_id="oauth-123",
         email="test@example.com",
         name="Test User",
         picture_url="https://photo.url",
+        email_verified=True,
     )
 
 
@@ -177,6 +180,7 @@ class TestFindOrCreateOAuthUser:
                 provider="discord",
                 provider_account_id="oauth-123",
                 provider_email="test@example.com",
+                provider_email_verified=True,
                 provider_metadata=raw_user_info,
                 access_token="access-abc",
                 refresh_token="refresh-xyz",

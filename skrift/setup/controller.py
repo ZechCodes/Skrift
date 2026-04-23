@@ -19,18 +19,24 @@ from typing import Annotated
 from litestar import Controller, Request, get, post
 from litestar.exceptions import HTTPException
 from litestar.params import Parameter
-from litestar.response import File, Redirect, Template as TemplateResponse
+from litestar.response import File, Redirect, Response, Template as TemplateResponse
 from litestar.response.sse import ServerSentEvent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from skrift.auth.session_keys import (
-    SESSION_USER_EMAIL,
-    SESSION_USER_ID,
-    SESSION_USER_NAME,
-    SESSION_USER_PICTURE_URL,
+from skrift.auth.session_service import finalize_authenticated_session
+from skrift.auth.second_factors.passkey_service import (
+    PasskeyRuntimeUnavailableError,
+    PasskeyStateError,
+    PasskeyVerificationError,
+    begin_primary_passkey_registration,
+    complete_primary_passkey_registration,
+    get_primary_passkey_registration_state,
 )
+from skrift.auth.second_factors.services import save_passkey_enrollment
+from skrift.config import get_auth_method_configs, get_auth_provider_configs
 from skrift.db.models.role import Role, user_roles
+from skrift.db.models.user import User
 from skrift.db.services import setting_service
 from skrift.db.services.setting_service import (
     SETUP_COMPLETED_AT_KEY,
@@ -41,6 +47,8 @@ from skrift.setup.config_writer import (
     update_auth_config,
     update_database_config,
 )
+from skrift.forms import verify_csrf
+from skrift.forms.core import CSRF_SESSION_KEY
 from skrift.setup.providers import DUMMY_PROVIDER_KEY, OAUTH_PROVIDERS, get_all_providers, get_provider_info
 from skrift.setup.state import (
     can_connect_to_database,
@@ -90,6 +98,11 @@ def _resolve_env_var(value: str) -> str:
 def _get_provider_type(key: str, config: dict) -> str:
     """Resolve provider type from raw config dict, falling back to key."""
     return config.get("provider", "") or key
+
+
+def _get_method_type(key: str, config: dict) -> str:
+    """Resolve auth method type from raw config dict, falling back to oauth."""
+    return config.get("type", "") or ("dummy" if key == DUMMY_PROVIDER_KEY else "oauth")
 
 
 def _detect_request_base_url(request: Request) -> str:
@@ -230,12 +243,46 @@ async def _finalize_admin_setup(
     timestamp = datetime.now(UTC).isoformat()
     await setting_service.set_setting(db_session, SETUP_COMPLETED_AT_KEY, timestamp)
 
-    request.session[SESSION_USER_ID] = str(user.id)
-    request.session[SESSION_USER_NAME] = user.name
-    request.session[SESSION_USER_EMAIL] = user.email
-    request.session[SESSION_USER_PICTURE_URL] = user.picture_url
+    finalize_authenticated_session(request, user)
     request.session["flash"] = "Admin account created successfully!"
     request.session["setup_just_completed"] = True
+
+
+async def _create_setup_passkey_admin(
+    db_session: AsyncSession,
+    *,
+    method_key: str,
+    factor_key: str,
+    email: str,
+    name: str | None,
+    registration_result,
+):
+    """Create the initial admin user and bind a passkey during setup."""
+    existing = await db_session.execute(select(User).where(User.email == email))
+    if existing.scalar_one_or_none() is not None:
+        raise ValueError("An account with that email already exists")
+
+    user = User(
+        email=email,
+        name=name,
+        picture_url=None,
+        last_login_at=datetime.now(UTC),
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    await save_passkey_enrollment(
+        db_session,
+        user_id=str(user.id),
+        factor_key=factor_key,
+        display_name=name,
+        credential_id=registration_result.credential_id,
+        public_key=registration_result.public_key,
+        sign_count=registration_result.sign_count,
+        transports=registration_result.transports,
+        enrollment_metadata=registration_result.enrollment_metadata,
+    )
+    return user
 
 
 class SetupController(Controller):
@@ -441,14 +488,14 @@ class SetupController(Controller):
                 request.session["setup_wizard_step"] = next_step.value
                 return Redirect(path=f"/setup/{next_step.value}")
 
-        # Get configured providers
+        # Get configured auth methods
         config = load_config()
         auth_config = config.get("auth", {})
-        configured_providers = auth_config.get("providers", {})
+        configured_methods = get_auth_method_configs(auth_config)
         redirect_base_url = str(auth_config.get("redirect_base_url", "")).strip() or _detect_request_base_url(request)
 
-        # Get all available providers
-        all_providers = get_all_providers()
+        # The setup UI bundles all built-in primary auth methods.
+        all_methods = get_all_providers()
 
         return TemplateResponse(
             "setup/auth.html",
@@ -458,8 +505,8 @@ class SetupController(Controller):
                 "step": 2,
                 "total_steps": _total_steps(),
                 "redirect_base_url": redirect_base_url,
-                "providers": all_providers,
-                "configured_providers": configured_providers,
+                "methods": all_methods,
+                "configured_methods": configured_methods,
             },
         )
 
@@ -471,43 +518,49 @@ class SetupController(Controller):
         # Get redirect base URL
         redirect_base_url = form_data.get("redirect_base_url", "http://localhost:8000")
 
-        # Parse provider configurations
-        all_providers = get_all_providers()
-        providers = {}
+        # Parse auth method configurations
+        all_methods = get_all_providers()
+        methods = {}
         use_env_vars = {}
 
-        for provider_key in all_providers.keys():
-            enabled = form_data.get(f"{provider_key}_enabled") == "on"
+        for method_key in all_methods.keys():
+            enabled = form_data.get(f"{method_key}_enabled") == "on"
             if not enabled:
                 continue
 
-            provider_info = all_providers[provider_key]
-            provider_config = {}
-            provider_env_vars = {}
+            method_info = all_methods[method_key]
+            method_type = getattr(method_info, "auth_method_type", "oauth")
+            if not isinstance(method_type, str):
+                method_type = "oauth"
+            method_config = {"type": method_type}
+            method_env_vars = {}
 
-            for field in provider_info.fields:
+            for field in method_info.fields:
                 field_key = field["key"]
-                value = form_data.get(f"{provider_key}_{field_key}", "")
-                use_env = form_data.get(f"{provider_key}_{field_key}_env") == "on"
+                value = form_data.get(f"{method_key}_{field_key}", "")
+                use_env = form_data.get(f"{method_key}_{field_key}_env") == "on"
 
                 if value or not field.get("optional"):
-                    provider_config[field_key] = value
-                    provider_env_vars[field_key] = use_env
+                    method_config[field_key] = value
+                    method_env_vars[field_key] = use_env
 
-            if provider_config:
-                providers[provider_key] = provider_config
-                use_env_vars[provider_key] = provider_env_vars
+            if method_config.get("type") == "passkey":
+                method_config["factor_key"] = method_config.get("factor_key", "") or method_key
 
-        if not providers:
+            if method_config:
+                methods[method_key] = method_config
+                use_env_vars[method_key] = method_env_vars
+
+        if not methods:
             _store_setup_error(
-                request, "Please configure at least one authentication provider"
+                request, "Please configure at least one authentication method"
             )
             return Redirect(path="/setup/auth")
 
         try:
             update_auth_config(
                 redirect_base_url=redirect_base_url,
-                providers=providers,
+                methods=methods,
                 use_env_vars=use_env_vars,
             )
 
@@ -718,15 +771,18 @@ class SetupController(Controller):
         # Get configured providers
         config = load_config()
         auth_config = config.get("auth", {})
-        configured_providers = list(auth_config.get("providers", {}).keys())
+        configured_methods = get_auth_method_configs(auth_config)
 
-        # Get provider display info (include dummy — get_all_providers() excludes it)
-        provider_info = {}
-        for key in configured_providers:
-            ptype = _get_provider_type(key, auth_config.get("providers", {}).get(key, {}))
-            info = OAUTH_PROVIDERS.get(ptype)
+        method_info = {}
+        for key, method_config in configured_methods.items():
+            method_type = _get_method_type(key, method_config)
+            if method_type == "oauth":
+                provider_type = _get_provider_type(key, method_config)
+                info = OAUTH_PROVIDERS.get(provider_type)
+            else:
+                info = OAUTH_PROVIDERS.get(method_type)
             if info:
-                provider_info[key] = info
+                method_info[key] = info
 
         return TemplateResponse(
             "setup/admin.html",
@@ -735,8 +791,8 @@ class SetupController(Controller):
                 "error": error,
                 "step": _admin_step_number(),
                 "total_steps": _total_steps(),
-                "providers": provider_info,
-                "configured_providers": configured_providers,
+                "methods": method_info,
+                "configured_methods": list(configured_methods.keys()),
                 "previous_step_path": _get_previous_setup_step_path(),
             },
         )
@@ -746,10 +802,25 @@ class SetupController(Controller):
         """Redirect to OAuth provider for setup admin creation."""
         config = load_config()
         auth_config = config.get("auth", {})
-        providers_config = auth_config.get("providers", {})
+        methods_config = get_auth_method_configs(auth_config)
+        providers_config = get_auth_provider_configs(auth_config)
 
-        if provider not in providers_config:
+        if provider not in methods_config and provider not in providers_config:
             raise HTTPException(status_code=404, detail=f"Provider {provider} not configured")
+
+        method_config = methods_config.get(provider, {})
+        if _get_method_type(provider, method_config) == "passkey":
+            flash = request.session.pop("flash", None)
+            return TemplateResponse(
+                "setup/passkey_login.html",
+                context={
+                    "flash": flash,
+                    "step": _admin_step_number(),
+                    "total_steps": _total_steps(),
+                    "previous_step_path": _get_previous_setup_step_path(),
+                    "provider": provider,
+                },
+            )
 
         provider_type = _get_provider_type(provider, providers_config.get(provider, {}))
         provider_info = get_provider_info(provider_type)
@@ -817,7 +888,7 @@ class SetupController(Controller):
         """Process dummy login form during setup to create admin account."""
         config = load_config()
         auth_config = config.get("auth", {})
-        providers_config = auth_config.get("providers", {})
+        providers_config = get_auth_provider_configs(auth_config)
 
         if DUMMY_PROVIDER_KEY not in providers_config:
             raise HTTPException(status_code=404, detail="Dummy provider not configured")
@@ -837,18 +908,134 @@ class SetupController(Controller):
         dummy_metadata = {"id": oauth_id, "email": email, "name": name}
 
         from skrift.auth.providers import NormalizedUserData
+        # Setup is a one-shot admin-creation flow guarded by `validate_no_dummy_auth_in_production`;
+        # treat the email as verified so account creation doesn't route through
+        # the email challenge (no mailer may be configured yet during setup).
         user_data = NormalizedUserData(
-            oauth_id=oauth_id, email=email, name=name, picture_url=None
+            oauth_id=oauth_id,
+            email=email,
+            name=name,
+            picture_url=None,
+            email_verified=True,
         )
 
         async with get_setup_db_session() as db_session:
-            from skrift.auth.oauth_account_service import find_or_create_oauth_user
-            login_result = await find_or_create_oauth_user(
+            from skrift.auth.oauth_account_service import (
+                LoginResult,
+                find_or_create_oauth_user,
+            )
+            resolution = await find_or_create_oauth_user(
                 db_session, DUMMY_PROVIDER_KEY, user_data, dummy_metadata
             )
-            await _finalize_admin_setup(db_session, request, login_result.user)
+            assert isinstance(resolution, LoginResult)
+            await _finalize_admin_setup(db_session, request, resolution.user)
 
         return Redirect(path="/setup/complete")
+
+    @post("/passkey/{provider:str}/options")
+    async def setup_passkey_options(self, request: Request, provider: str) -> Response:
+        """Return browser registration options for setup-time passkey admin creation."""
+        config = load_config()
+        auth_config = config.get("auth", {})
+        methods = get_auth_method_configs(auth_config)
+        method_config = methods.get(provider, {})
+        if _get_method_type(provider, method_config) != "passkey":
+            return Response(content={"error": "unsupported_method"}, status_code=400)
+        if not await verify_csrf(request):
+            return Response(content={"error": "invalid_csrf"}, status_code=400)
+
+        form_data = await request.form()
+        email = str(form_data.get("email", "")).strip().lower()
+        name = str(form_data.get("name", "")).strip() or None
+        if not email:
+            return Response(content={"error": "email_required"}, status_code=400)
+
+        class _SettingsAuth:
+            redirect_base_url = _get_setup_redirect_base_url(request)
+
+        class _Settings:
+            domain = ""
+            auth = _SettingsAuth()
+
+        try:
+            options = begin_primary_passkey_registration(
+                request,
+                _Settings(),
+                method_key=provider,
+                email=email,
+                name=name,
+            )
+        except PasskeyRuntimeUnavailableError as exc:
+            return Response(content={"error": str(exc)}, status_code=503)
+
+        return Response(
+            content={
+                "options": options,
+                "csrf_token": request.session.get(CSRF_SESSION_KEY, ""),
+            }
+        )
+
+    @post("/passkey/{provider:str}/complete")
+    async def setup_passkey_complete(
+        self,
+        request: Request,
+        provider: str,
+    ) -> Response:
+        """Create the initial admin account from a passkey registration during setup."""
+        config = load_config()
+        auth_config = config.get("auth", {})
+        methods = get_auth_method_configs(auth_config)
+        method_config = methods.get(provider, {})
+        if _get_method_type(provider, method_config) != "passkey":
+            return Response(content={"error": "unsupported_method"}, status_code=400)
+        if not await verify_csrf(request):
+            return Response(content={"error": "invalid_csrf"}, status_code=400)
+
+        signup_state = get_primary_passkey_registration_state(request)
+        if signup_state is None or signup_state.method_key != provider:
+            return Response(content={"error": "registration_state_missing"}, status_code=400)
+
+        form_data = await request.form()
+        credential_raw = str(form_data.get("credential", "")).strip()
+        if not credential_raw:
+            return Response(content={"error": "credential_required"}, status_code=400)
+
+        try:
+            credential = json.loads(credential_raw)
+        except json.JSONDecodeError:
+            return Response(content={"error": "invalid_credential"}, status_code=400)
+
+        class _SettingsAuth:
+            redirect_base_url = _get_setup_redirect_base_url(request)
+
+        class _Settings:
+            domain = ""
+            auth = _SettingsAuth()
+
+        try:
+            registration = complete_primary_passkey_registration(
+                request,
+                _Settings(),
+                method_key=provider,
+                credential=credential,
+            )
+            factor_key = method_config.get("factor_key", "") or provider
+            async with get_setup_db_session() as db_session:
+                user = await _create_setup_passkey_admin(
+                    db_session,
+                    method_key=provider,
+                    factor_key=factor_key,
+                    email=signup_state.email,
+                    name=signup_state.name,
+                    registration_result=registration,
+                )
+                await _finalize_admin_setup(db_session, request, user)
+        except PasskeyRuntimeUnavailableError as exc:
+            return Response(content={"error": str(exc)}, status_code=503)
+        except (PasskeyStateError, PasskeyVerificationError, ValueError) as exc:
+            return Response(content={"error": str(exc)}, status_code=400)
+
+        return Response(content={"ok": True, "redirect": "/setup/complete"}, status_code=201)
 
     @get("/complete")
     async def complete(self, request: Request) -> TemplateResponse | Redirect:
@@ -919,7 +1106,7 @@ class SetupAuthController(Controller):
 
         config = load_config()
         auth_config = config.get("auth", {})
-        providers_config = auth_config.get("providers", {})
+        providers_config = get_auth_provider_configs(auth_config)
 
         if provider not in providers_config:
             raise HTTPException(status_code=404, detail=f"Provider {provider} not configured")
@@ -965,11 +1152,24 @@ class SetupAuthController(Controller):
 
         # Create user and mark setup complete
         async with get_setup_db_session() as db_session:
-            from skrift.auth.oauth_account_service import find_or_create_oauth_user
-            login_result = await find_or_create_oauth_user(
+            from skrift.auth.oauth_account_service import (
+                EmailVerificationRequired,
+                find_or_create_oauth_user,
+            )
+            resolution = await find_or_create_oauth_user(
                 db_session, provider, user_data, user_info, tokens=tokens
             )
-            await _finalize_admin_setup(db_session, request, login_result.user)
+            if isinstance(resolution, EmailVerificationRequired):
+                # Setup creates the first admin — there should be no existing
+                # user to link against. If this fires, setup is likely being
+                # re-run against a populated DB; surface a clear error rather
+                # than silently falling back.
+                _store_setup_error(
+                    request,
+                    "An account with that email already exists. Log in via the main login page instead.",
+                )
+                return Redirect(path="/setup/admin")
+            await _finalize_admin_setup(db_session, request, resolution.user)
 
         # Clear setup flag
         request.session.pop("oauth_setup", None)

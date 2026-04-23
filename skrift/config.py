@@ -2,6 +2,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
@@ -15,6 +16,20 @@ load_dotenv(_env_file)
 
 # Pattern to match $VAR_NAME environment variable references
 ENV_VAR_PATTERN = re.compile(r"\$([A-Z_][A-Z0-9_]*)")
+
+# Auth method / second-factor keys are interpolated into URL paths and
+# JavaScript URL strings in templates. Restrict them to a safe subset so
+# a misconfigured YAML key cannot silently produce broken routes.
+_AUTH_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def _validate_auth_key(key: object, *, field: str) -> None:
+    """Validate an auth method / second-factor key at config-load time."""
+    if not isinstance(key, str) or not _AUTH_KEY_RE.match(key):
+        raise ValueError(
+            f"Invalid {field} key {key!r}: must match {_AUTH_KEY_RE.pattern} "
+            "(letters, digits, '-' or '_'; 1-64 chars; must start with an alphanumeric)."
+        )
 
 # Environment configuration
 SKRIFT_ENV = "SKRIFT_ENV"
@@ -204,6 +219,115 @@ class SkriftProviderConfig(BaseModel):
 ProviderConfig = OAuthProviderConfig | DummyProviderConfig | SkriftProviderConfig
 
 
+class SecondFactorSettings(BaseModel):
+    """Second-factor authentication configuration."""
+
+    enabled: bool = False
+    challenge_on_enrolled: bool = False
+    methods: dict[str, dict] = {}
+
+    def __init__(self, **data):
+        methods = data.get("methods")
+        if isinstance(methods, dict):
+            for key in methods:
+                _validate_auth_key(key, field="second_factor method")
+        super().__init__(**data)
+
+    def get_method_keys(self) -> list[str]:
+        """Return configured second-factor method keys."""
+        return list(self.methods.keys())
+
+    def get_method_type(self, key: str) -> str:
+        """Resolve the configured second-factor method type."""
+        config = self.methods.get(key, {})
+        if isinstance(config, dict):
+            return config.get("type", "") or key
+        return key
+
+    def get_method_config(self, key: str) -> dict:
+        """Get the raw config dict for a second-factor method key."""
+        config = self.methods.get(key, {})
+        return dict(config) if isinstance(config, dict) else {}
+
+
+def _method_config_from_provider_config(name: str, config: dict) -> dict:
+    """Derive an auth.methods entry from a legacy auth.providers entry."""
+    config = dict(config)
+    provider_type = config.get("provider", "") or name
+    method_type = "dummy" if provider_type == "dummy" else "oauth"
+    method_config = dict(config)
+    method_config["type"] = method_type
+    if method_type == "oauth" and provider_type != name:
+        method_config["provider"] = provider_type
+    elif method_type == "dummy":
+        method_config.pop("provider", None)
+    return method_config
+
+
+def _provider_config_from_method_config(name: str, config: dict) -> dict | None:
+    """Derive an auth.providers entry from an auth.methods entry when possible."""
+    config = dict(config)
+    method_type = config.pop("type", "") or "oauth"
+
+    if method_type == "dummy":
+        return {"provider": "dummy"}
+    if method_type == "oauth":
+        provider_type = config.get("provider", "") or name
+        provider_config = dict(config)
+        if provider_type != name:
+            provider_config["provider"] = provider_type
+        return provider_config
+    return None
+
+
+def get_auth_method_configs(auth_config: dict | None) -> dict[str, dict]:
+    """Normalize raw auth config to auth.methods shape."""
+    if not auth_config:
+        return {}
+
+    methods = auth_config.get("methods", {})
+    providers = auth_config.get("providers", {})
+    normalized: dict[str, dict] = {}
+
+    if isinstance(methods, dict):
+        for name, config in methods.items():
+            if isinstance(config, dict):
+                normalized[name] = dict(config)
+
+    if isinstance(providers, dict):
+        for name, config in providers.items():
+            if name in normalized or not isinstance(config, dict):
+                continue
+            normalized[name] = _method_config_from_provider_config(name, config)
+
+    return normalized
+
+
+def get_auth_provider_configs(auth_config: dict | None) -> dict[str, dict]:
+    """Normalize raw auth config to auth.providers shape for OAuth-compatible code."""
+    if not auth_config:
+        return {}
+
+    providers = auth_config.get("providers", {})
+    normalized: dict[str, dict] = {}
+
+    if isinstance(providers, dict):
+        for name, config in providers.items():
+            if isinstance(config, dict):
+                normalized[name] = dict(config)
+
+    methods = auth_config.get("methods", {})
+    if isinstance(methods, dict):
+        for name, config in methods.items():
+            if name in normalized or not isinstance(config, dict):
+                continue
+            provider_config = _provider_config_from_method_config(name, config)
+            if provider_config is not None:
+                normalized[name] = provider_config
+
+    return normalized
+
+
 class SecurityHeadersConfig(BaseModel):
     """Security response headers configuration.
 
@@ -259,13 +383,12 @@ class SessionConfig(BaseModel):
 
     cookie_name: str = "session"
     cookie_domain: str | None = None  # None = exact host only
-    max_age: int = 86400  # 1 day in seconds
-
-
-class CSRFSettings(BaseModel):
-    """CSRF protection configuration."""
-
-    exclude: list[str] = []
+    max_age: int = 86400  # 1 day in seconds — hard cookie lifetime cap
+    # Rolling idle timeout in seconds. 0 disables the check (default).
+    # When > 0, an authenticated session whose last activity is older
+    # than this is cleared on the next request and the user sees a
+    # "signed out due to inactivity" flash on the login page.
+    idle_timeout: int = 0
 
 
 class RateLimitConfig(BaseModel):
@@ -275,6 +398,36 @@ class RateLimitConfig(BaseModel):
     requests_per_minute: int = 60
     auth_requests_per_minute: int = 10
     paths: dict[str, int] = {}  # per-path-prefix overrides, e.g. {"/api": 120}
+
+
+class TrustedProxySourceConfig(BaseModel):
+    """Pluggable source that publishes a list of proxy CIDRs over HTTP."""
+
+    name: str
+    url: str
+    format: Literal["text", "json", "cidr-list"] = "text"
+    path: str | None = None  # JSONPath-like selector for "json" format (e.g. "prefixes[*].ip_prefix")
+    refresh_interval: str = "1h"  # duration string: "30m", "1h", "24h"
+    fallback: str | None = None  # absolute path to a bundled CIDR file
+
+
+class TrustedProxyConfig(BaseModel):
+    """Trust model for resolving the client IP from XFF / proxy headers.
+
+    The resolver treats the socket peer as ground truth and only honors
+    forwarding headers when the peer sits inside the trusted set.
+    """
+
+    trusted: list[str] = []  # explicit CIDRs + bare IPs
+    trust_private_networks: bool | None = None  # None = auto (True if containerized)
+    client_ip_header: str = "x-forwarded-for"
+    cdn_header: str | None = None  # e.g. "cf-connecting-ip"; auto-set by `cdn` preset
+    cdn: str | None = None  # preset key: "cloudflare" | "fastly" | "cloudfront"
+    max_hops: int = 5
+    strict: bool = False  # reject unresolvable chains with 400
+    explicit: bool = False  # disable all auto-detection (K8s, Docker, loopback, RFC1918)
+    disabled_sources: list[str] = []  # named sources/presets to exclude
+    sources: list[TrustedProxySourceConfig] = []
 
 
 class RedisConfig(BaseModel):
@@ -328,13 +481,36 @@ class NotificationsConfig(BaseModel):
     webhook_secret: str = ""  # empty = webhook disabled
 
 
+class EmailConfig(BaseModel):
+    """Outbound transactional email configuration."""
+
+    backend: str = ""  # empty = NullEmailBackend; or "module:ClassName" import string
+    from_address: str = ""
+    reply_to: str = ""
+    # Absolute URL used when rendering links into email bodies. Falls back to
+    # ``auth.redirect_base_url`` when empty.
+    public_base_url: str = ""
+
+    # SMTP connection (used by SMTPEmailBackend)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_starttls: bool = True
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_timeout: float = 10.0
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration."""
 
     redirect_base_url: str = "http://localhost:8000"
     allowed_redirect_domains: list[str] = []
+    second_factors: SecondFactorSettings = SecondFactorSettings()
+    methods: dict[str, dict] = {}
     providers: dict[str, ProviderConfig] = {}
     _provider_types: dict[str, str] = PrivateAttr(default_factory=dict)
+    _method_types: dict[str, str] = PrivateAttr(default_factory=dict)
+    _method_configs: dict[str, dict] = PrivateAttr(default_factory=dict)
 
     @classmethod
     def _resolve_provider_type(cls, key: str, config: dict) -> str:
@@ -354,6 +530,27 @@ class AuthConfig(BaseModel):
         return OAuthProviderConfig(**config)
 
     def __init__(self, **data):
+        # Convert raw auth.methods/auth.providers to a unified internal model.
+        method_types = {}
+        method_configs = {}
+        raw_methods = {}
+
+        if isinstance(data.get("methods"), dict) or isinstance(data.get("providers"), dict):
+            raw_methods = get_auth_method_configs(data)
+            data["methods"] = raw_methods
+            provider_dicts = get_auth_provider_configs(data)
+            data["providers"] = provider_dicts
+
+            for name in raw_methods:
+                _validate_auth_key(name, field="auth method")
+            for name in provider_dicts:
+                _validate_auth_key(name, field="auth provider")
+
+            for name, config in raw_methods.items():
+                method_type = config.get("type", "") or "oauth"
+                method_types[name] = method_type
+                method_configs[name] = dict(config)
+
         # Convert raw provider dicts to appropriate config objects
         provider_types = {}
         if "providers" in data and isinstance(data["providers"], dict):
@@ -368,10 +565,31 @@ class AuthConfig(BaseModel):
             data["providers"] = parsed_providers
         super().__init__(**data)
         self._provider_types = provider_types
+        self._method_types = method_types
+        self._method_configs = method_configs
 
     def get_provider_type(self, key: str) -> str:
         """Get the provider type for a config key. Falls back to key itself."""
         return self._provider_types.get(key, key)
+
+    def get_primary_auth_method_type(self, key: str) -> str:
+        """Map provider-oriented config to the current primary-auth method type."""
+        if key in self._method_types:
+            return self._method_types[key]
+        provider_type = self.get_provider_type(key)
+        if provider_type == "dummy":
+            return "dummy"
+        return "oauth"
+
+    def get_method_config(self, key: str) -> dict:
+        """Get the raw config dict for a primary auth method key."""
+        return dict(self._method_configs.get(key, {}))
+
+    def get_method_keys(self) -> list[str]:
+        """Return configured auth method keys in config order."""
+        if self.methods:
+            return list(self.methods.keys())
+        return list(self.providers.keys())
 
     def get_redirect_uri(self, provider: str) -> str:
         """Get the OAuth callback URL for a provider."""
@@ -435,20 +653,23 @@ class Settings(BaseSettings):
     # Session config (loaded from app.yaml)
     session: SessionConfig = SessionConfig()
 
-    # CSRF config (loaded from app.yaml)
-    csrf: CSRFSettings | None = None
-
     # Security headers config (loaded from app.yaml)
     security_headers: SecurityHeadersConfig = SecurityHeadersConfig()
 
     # Rate limit config (loaded from app.yaml)
     rate_limit: RateLimitConfig = RateLimitConfig()
 
+    # Trusted proxy / client IP resolution (loaded from app.yaml)
+    trusted_proxy: TrustedProxyConfig = TrustedProxyConfig()
+
     # Redis config (loaded from app.yaml)
     redis: RedisConfig = RedisConfig()
 
     # Notifications config (loaded from app.yaml)
     notifications: NotificationsConfig = NotificationsConfig()
+
+    # Email config (loaded from app.yaml)
+    email: EmailConfig = EmailConfig()
 
     # Logfire observability config (loaded from app.yaml)
     logfire: LogfireConfig = LogfireConfig()
@@ -491,11 +712,11 @@ def is_config_valid() -> tuple[bool, str | None]:
             if not os.environ.get(env_var):
                 return False, f"Database environment variable ${env_var} not set"
 
-        # Check auth providers
+        # Check auth methods/providers
         auth_config = config.get("auth", {})
-        providers = auth_config.get("providers", {})
-        if not providers:
-            return False, "No authentication providers configured"
+        methods = get_auth_method_configs(auth_config)
+        if not methods:
+            return False, "No authentication methods configured"
 
         return True, None
     except Exception as e:
@@ -534,20 +755,23 @@ def get_settings() -> Settings:
     if "session" in app_config:
         kwargs["session"] = SessionConfig(**app_config["session"])
 
-    if "csrf" in app_config:
-        kwargs["csrf"] = CSRFSettings(**app_config["csrf"])
-
     if "security_headers" in app_config:
         kwargs["security_headers"] = SecurityHeadersConfig(**app_config["security_headers"])
 
     if "rate_limit" in app_config:
         kwargs["rate_limit"] = RateLimitConfig(**app_config["rate_limit"])
 
+    if "trusted_proxy" in app_config:
+        kwargs["trusted_proxy"] = TrustedProxyConfig(**app_config["trusted_proxy"])
+
     if "redis" in app_config:
         kwargs["redis"] = RedisConfig(**app_config["redis"])
 
     if "notifications" in app_config:
         kwargs["notifications"] = NotificationsConfig(**app_config["notifications"])
+
+    if "email" in app_config:
+        kwargs["email"] = EmailConfig(**app_config["email"])
 
     if "logfire" in app_config:
         kwargs["logfire"] = LogfireConfig(**app_config["logfire"])

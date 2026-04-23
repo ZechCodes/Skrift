@@ -1116,3 +1116,28 @@ hr {
                     0 0 0 1px rgba(0, 0, 0, 0.05);
     }
 }
+
+.sk-inline-logout {
+    display: inline;
+    margin: 0;
+    padding: 0;
+}
+
+.sk-linklike {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.sk-linklike:hover {
+    opacity: 0.85;
+}
+
+.sk-nav-link.sk-linklike {
+    text-decoration: none;
+}

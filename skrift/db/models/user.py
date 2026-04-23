@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from skrift.db.models.oauth_account import OAuthAccount
     from skrift.db.models.page import Page
     from skrift.db.models.role import Role
+    from skrift.db.models.second_factor import SecondFactorEnrollment
 
 
 class User(Base):
@@ -37,4 +38,7 @@ class User(Base):
     )
     api_keys: Mapped[list["APIKey"]] = relationship(
         "APIKey", back_populates="user", cascade="all, delete-orphan"
+    )
+    second_factor_enrollments: Mapped[list["SecondFactorEnrollment"]] = relationship(
+        "SecondFactorEnrollment", back_populates="user", cascade="all, delete-orphan"
     )

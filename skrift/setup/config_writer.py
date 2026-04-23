@@ -7,7 +7,11 @@ from typing import Any
 
 from ruamel.yaml import YAML
 
-from skrift.config import get_config_path as _get_config_path
+from skrift.config import (
+    get_auth_method_configs,
+    get_auth_provider_configs,
+    get_config_path as _get_config_path,
+)
 
 # Default app.yaml structure
 DEFAULT_CONFIG = {
@@ -26,6 +30,7 @@ DEFAULT_CONFIG = {
     },
     "auth": {
         "redirect_base_url": "http://localhost:8000",
+        "methods": {},
         "providers": {},
     },
 }
@@ -156,14 +161,16 @@ def update_database_config(
 
 def update_auth_config(
     redirect_base_url: str,
-    providers: dict[str, dict[str, Any]],
+    providers: dict[str, dict[str, Any]] | None = None,
+    methods: dict[str, dict[str, Any]] | None = None,
     use_env_vars: dict[str, dict[str, bool]] | None = None,
 ) -> dict[str, Any]:
     """Update authentication configuration in app.yaml.
 
     Args:
         redirect_base_url: Base URL for OAuth callbacks
-        providers: Dict of provider configs {provider: {client_id, client_secret, ...}}
+        providers: Legacy dict of provider configs {provider: {client_id, client_secret, ...}}
+        methods: Dict of auth method configs {method: {type, ...}}
         use_env_vars: Dict of {provider: {field: use_env_var}} for env var toggles
 
     Returns:
@@ -177,31 +184,44 @@ def update_auth_config(
 
     config["auth"]["redirect_base_url"] = redirect_base_url
 
+    if "methods" not in config["auth"]:
+        config["auth"]["methods"] = {}
     if "providers" not in config["auth"]:
         config["auth"]["providers"] = {}
 
     use_env_vars = use_env_vars or {}
+    methods = methods or {}
 
-    for provider, provider_config in providers.items():
-        provider_env_vars = use_env_vars.get(provider, {})
+    if not methods and providers:
+        methods = get_auth_method_configs({"providers": providers})
 
-        processed_config = {}
-        for field, value in provider_config.items():
-            if provider_env_vars.get(field):
-                # Store as env var reference
+    processed_methods: dict[str, dict[str, Any]] = {}
+
+    for method_key, method_config in methods.items():
+        method_env_vars = use_env_vars.get(method_key, {})
+        processed_config: dict[str, Any] = {}
+
+        for field, value in method_config.items():
+            if method_env_vars.get(field):
                 processed_config[field] = f"${value}"
             else:
                 processed_config[field] = value
 
-        # Add default scopes if not specified
-        from skrift.setup.providers import get_provider_info
+        method_type = processed_config.get("type", "") or "oauth"
 
-        provider_type = provider_config.get("provider", "") or provider
-        provider_info = get_provider_info(provider_type)
-        if provider_info and "scopes" not in processed_config:
-            processed_config["scopes"] = provider_info.scopes
+        if method_type == "oauth":
+            from skrift.setup.providers import get_provider_info
 
-        config["auth"]["providers"][provider] = processed_config
+            provider_type = processed_config.get("provider", "") or method_key
+            provider_info = get_provider_info(provider_type)
+            if provider_info and "scopes" not in processed_config:
+                processed_config["scopes"] = provider_info.scopes
+
+        processed_methods[method_key] = processed_config
+        config["auth"]["methods"][method_key] = processed_config
+
+    for provider_key, provider_config in get_auth_provider_configs({"methods": processed_methods}).items():
+        config["auth"]["providers"][provider_key] = provider_config
 
     save_config(config)
     return config
@@ -211,5 +231,5 @@ def get_configured_providers() -> list[str]:
     """Get list of providers currently configured in app.yaml."""
     config = load_config()
     auth = config.get("auth", {})
-    providers = auth.get("providers", {})
+    providers = get_auth_provider_configs(auth)
     return list(providers.keys())

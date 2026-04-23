@@ -31,7 +31,7 @@ def reset_migrations_flag() -> None:
     global _migrations_run
     _migrations_run = False
 
-from skrift.config import get_config_path
+from skrift.config import get_auth_method_configs, get_config_path
 from skrift.db.services.setting_service import (
     SETUP_COMPLETED_AT_KEY,
     SITE_NAME_KEY,
@@ -202,17 +202,21 @@ def is_auth_configured() -> bool:
             return False
 
         auth = config.get("auth", {})
-        providers = auth.get("providers", {})
+        methods = get_auth_method_configs(auth)
 
-        for provider_name, provider_config in providers.items():
-            if provider_name == DUMMY_PROVIDER_KEY:
+        for method_name, method_config in methods.items():
+            method_type = method_config.get("type", "") or "oauth"
+
+            if method_type == DUMMY_PROVIDER_KEY:
+                return True
+            if method_type == "passkey":
                 return True
 
-            if not isinstance(provider_config, dict):
+            if not isinstance(method_config, dict):
                 continue
             # Check if provider has both client_id and client_secret (even as env var refs)
-            client_id = provider_config.get("client_id", "")
-            client_secret = provider_config.get("client_secret", "")
+            client_id = method_config.get("client_id", "")
+            client_secret = method_config.get("client_secret", "")
             if client_id and client_secret:
                 return True
 

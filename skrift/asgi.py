@@ -28,7 +28,6 @@ from advanced_alchemy.extensions.litestar import (
 from skrift.db.session import SessionCleanupMiddleware
 from litestar import Litestar
 from litestar.config.compression import CompressionConfig
-from litestar.config.csrf import CSRFConfig as LitestarCSRFConfig
 
 from skrift.middleware.compression import SafeGzipCompression
 from litestar.middleware import DefineMiddleware
@@ -44,6 +43,9 @@ from skrift.app_factory import (
     update_template_directories,
 )
 from skrift.config import get_config_path, get_settings, is_config_valid
+from skrift.lib.sliding_window import InMemorySlidingWindowCounter, SlidingWindowCounter
+from skrift.lib.trusted_proxy import TrustedProxyManager
+from skrift.middleware.client_ip import ClientIPMiddleware
 from skrift.middleware.rate_limit import RateLimitMiddleware
 from skrift.middleware.security import SecurityHeadersMiddleware
 from skrift.db.base import Base
@@ -558,7 +560,7 @@ def _build_site_app(
     site_config,
     db_config: SQLAlchemyAsyncConfig,
     session_config,
-    csrf_config,
+    client_ip_middleware: list,
     security_middleware: list,
     rate_limit_middleware: list,
     user_middleware: list,
@@ -566,6 +568,7 @@ def _build_site_app(
     themes_dir: Path,
     site_static_dir: Path,
     package_static_dir: Path,
+    trusted_proxy_manager: TrustedProxyManager | None = None,
     page_types: list | None = None,
     storage_manager=None,
 ) -> ASGIApp:
@@ -622,6 +625,7 @@ def _build_site_app(
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[
             DefineMiddleware(SessionCleanupMiddleware),
+            *client_ip_middleware,
             *security_middleware,
             *rate_limit_middleware,
             session_config.middleware,
@@ -629,11 +633,12 @@ def _build_site_app(
         ],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", compression_facade=SafeGzipCompression),
-        csrf_config=csrf_config,
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
     site_app.state.storage_manager = storage_manager
+    if trusted_proxy_manager is not None:
+        site_app.state.trusted_proxy_manager = trusted_proxy_manager
 
     from skrift.middleware.static import StaticFilesMiddleware
     return StaticFilesMiddleware(
@@ -642,6 +647,38 @@ def _build_site_app(
         site_static_dir=site_static_dir,
         package_static_dir=package_static_dir,
     )
+
+
+def _validate_passkey_config_if_enabled(settings) -> None:
+    """Raise at startup when passkeys are enabled without a pinned RP hostname.
+
+    Scans ``auth.methods`` and ``auth.second_factors`` for any passkey-typed
+    entry; when present, requires ``settings.domain`` or a full
+    ``auth.redirect_base_url`` so :func:`_resolve_rp_id` never falls back to
+    the untrusted request hostname.
+    """
+    auth = settings.auth
+    has_passkey_primary = any(
+        auth.get_primary_auth_method_type(key) == "passkey"
+        for key in auth.get_method_keys()
+    )
+    has_passkey_second_factor = auth.second_factors.enabled and any(
+        auth.second_factors.get_method_type(key) == "passkey"
+        for key in auth.second_factors.get_method_keys()
+    )
+    if not (has_passkey_primary or has_passkey_second_factor):
+        return
+
+    from skrift.auth.second_factors.passkey_service import (
+        PasskeyStateError,
+        validate_passkey_origin_config,
+    )
+    try:
+        validate_passkey_origin_config(settings)
+    except PasskeyStateError as exc:
+        raise RuntimeError(
+            f"Invalid passkey configuration: {exc}"
+        ) from exc
 
 
 def create_app() -> ASGIApp:
@@ -660,17 +697,18 @@ def create_app() -> ASGIApp:
 
     settings = get_settings()
 
+    # Fail fast when passkeys are enabled without a pinned relying-party
+    # hostname. A spoofed Host header could otherwise steer registrations
+    # and assertions to the wrong RP ID.
+    _validate_passkey_config_if_enabled(settings)
+
     from skrift.lib import observability
     observability.configure(settings)
     observability.instrument_httpx()
 
-    # Load controllers from app.yaml
-    controllers = load_controllers()
-
-    # Load middleware from app.yaml
-    user_middleware = load_middleware()
-
-    # Database schema configuration
+    # Database schema configuration — must run BEFORE load_controllers(),
+    # otherwise ForeignKey("users.id") in downstream models resolves against
+    # the wrong (None) schema and later lookups fail with NoReferencedTableError.
     if settings.db.db_schema:
         if "sqlite" in settings.db.url:
             raise ValueError(
@@ -678,6 +716,12 @@ def create_app() -> ASGIApp:
                 "For dev environments, use app.dev.yaml to override the database configuration."
             )
         Base.metadata.schema = settings.db.db_schema
+
+    # Load controllers from app.yaml
+    controllers = load_controllers()
+
+    # Load middleware from app.yaml
+    user_middleware = load_middleware()
 
     # Database configuration
     if "sqlite" in settings.db.url:
@@ -731,6 +775,46 @@ def create_app() -> ASGIApp:
                 )
             ]
 
+    # Trusted proxy / client IP resolution — runs before rate limiting so the
+    # resolved IP is already on scope["state"] by the time the limiter keys.
+    trusted_proxy_manager = TrustedProxyManager(settings.trusted_proxy)
+    logger.info("Trusted proxies: %s", trusted_proxy_manager.get())
+    client_ip_middleware = [
+        DefineMiddleware(ClientIPMiddleware, manager=trusted_proxy_manager)
+    ]
+
+    # Sliding-window counter backend (shared by rate limit + failed-auth limiter).
+    # Redis is used when settings.redis.url is set; otherwise falls back to a
+    # process-local counter (not shared across replicas).
+    _redis_client = None
+    if settings.redis.url:
+        try:
+            from redis.asyncio import from_url as _redis_from_url
+
+            from skrift.lib.sliding_window_redis import RedisSlidingWindowCounter
+
+            _redis_client = _redis_from_url(settings.redis.url)
+            _rate_limit_counter: SlidingWindowCounter = RedisSlidingWindowCounter(
+                _redis_client,
+                window=60.0,
+                prefix=settings.redis.make_key("skrift", "ratelimit"),
+            )
+            _failed_auth_counter: SlidingWindowCounter = RedisSlidingWindowCounter(
+                _redis_client,
+                window=60.0,
+                prefix=settings.redis.make_key("skrift", "failed_auth"),
+            )
+            logger.info("Rate limiter backend: Redis (%s)", settings.redis.url)
+        except ImportError:
+            logger.warning(
+                "redis.asyncio not available; falling back to in-memory rate limiter"
+            )
+            _rate_limit_counter = InMemorySlidingWindowCounter(window=60.0)
+            _failed_auth_counter = InMemorySlidingWindowCounter(window=60.0)
+    else:
+        _rate_limit_counter = InMemorySlidingWindowCounter(window=60.0)
+        _failed_auth_counter = InMemorySlidingWindowCounter(window=60.0)
+
     # Rate limiting middleware
     rate_limit_middleware = []
     if settings.rate_limit.enabled:
@@ -740,20 +824,9 @@ def create_app() -> ASGIApp:
                 requests_per_minute=settings.rate_limit.requests_per_minute,
                 auth_requests_per_minute=settings.rate_limit.auth_requests_per_minute,
                 paths=settings.rate_limit.paths,
+                counter=_rate_limit_counter,
             )
         ]
-
-    # CSRF configuration (if enabled in app.yaml)
-    csrf_config = None
-    if settings.csrf is not None:
-        csrf_config = LitestarCSRFConfig(
-            secret=settings.secret_key,
-            cookie_secure=not settings.debug,
-            cookie_httponly=False,
-            cookie_samesite="lax",
-            cookie_domain=settings.session.cookie_domain,
-            exclude=settings.csrf.exclude or None,
-        )
 
     # Static files
     from skrift.lib.theme import get_themes_dir
@@ -838,36 +911,22 @@ def create_app() -> ASGIApp:
     api_auth_handlers: list = []
     if settings.api_keys.enabled:
         api_auth_handlers.append(APIAuthController)
-        # Exempt refresh endpoint from CSRF since it uses bearer-token auth
-        if settings.csrf is not None:
-            settings.csrf.exclude.append("/api/auth/refresh")
 
     # OAuth2 controller — only registered when oauth2 is enabled
     oauth2_handlers: list = []
     if settings.oauth2_enabled:
         oauth2_handlers.append(OAuth2Controller)
-        # Exempt OAuth2 API endpoints from CSRF since they're called by external clients
-        if settings.csrf is not None:
-            settings.csrf.exclude.append("/oauth/token")
-            settings.csrf.exclude.append("/oauth/revoke")
-            settings.csrf.exclude.append("/oauth/introspect")
 
-    # Exempt push subscription endpoints from CSRF (only when PushController is enabled)
+    # Push subscription controller — enablement is configured per site
     _push_enabled = any(
         isinstance(c, type) and c.__name__ == "PushController"
         for c in controllers
     )
-    if _push_enabled and settings.csrf is not None:
-        settings.csrf.exclude.append("/push/subscribe")
-        settings.csrf.exclude.append("/push/unsubscribe")
 
     # Webhook controller — only registered when a secret is configured
     webhook_handlers: list = []
     if settings.notifications.webhook_secret:
         webhook_handlers.append(NotificationsWebhookController)
-        # Exempt webhook from CSRF since it uses bearer-token auth
-        if settings.csrf is not None:
-            settings.csrf.exclude.append("/notifications/webhook")
 
     # Notification backend setup
     if settings.notifications.backend:
@@ -875,6 +934,10 @@ def create_app() -> ASGIApp:
         backend = backend_cls(settings=settings, session_maker=db_config.get_session)
     else:
         backend = InMemoryBackend()
+
+    # Email backend setup (separate abstraction from notifications)
+    from skrift.lib.email_backends import build_email_backend
+    email_backend = build_email_backend(settings.email)
 
     async def on_startup(_app: Litestar) -> None:
         """Sync roles, load site settings, and start notification backend on startup."""
@@ -897,6 +960,10 @@ def create_app() -> ASGIApp:
         notification_service.set_backend(backend)
         await backend.start()
 
+        await email_backend.start()
+
+        await trusted_proxy_manager.start()
+
         # Register Web Push fallback hook (only when PushController is enabled)
         if _push_enabled:
             try:
@@ -913,22 +980,48 @@ def create_app() -> ASGIApp:
     async def on_shutdown(_app: Litestar) -> None:
         """Stop notification backend and storage on shutdown."""
         await notification_service._get_backend().stop()
+        await email_backend.stop()
         await storage_manager.close()
+        await trusted_proxy_manager.stop()
+        if _redis_client is not None:
+            try:
+                await _redis_client.aclose()
+            except Exception:
+                logger.debug("Redis client close failed", exc_info=True)
+
+    # Idle-timeout middleware runs AFTER session_config.middleware so
+    # ``scope["session"]`` is populated. Disabled when ``idle_timeout``
+    # is 0 (the default) — the middleware short-circuits immediately.
+    session_idle_middleware = []
+    if settings.session.idle_timeout > 0:
+        from skrift.middleware.session_idle import SessionIdleMiddleware
+        session_idle_middleware = [
+            DefineMiddleware(
+                SessionIdleMiddleware,
+                idle_timeout=settings.session.idle_timeout,
+            )
+        ]
 
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
         route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *api_auth_handlers, *webhook_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[DefineMiddleware(SessionCleanupMiddleware), *security_middleware, *rate_limit_middleware, session_config.middleware, *user_middleware],
+        middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream", compression_facade=SafeGzipCompression),
-        csrf_config=csrf_config,
         exception_handlers=EXCEPTION_HANDLERS,
         debug=settings.debug,
     )
     app.state.webhook_secret = settings.notifications.webhook_secret
     app.state.storage_manager = storage_manager
+    app.state.trusted_proxy_manager = trusted_proxy_manager
+    app.state.email_backend = email_backend
+
+    # Install the shared failed-auth limiter on app.state so the notification
+    # webhook uses the Redis-backed counter when configured.
+    from skrift.controllers.notification_webhook import _FailedAuthLimiter
+    app.state.failed_auth_limiter = _FailedAuthLimiter(counter=_failed_auth_counter)
 
     from skrift.middleware.storage import StorageFilesMiddleware
     from skrift.middleware.static import StaticFilesMiddleware
@@ -972,7 +1065,7 @@ def create_app() -> ASGIApp:
                 site_config=site_cfg,
                 db_config=db_config,
                 session_config=session_config,
-                csrf_config=csrf_config,
+                client_ip_middleware=client_ip_middleware,
                 security_middleware=security_middleware,
                 rate_limit_middleware=rate_limit_middleware,
                 user_middleware=user_middleware,
@@ -980,6 +1073,7 @@ def create_app() -> ASGIApp:
                 themes_dir=themes_dir,
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
+                trusted_proxy_manager=trusted_proxy_manager,
                 page_types=subdomain_page_types.pop(site_cfg.subdomain, []),
                 storage_manager=storage_manager,
             )
@@ -993,7 +1087,7 @@ def create_app() -> ASGIApp:
                 site_config=auto_cfg,
                 db_config=db_config,
                 session_config=session_config,
-                csrf_config=csrf_config,
+                client_ip_middleware=client_ip_middleware,
                 security_middleware=security_middleware,
                 rate_limit_middleware=rate_limit_middleware,
                 user_middleware=user_middleware,
@@ -1001,6 +1095,7 @@ def create_app() -> ASGIApp:
                 themes_dir=themes_dir,
                 site_static_dir=site_static_dir,
                 package_static_dir=package_static_dir,
+                trusted_proxy_manager=trusted_proxy_manager,
                 page_types=pts,
                 storage_manager=storage_manager,
             )

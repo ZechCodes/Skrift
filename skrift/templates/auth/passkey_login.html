@@ -1,0 +1,342 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Passkey Login - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .passkey-login-shell {
+        max-width: 520px;
+        margin: 2rem auto;
+    }
+
+    .passkey-login-card {
+        padding: 2rem;
+        border-radius: 1rem;
+        border: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.08));
+        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+        box-shadow: 0 22px 48px rgba(0, 0, 0, 0.35);
+    }
+
+    .passkey-login-card h1,
+    .passkey-login-card h2 {
+        margin: 0 0 0.5rem;
+    }
+
+    .passkey-login-status {
+        min-height: 1.4rem;
+        margin-top: 1rem;
+        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.6));
+    }
+
+    .passkey-login-note {
+        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.6));
+        font-size: 0.95rem;
+    }
+
+    .passkey-divider {
+        margin: 1.5rem 0;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.08));
+    }
+
+    .passkey-signup-form {
+        display: grid;
+        gap: 0.85rem;
+        margin-top: 1rem;
+    }
+
+    .passkey-input {
+        width: 100%;
+        padding: 0.85rem 1rem;
+        border-radius: 0.8rem;
+        border: 1px solid var(--sk-color-border-hover, rgba(255, 255, 255, 0.14));
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--sk-color-text, #E8ECF4);
+        font: inherit;
+    }
+
+    .passkey-input::placeholder {
+        color: var(--sk-color-muted, rgba(255, 255, 255, 0.4));
+    }
+
+    .passkey-input:focus {
+        outline: none;
+        border-color: var(--sk-color-accent, #34D399);
+        background: rgba(255, 255, 255, 0.05);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="passkey-login-shell">
+    <article class="passkey-login-card">
+        <header>
+            <h1>{{ descriptor.name }}</h1>
+        </header>
+        <p>Use a registered passkey to sign in without redirecting to another provider.</p>
+
+        {% if not descriptor.is_available %}
+        <p class="passkey-login-note">{{ descriptor.availability_note or "Passkey login is not available in this environment." }}</p>
+        {% else %}
+        <form id="passkey-login-form" class="passkey-signup-form">
+            {{ csrf_field() }}
+            <input type="email" id="passkey-login-email" class="passkey-input" name="email"
+                   placeholder="Email (optional — browser autofill will offer saved passkeys)"
+                   autocomplete="username webauthn">
+            <button type="submit" class="sk-btn">Continue With Passkey</button>
+        </form>
+        <p id="passkey-login-status" class="passkey-login-status"></p>
+
+        <section class="passkey-divider">
+            <h2>Create Account</h2>
+            <p class="passkey-login-note">Create a new account and bind a passkey in one step.</p>
+            <form id="passkey-signup-form" class="passkey-signup-form">
+                {{ csrf_field() }}
+                <input type="email" class="passkey-input" name="email" placeholder="Email address" required>
+                <input type="text" class="passkey-input" name="name" placeholder="Display name">
+                <button type="submit" class="sk-btn">Create Account With Passkey</button>
+            </form>
+            <p id="passkey-signup-status" class="passkey-login-status"></p>
+            <p class="passkey-login-note">If you already have an account, use the sign-in form above instead.</p>
+        </section>
+        {% endif %}
+
+        <p class="passkey-login-note">Existing users can sign in with enrolled passkeys, and new users can create an account here.</p>
+    </article>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+function base64urlToBuffer(value) {
+    const padding = "=".repeat((4 - value.length % 4) % 4);
+    const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(base64);
+    return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+
+function bufferToBase64url(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    bytes.forEach(byte => {
+        binary += String.fromCharCode(byte);
+    });
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function normalizeAuthenticationOptions(options) {
+    options.challenge = base64urlToBuffer(options.challenge);
+    options.allowCredentials = (options.allowCredentials || []).map(credential => ({
+        ...credential,
+        id: base64urlToBuffer(credential.id),
+    }));
+    return options;
+}
+
+function serializeAssertion(credential) {
+    return {
+        id: credential.id,
+        rawId: bufferToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+            clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+            authenticatorData: bufferToBase64url(credential.response.authenticatorData),
+            signature: bufferToBase64url(credential.response.signature),
+            userHandle: credential.response.userHandle ? bufferToBase64url(credential.response.userHandle) : null,
+        },
+    };
+}
+
+const loginForm = document.getElementById("passkey-login-form");
+const loginStatus = document.getElementById("passkey-login-status");
+const signupForm = document.getElementById("passkey-signup-form");
+const signupStatus = document.getElementById("passkey-signup-status");
+
+function syncCsrf(_form, payload) {
+    // The login form and signup form each have their own hidden _csrf input,
+    // but they share one session token. Whenever the server rotates the
+    // token (on every successful CSRF check, even if the request then fails
+    // for another reason), update *all* _csrf inputs on the page so the next
+    // submit from either form uses the fresh value.
+    if (!payload || typeof payload.csrf_token !== "string" || !payload.csrf_token) {
+        return;
+    }
+    document.querySelectorAll('input[name="_csrf"]').forEach(input => {
+        input.value = payload.csrf_token;
+    });
+}
+
+// Conditional UI — a background navigator.credentials.get() with
+// mediation: "conditional" so the browser can offer saved passkeys in the
+// email field's autofill menu. Resolves when the user picks one.
+let conditionalAbort = null;
+
+async function fetchAuthOptions() {
+    const csrfInput = loginForm.querySelector('input[name="_csrf"]');
+    if (!csrfInput) return null;
+    const body = new FormData();
+    body.append("_csrf", csrfInput.value);
+    const resp = await fetch("/auth/{{ method_key }}/options", {
+        method: "POST",
+        body,
+        credentials: "same-origin",
+    });
+    const payload = await resp.json();
+    syncCsrf(loginForm, payload);
+    return resp.ok ? payload : null;
+}
+
+async function completePasskeyLogin(credential, csrfToken) {
+    const completionData = new FormData();
+    completionData.append("_csrf", csrfToken);
+    completionData.append("credential", JSON.stringify(serializeAssertion(credential)));
+    const resp = await fetch("/auth/{{ method_key }}/complete", {
+        method: "POST",
+        body: completionData,
+        credentials: "same-origin",
+    });
+    const payload = await resp.json();
+    syncCsrf(loginForm, payload);
+    if (!resp.ok) {
+        loginStatus.textContent = payload.error || "Passkey sign-in failed.";
+        return false;
+    }
+    window.location.href = payload.redirect || "/";
+    return true;
+}
+
+async function startConditionalAuth() {
+    if (!loginForm || !window.PublicKeyCredential) return;
+    if (typeof PublicKeyCredential.isConditionalMediationAvailable !== "function") return;
+    try {
+        if (!(await PublicKeyCredential.isConditionalMediationAvailable())) return;
+    } catch { return; }
+
+    const options = await fetchAuthOptions();
+    if (!options) return;
+
+    conditionalAbort = new AbortController();
+    try {
+        const credential = await navigator.credentials.get({
+            publicKey: normalizeAuthenticationOptions(options.options),
+            mediation: "conditional",
+            signal: conditionalAbort.signal,
+        });
+        if (credential) {
+            await completePasskeyLogin(credential, options.csrf_token);
+        }
+    } catch (err) {
+        if (err?.name !== "AbortError") {
+            console.warn("Conditional passkey auth failed:", err);
+        }
+    } finally {
+        conditionalAbort = null;
+    }
+}
+
+if (loginForm) {
+    loginForm.addEventListener("submit", async event => {
+        event.preventDefault();
+        if (!window.PublicKeyCredential) {
+            loginStatus.textContent = "This browser does not support passkeys.";
+            return;
+        }
+        // Cancel the background conditional-UI call so it doesn't race with
+        // the modal picker the button triggers.
+        conditionalAbort?.abort();
+
+        loginStatus.textContent = "Preparing passkey sign-in...";
+        const options = await fetchAuthOptions();
+        if (!options) {
+            loginStatus.textContent = "Unable to start passkey sign-in.";
+            return;
+        }
+
+        try {
+            const credential = await navigator.credentials.get({
+                publicKey: normalizeAuthenticationOptions(options.options),
+            });
+            await completePasskeyLogin(credential, options.csrf_token);
+        } catch (error) {
+            loginStatus.textContent = error?.message || "Passkey sign-in was cancelled.";
+        }
+    });
+
+    // Kick off conditional UI on page load. Runs concurrently with the button
+    // flow — whichever the user engages with first wins.
+    startConditionalAuth();
+}
+
+function normalizeRegistrationOptions(options) {
+    options.challenge = base64urlToBuffer(options.challenge);
+    options.user.id = base64urlToBuffer(options.user.id);
+    options.excludeCredentials = (options.excludeCredentials || []).map(credential => ({
+        ...credential,
+        id: base64urlToBuffer(credential.id),
+    }));
+    return options;
+}
+
+function serializeRegistrationCredential(credential) {
+    return {
+        id: credential.id,
+        rawId: bufferToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+            attestationObject: bufferToBase64url(credential.response.attestationObject),
+            clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+            transports: credential.response.getTransports ? credential.response.getTransports() : [],
+        },
+    };
+}
+
+if (signupForm) {
+    signupForm.addEventListener("submit", async event => {
+        event.preventDefault();
+        if (!window.PublicKeyCredential) {
+            signupStatus.textContent = "This browser does not support passkeys.";
+            return;
+        }
+
+        signupStatus.textContent = "Preparing account creation...";
+        const formData = new FormData(signupForm);
+        const optionsResponse = await fetch("/auth/{{ method_key }}/register/options", {
+            method: "POST",
+            body: formData,
+            credentials: "same-origin",
+        });
+        const optionsPayload = await optionsResponse.json();
+        syncCsrf(signupForm, optionsPayload);
+        if (!optionsResponse.ok) {
+            signupStatus.textContent = optionsPayload.error || "Unable to start passkey signup.";
+            return;
+        }
+
+        try {
+            const credential = await navigator.credentials.create({
+                publicKey: normalizeRegistrationOptions(optionsPayload.options),
+            });
+            const completionData = new FormData();
+            completionData.append("_csrf", optionsPayload.csrf_token || formData.get("_csrf"));
+            completionData.append("credential", JSON.stringify(serializeRegistrationCredential(credential)));
+
+            const completionResponse = await fetch("/auth/{{ method_key }}/register/complete", {
+                method: "POST",
+                body: completionData,
+                credentials: "same-origin",
+            });
+            const completionPayload = await completionResponse.json();
+            syncCsrf(signupForm, completionPayload);
+            if (!completionResponse.ok) {
+                signupStatus.textContent = completionPayload.error || "Passkey signup failed.";
+                return;
+            }
+
+            window.location.href = completionPayload.redirect || "/";
+        } catch (error) {
+            signupStatus.textContent = error?.message || "Passkey signup was cancelled.";
+        }
+    });
+}
+</script>
+{% endblock %}

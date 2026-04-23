@@ -45,7 +45,7 @@
     <p><strong>Client ID:</strong> <code>{{ client.client_id }}</code>
         <button type="button" class="sk-btn-outline sk-btn-small" onclick="copyValue(this, '{{ client.client_id }}')">Copy</button>
     </p>
-    <p><strong>Client Secret:</strong> <code>{{ client.client_secret[:8] }}••••••••</code></p>
+    <p><strong>Client Secret:</strong> <em class="sk-hint">Stored as a salted hash &mdash; not recoverable. Use <strong>Regenerate</strong> to issue a new secret.</em></p>
     <form method="post" action="/admin/oauth-clients/{{ client.id }}/regenerate-secret" style="display: inline;">
         {{ csrf_field() }}
         <button type="submit" class="sk-btn-outline sk-btn-small" onclick="return confirm('Regenerate secret? The old secret will stop working immediately.')">Regenerate Secret</button>

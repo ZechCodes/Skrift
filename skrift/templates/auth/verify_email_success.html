@@ -1,0 +1,22 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Sign-in confirmed - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .verify-email-result {
+        max-width: 480px;
+        margin: 4rem auto;
+        padding: 2rem;
+        text-align: center;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="verify-email-result">
+    <h1>Signed in</h1>
+    <p>Your account is linked. You can safely close this tab.</p>
+    <p><a href="/">Go to the home page</a></p>
+</section>
+{% endblock %}

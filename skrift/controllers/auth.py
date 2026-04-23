@@ -4,94 +4,247 @@ Supports multiple OAuth providers: Google, GitHub, Microsoft, Discord, Facebook,
 Also supports a development-only "dummy" provider for testing.
 """
 
-import base64
-import fnmatch
 import hashlib
+import json
 import logging
-import secrets
 from typing import Annotated
-from urllib.parse import urlencode, urlparse
-
-import httpx
+from uuid import UUID
 from litestar import Controller, Request, get, post
 from litestar.exceptions import HTTPException, NotFoundException
 from litestar.params import Parameter
-from litestar.response import Redirect, Template as TemplateResponse
+from litestar.response import Redirect, Response, Template as TemplateResponse
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from skrift.auth.oauth_account_service import find_or_create_oauth_user
-from skrift.auth.providers import NormalizedUserData, get_oauth_provider
-from skrift.config import get_settings
+from skrift.auth.email_link import (
+    begin_email_link_challenge,
+    build_claim_url,
+    clear_pending_link_state,
+    expiry_from_payload,
+    get_pending_link_masked_email,
+    pop_pending_link_metadata,
+    pop_pending_link_tokens,
+    verify_link_token,
+)
+from skrift.auth.identities import ResolvedPrimaryIdentity
+from skrift.auth.methods import get_primary_auth_method
+from skrift.auth.oauth_account_service import (
+    EmailVerificationRequired,
+    LoginResult,
+    complete_verified_email_link,
+    create_login_result_for_new_user,
+    find_login_result_for_passkey_credential,
+    find_or_create_user_for_identity,
+)
+from skrift.auth.oauth_flow import exchange_and_fetch_oauth_identity
+from skrift.auth.providers import NormalizedUserData
+from skrift.auth.second_factors.passkey_service import (
+    PasskeyRuntimeUnavailableError,
+    PasskeyStateError,
+    PasskeyVerificationError,
+    begin_primary_passkey_authentication,
+    begin_primary_passkey_registration,
+    begin_passkey_authentication as begin_passkey_authentication_flow,
+    begin_passkey_registration as begin_passkey_registration_flow,
+    complete_primary_passkey_authentication,
+    complete_primary_passkey_registration,
+    complete_passkey_authentication as complete_passkey_authentication_flow,
+    complete_passkey_registration as complete_passkey_registration_flow,
+    get_primary_passkey_registration_state,
+)
+from skrift.auth.second_factors.registry import get_second_factor_method
+from skrift.auth.second_factors.services import (
+    build_second_factor_transition_decision,
+    deactivate_second_factor_enrollment,
+    get_second_factor_enrollment_by_credential_id,
+    list_available_second_factor_descriptors,
+    list_second_factor_enrollments_for_factor,
+    save_passkey_enrollment,
+    touch_second_factor_enrollment,
+)
+from skrift.auth.session_service import (
+    apply_pending_authentication_transition,
+    begin_pending_authentication,
+    clear_pending_authentication,
+    complete_pending_authentication,
+    finalize_authenticated_session,
+    get_pending_authentication,
+)
 from skrift.db.models.user import User
 from skrift.auth.session_keys import (
     SESSION_AUTH_NEXT,
-    SESSION_OAUTH_CODE_VERIFIER,
-    SESSION_OAUTH_PROVIDER,
-    SESSION_OAUTH_STATE,
-    SESSION_USER_EMAIL,
     SESSION_USER_ID,
-    SESSION_USER_NAME,
-    SESSION_USER_PICTURE_URL,
 )
 from jinja2.exceptions import TemplatesNotFound
 
 from skrift.forms import verify_csrf
-from skrift.lib.flash import flash_error, flash_info, flash_success
+from skrift.forms.core import CSRF_SESSION_KEY
+from skrift.lib.flash import flash_error, flash_success, get_flash_messages
 from skrift.lib.hooks import hooks
+from skrift.lib.redirects import get_safe_redirect_url, is_safe_redirect_url
 from skrift.lib.template import resolve_template_name
-from skrift.setup.providers import DUMMY_PROVIDER_KEY, get_provider_info
+from skrift.config import get_settings
+from skrift.setup.providers import DUMMY_PROVIDER_KEY
 
 logger = logging.getLogger(__name__)
 
 
-def _is_safe_redirect_url(url: str, allowed_domains: list[str]) -> bool:
-    """Check if URL is safe to redirect to.
+async def _build_post_login_redirect(request: Request, settings, login_result: LoginResult) -> Redirect:
+    """Run post-login hooks and return the final redirect target."""
+    await hooks.do_action("after_login", login_result, request)
+    if login_result.is_new_user:
+        await hooks.do_action("after_user_created", login_result, request)
 
-    Supports wildcard patterns using fnmatch-style matching:
-    - "*.example.com" matches any subdomain of example.com
-    - "app-*.example.com" matches app-foo.example.com, app-bar.example.com, etc.
-    - "example.com" (no wildcards) matches example.com and all subdomains
+    next_url = get_safe_redirect_url(request, settings.auth.allowed_redirect_domains)
+    next_url = await hooks.apply_filters("login_redirect", next_url, login_result, request)
+    return Redirect(path=next_url)
+
+
+async def _complete_pending_login(
+    request: Request,
+    settings,
+    user: User,
+    pending_auth,
+) -> Redirect:
+    """Promote pending auth and resume the normal post-login hook/redirect flow."""
+    complete_pending_authentication(request, user, pending_auth=pending_auth)
+    return await _build_post_login_redirect(
+        request,
+        settings,
+        LoginResult(
+            user=user,
+            identity_record=None,
+            is_new_user=pending_auth.is_new_user,
+            method_key=pending_auth.method_key,
+            method_type=pending_auth.method_type,
+        ),
+    )
+
+
+async def _get_authenticated_user(request: Request, db_session: AsyncSession) -> User | None:
+    """Load the currently authenticated user from the session."""
+    user_id = request.session.get(SESSION_USER_ID)
+    if not user_id:
+        return None
+
+    result = await db_session.execute(select(User).where(User.id == UUID(str(user_id))))
+    return result.scalar_one_or_none()
+
+
+def _csrf_error(request: Request, error: str, *, status_code: int = 400) -> Response:
+    """JSON error that always includes the current CSRF token.
+
+    ``verify_csrf`` rotates the session token on success, so error responses
+    emitted *after* CSRF validation must return the new token — otherwise the
+    client's hidden ``_csrf`` field goes stale and the next submit fails with
+    ``invalid_csrf``.
     """
-    # Relative paths are always safe (but not protocol-relative //domain.com)
-    if url.startswith("/") and not url.startswith("//"):
-        return True
-
-    # Parse absolute URL
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-
-    # Must have scheme and netloc
-    if not parsed.scheme or not parsed.netloc:
-        return False
-
-    # Only allow http/https
-    if parsed.scheme not in ("http", "https"):
-        return False
-
-    # Check if domain matches allowed list
-    host = parsed.netloc.lower().split(":")[0]  # Remove port
-    for pattern in allowed_domains:
-        pattern = pattern.lower()
-        # If pattern contains wildcards, use fnmatch
-        if "*" in pattern or "?" in pattern:
-            if fnmatch.fnmatch(host, pattern):
-                return True
-        else:
-            # No wildcards: exact match or subdomain match
-            if host == pattern or host.endswith(f".{pattern}"):
-                return True
-
-    return False
+    return Response(
+        content={
+            "error": error,
+            "csrf_token": request.session.get(CSRF_SESSION_KEY, ""),
+        },
+        status_code=status_code,
+    )
 
 
-def _get_safe_redirect_url(request: Request, allowed_domains: list[str], default: str = "/") -> str:
-    """Get the next redirect URL from session, validating it's safe."""
-    next_url = request.session.pop(SESSION_AUTH_NEXT, None)
-    if next_url and _is_safe_redirect_url(next_url, allowed_domains):
-        return next_url
-    return default
+async def _create_primary_passkey_signup_login(
+    db_session: AsyncSession,
+    *,
+    method_key: str,
+    factor_key: str,
+    email: str,
+    name: str | None,
+    registration_result,
+) -> LoginResult:
+    """Create a new user plus passkey enrollment for primary passkey signup.
+
+    Email uniqueness is enforced at the database level (unique index on
+    ``users.email``). We do not pre-check here — a pre-check would leak a
+    user-enumeration signal and lose the race against concurrent signups.
+    The caller is responsible for translating ``IntegrityError`` into a
+    generic failure response.
+    """
+    login_result = await create_login_result_for_new_user(
+        db_session,
+        email=email,
+        name=name,
+        picture_url=None,
+        method_key=method_key,
+        method_type="passkey",
+    )
+    await save_passkey_enrollment(
+        db_session,
+        user_id=str(login_result.user.id),
+        factor_key=factor_key,
+        display_name=name,
+        credential_id=registration_result.credential_id,
+        public_key=registration_result.public_key,
+        sign_count=registration_result.sign_count,
+        transports=registration_result.transports,
+        enrollment_metadata=registration_result.enrollment_metadata,
+    )
+    return login_result
+
+
+def _get_default_passkey_factor_key(settings) -> str | None:
+    """Return the first configured passkey factor key, if any."""
+    for key in settings.auth.second_factors.get_method_keys():
+        if settings.auth.second_factors.get_method_type(key) == "passkey":
+            return key
+    return None
+
+
+def _is_passkey_factor(settings, factor_key: str) -> bool:
+    """Return True when the factor key is configured as a passkey method."""
+    return settings.auth.second_factors.get_method_type(factor_key) == "passkey"
+
+
+def _get_passkey_factor_key_for_method(settings, method_key: str) -> str:
+    """Resolve the passkey enrollment key to use for a primary passkey method."""
+    config = settings.auth.get_method_config(method_key)
+    factor_key = config.get("factor_key", "") or method_key
+    return str(factor_key)
+
+
+async def _finalize_primary_login(
+    request: Request,
+    db_session: AsyncSession,
+    settings,
+    login_result,
+    *,
+    identity: ResolvedPrimaryIdentity,
+) -> Redirect:
+    """Apply pending-auth transition policy and produce the post-auth redirect."""
+    pending_auth = begin_pending_authentication(
+        request,
+        method_key=login_result.method_key,
+        method_type=login_result.method_type,
+        identity=identity,
+        user_id=str(login_result.user.id),
+        is_new_user=login_result.is_new_user,
+    )
+    initial_decision = await build_second_factor_transition_decision(
+        db_session,
+        settings,
+        login_result,
+        pending_auth,
+    )
+    decision = await apply_pending_authentication_transition(
+        request,
+        login_result.user,
+        login_result=login_result,
+        pending_auth=pending_auth,
+        initial_decision=initial_decision,
+    )
+
+    if not decision.promote_immediately:
+        return Redirect(path=decision.next_url)
+
+    return await _build_post_login_redirect(request, settings, login_result)
+
+
 
 
 async def _exchange_and_fetch(
@@ -106,7 +259,7 @@ async def _exchange_and_fetch(
     tenant: str | None = None,
     provider_type: str | None = None,
 ) -> tuple[NormalizedUserData, dict, dict]:
-    """Exchange authorization code for token, fetch user info, and extract normalized data.
+    """Compatibility wrapper around the generic OAuth flow helper.
 
     Args:
         provider_key: The OAuth provider identifier.
@@ -122,46 +275,27 @@ async def _exchange_and_fetch(
     Returns:
         Tuple of (NormalizedUserData, raw_user_info_dict, tokens_dict).
     """
-    provider = get_oauth_provider(provider_key, provider_type=provider_type)
-
-    # Resolve credentials
-    if client_id is None or client_secret is None:
-        provider_config = settings.auth.providers.get(provider_key)
-        if not provider_config:
-            raise ValueError(f"Provider {provider_key} not configured")
-        client_id = provider_config.client_id
-        client_secret = provider_config.client_secret
-        tenant = getattr(provider_config, "tenant_id", None)
-
-    # Build token request
-    token_url = provider.resolve_url(provider.provider_info.token_url, tenant)
-    token_data = provider.build_token_data(client_id, client_secret, code, redirect_uri, code_verifier)
-    token_headers = provider.build_token_headers(client_id, client_secret)
-
-    from skrift.lib.observability import span
-
-    with span("oauth.exchange:{provider_key}", provider_key=provider_key):
-        async with httpx.AsyncClient() as client:
-            response = await client.post(token_url, data=token_data, headers=token_headers)
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to exchange code for tokens: {response.text}",
-                )
-            tokens = response.json()
-
-        access_token = tokens.get("access_token")
-        if not access_token:
-            raise HTTPException(status_code=400, detail="No access token received")
-
-        # Fetch and normalize user info
-        user_info = await provider.fetch_user_info(access_token)
-        user_data = provider.extract_user_data(user_info)
-
-    if not user_data.oauth_id:
-        raise HTTPException(status_code=400, detail="Could not determine user ID")
-
-    return user_data, user_info, tokens
+    identity, user_info, tokens = await exchange_and_fetch_oauth_identity(
+        provider_key,
+        settings,
+        code,
+        redirect_uri,
+        code_verifier,
+        client_id=client_id,
+        client_secret=client_secret,
+        tenant=tenant,
+        provider_type=provider_type,
+    )
+    return (
+        NormalizedUserData(
+            oauth_id=identity.subject_id,
+            email=identity.email,
+            name=identity.name,
+            picture_url=identity.picture_url,
+        ),
+        user_info,
+        tokens,
+    )
 
 
 def _set_login_session(request: Request, user: "User") -> None:
@@ -170,30 +304,7 @@ def _set_login_session(request: Request, user: "User") -> None:
     Preserves flash/flash_messages across the rotation so login
     success messages aren't lost.
     """
-    # Preserve flash state, notification ID, and auth redirect
-    flash = request.session.get("flash")
-    flash_messages = request.session.get("flash_messages")
-    nid = request.session.get("_nid")
-    auth_next = request.session.get(SESSION_AUTH_NEXT)
-
-    # Clear session to rotate the cookie
-    request.session.clear()
-
-    # Repopulate with user data
-    request.session[SESSION_USER_ID] = str(user.id)
-    request.session[SESSION_USER_NAME] = user.name
-    request.session[SESSION_USER_EMAIL] = user.email
-    request.session[SESSION_USER_PICTURE_URL] = user.picture_url
-
-    # Restore flash state
-    if flash is not None:
-        request.session["flash"] = flash
-    if flash_messages is not None:
-        request.session["flash_messages"] = flash_messages
-    if nid is not None:
-        request.session["_nid"] = nid
-    if auth_next is not None:
-        request.session[SESSION_AUTH_NEXT] = auth_next
+    finalize_authenticated_session(request, user)
 
 
 class AuthController(Controller):
@@ -208,60 +319,11 @@ class AuthController(Controller):
     ) -> Redirect | TemplateResponse:
         """Redirect to OAuth provider consent screen, or show dummy login form."""
         settings = get_settings()
-        provider_type = settings.auth.get_provider_type(provider)
-        provider_info = get_provider_info(provider_type)
-
-        # Store next URL in session if provided and valid
-        if next_url and _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
-            request.session[SESSION_AUTH_NEXT] = next_url
-
-        if not provider_info:
-            raise NotFoundException(f"Unknown provider: {provider}")
-
-        if provider not in settings.auth.providers:
+        if provider not in settings.auth.get_method_keys():
             raise NotFoundException(f"Provider {provider} not configured")
 
-        # Dummy provider shows local login form instead of redirecting to OAuth
-        if provider == DUMMY_PROVIDER_KEY:
-            flash = request.session.pop("flash", None)
-            template_name = resolve_template_name(
-                request.app.template_engine, "dummy_login.html", "auth/dummy_login.html"
-            )
-            return TemplateResponse(
-                template_name,
-                context={"flash": flash},
-            )
-
-        # Generate CSRF state token
-        state = secrets.token_urlsafe(32)
-        request.session[SESSION_OAUTH_STATE] = state
-        request.session[SESSION_OAUTH_PROVIDER] = provider
-
-        # Get the provider strategy for PKCE + auth params
-        oauth_provider = get_oauth_provider(provider)
-
-        # Generate PKCE for providers that require it (Twitter)
-        code_challenge = None
-        if oauth_provider.requires_pkce:
-            code_verifier = secrets.token_urlsafe(64)[:128]
-            request.session[SESSION_OAUTH_CODE_VERIFIER] = code_verifier
-            code_challenge = base64.urlsafe_b64encode(
-                hashlib.sha256(code_verifier.encode()).digest()
-            ).decode().rstrip("=")
-
-        # Build auth URL
-        provider_config = settings.auth.providers[provider]
-        tenant = getattr(provider_config, "tenant_id", None)
-        auth_url = oauth_provider.resolve_url(provider_info.auth_url, tenant)
-        params = oauth_provider.build_auth_params(
-            client_id=provider_config.client_id,
-            redirect_uri=settings.auth.get_redirect_uri(provider),
-            scopes=provider_config.scopes,
-            state=state,
-            code_challenge=code_challenge,
-        )
-
-        return Redirect(path=f"{auth_url}?{urlencode(params)}")
+        method = get_primary_auth_method(provider)
+        return await method.begin_auth(request, next_url=next_url)
 
     @get("/{provider:str}/callback")
     async def oauth_callback(
@@ -275,52 +337,107 @@ class AuthController(Controller):
     ) -> Redirect:
         """Handle OAuth callback from provider."""
         settings = get_settings()
-        provider_type = settings.auth.get_provider_type(provider)
-
-        if not get_provider_info(provider_type):
-            raise NotFoundException(f"Unknown provider: {provider}")
+        if provider not in settings.auth.get_method_keys():
+            raise NotFoundException(f"Provider {provider} not configured")
 
         if error:
-            flash_error(request, f"OAuth error: {error}")
+            # Do not reflect the provider's `error` parameter into the UI —
+            # it's attacker-influenceable and offers nothing the user can
+            # act on. Log the raw reason for operator diagnostics.
+            logger.info(
+                "OAuth callback surfaced provider error for '%s': %s",
+                provider,
+                error,
+            )
+            flash_error(
+                request,
+                "Authentication with that provider failed. Please try again.",
+            )
             return Redirect(path="/auth/login")
 
-        # Verify CSRF state
-        stored_state = request.session.pop(SESSION_OAUTH_STATE, None)
-        if not oauth_state or oauth_state != stored_state:
+        method = get_primary_auth_method(provider)
+        try:
+            completion = await method.complete_auth(
+                request,
+                code=code,
+                oauth_state=oauth_state,
+                error=error,
+            )
+        except HTTPException:
             logger.warning(
-                "OAuth state mismatch: stored=%s, received=%s, session_keys=%s",
-                stored_state,
-                oauth_state,
+                "Auth completion failed for provider '%s'; session_keys=%s",
+                provider,
                 list(request.session.keys()),
             )
-            raise HTTPException(status_code=400, detail="Invalid OAuth state")
+            raise
 
-        if not code:
-            raise HTTPException(status_code=400, detail="Missing authorization code")
-
-        code_verifier = request.session.pop(SESSION_OAUTH_CODE_VERIFIER, None)
-
-        user_data, user_info, tokens = await _exchange_and_fetch(
-            provider, settings, code,
-            settings.auth.get_redirect_uri(provider),
-            code_verifier,
+        resolution = await find_or_create_user_for_identity(
+            db_session,
+            completion.identity,
+            tokens=completion.tokens,
         )
 
-        login_result = await find_or_create_oauth_user(
-            db_session, provider, user_data, user_info, tokens=tokens
-        )
+        if isinstance(resolution, EmailVerificationRequired):
+            # Email match without provider attestation — defer the actual
+            # OAuth account link until the user proves control of the inbox
+            # by clicking a short-lived signed URL.
+            await db_session.commit()
+            return await self._begin_email_link_challenge(request, settings, resolution)
+
         await db_session.commit()
 
         flash_success(request, "Successfully logged in!")
-        _set_login_session(request, login_result.user)
+        return await _finalize_primary_login(
+            request,
+            db_session,
+            settings,
+            resolution,
+            identity=completion.identity,
+        )
 
-        await hooks.do_action("after_login", login_result, request)
-        if login_result.is_new_user:
-            await hooks.do_action("after_user_created", login_result, request)
+    async def _begin_email_link_challenge(
+        self,
+        request: Request,
+        settings,
+        resolution: EmailVerificationRequired,
+    ) -> Redirect:
+        """Start the deferred-link email challenge and redirect to the pending page."""
+        from skrift.auth.session_service import (
+            PENDING_AUTH_STAGE_EMAIL_LINK_REQUIRED,
+            begin_pending_authentication,
+        )
 
-        next_url = _get_safe_redirect_url(request, settings.auth.allowed_redirect_domains)
-        next_url = await hooks.apply_filters("login_redirect", next_url, login_result, request)
-        return Redirect(path=next_url)
+        pending_auth = begin_pending_authentication(
+            request,
+            method_key=resolution.identity.method_key,
+            method_type=resolution.identity.method_type,
+            identity=resolution.identity,
+            user_id=resolution.existing_user_id,
+            is_new_user=False,
+            stage=PENDING_AUTH_STAGE_EMAIL_LINK_REQUIRED,
+        )
+
+        email_backend = request.app.state.email_backend
+        try:
+            await begin_email_link_challenge(
+                request,
+                settings=settings,
+                email_backend=email_backend,
+                resolution=resolution,
+                pending_auth_id=pending_auth.pending_auth_id,
+                template_engine=request.app.template_engine.engine,
+            )
+        except Exception:
+            logger.exception("Failed to dispatch email link challenge")
+            clear_pending_authentication(request)
+            clear_pending_link_state(request)
+            flash_error(
+                request,
+                "We couldn't send the confirmation email. Please try again.",
+            )
+            return Redirect(path="/auth/login")
+
+        return Redirect(path="/auth/verify-email/pending")
 
     @get("/login")
     async def login_page(
@@ -330,25 +447,27 @@ class AuthController(Controller):
     ) -> TemplateResponse:
         """Show login page with available providers."""
         flash = request.session.pop("flash", None)
+        flash_messages = get_flash_messages(request)
         settings = get_settings()
 
         # Store next URL in session if provided and valid
-        if next_url and _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
+        if next_url and is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
             request.session[SESSION_AUTH_NEXT] = next_url
 
         # Get configured providers (excluding dummy from main list)
-        configured_providers = list(settings.auth.providers.keys())
+        configured_methods = settings.auth.get_method_keys()
         providers = {}
-        for key in configured_providers:
-            if key == DUMMY_PROVIDER_KEY:
+        for key in configured_methods:
+            descriptor = get_primary_auth_method(key).get_descriptor()
+            if descriptor.method_type == "dummy":
                 continue
-            ptype = settings.auth.get_provider_type(key)
-            info = get_provider_info(ptype)
-            if info:
-                providers[key] = info
+            providers[key] = descriptor
 
         # Check if dummy provider is configured
-        has_dummy = DUMMY_PROVIDER_KEY in settings.auth.providers
+        has_dummy = any(
+            settings.auth.get_primary_auth_method_type(key) == "dummy"
+            for key in configured_methods
+        )
 
         template_name = resolve_template_name(
             request.app.template_engine, "login.html", "auth/login.html"
@@ -357,10 +476,684 @@ class AuthController(Controller):
             template_name,
             context={
                 "flash": flash,
+                "flash_messages": flash_messages,
                 "providers": providers,
                 "has_dummy": has_dummy,
             },
         )
+
+    @post("/{provider:str}/options")
+    async def begin_primary_method_options(
+        self,
+        request: Request,
+        provider: str,
+    ) -> Response:
+        """Return browser auth options for interactive primary methods."""
+        settings = get_settings()
+        if provider not in settings.auth.get_method_keys():
+            raise NotFoundException(f"Provider {provider} not configured")
+        if settings.auth.get_primary_auth_method_type(provider) != "passkey":
+            return _csrf_error(request, "unsupported_method")
+        if not await verify_csrf(request):
+            return _csrf_error(request, "invalid_csrf")
+
+        try:
+            options = begin_primary_passkey_authentication(request, settings, provider)
+        except PasskeyRuntimeUnavailableError as exc:
+            return _csrf_error(request, str(exc), status_code=503)
+
+        return Response(
+            content={
+                "options": options,
+                "csrf_token": request.session.get(CSRF_SESSION_KEY, ""),
+            }
+        )
+
+    @post("/{provider:str}/register/options")
+    async def begin_primary_method_registration(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        provider: str,
+    ) -> Response:
+        """Return browser registration options for primary passkey signup."""
+        settings = get_settings()
+        if provider not in settings.auth.get_method_keys():
+            raise NotFoundException(f"Provider {provider} not configured")
+        if settings.auth.get_primary_auth_method_type(provider) != "passkey":
+            return _csrf_error(request, "unsupported_method")
+        if not await verify_csrf(request):
+            return _csrf_error(request, "invalid_csrf")
+
+        form_data = await request.form()
+        email = str(form_data.get("email", "")).strip().lower()
+        name = str(form_data.get("name", "")).strip() or None
+        if not email:
+            return _csrf_error(request, "email_required")
+
+        # Check for duplicate email BEFORE returning registration options — otherwise
+        # the browser prompts for passkey creation and the authenticator saves the
+        # credential even though the signup will fail in /register/complete, leaving
+        # an orphan entry in the user's password manager. The response is a
+        # generic `invalid_request` so an attacker cannot probe whether a given
+        # email is already registered; the real reason is logged for diagnostics.
+        existing = await db_session.execute(select(User).where(User.email == email))
+        if existing.scalar_one_or_none() is not None:
+            logger.info(
+                "Passkey signup rejected: email already registered (email_hash=%s)",
+                hashlib.sha256(email.encode()).hexdigest()[:16],
+            )
+            return _csrf_error(request, "invalid_request")
+
+        try:
+            options = begin_primary_passkey_registration(
+                request,
+                settings,
+                method_key=provider,
+                email=email,
+                name=name,
+            )
+        except PasskeyRuntimeUnavailableError as exc:
+            return _csrf_error(request, str(exc), status_code=503)
+
+        return Response(
+            content={
+                "options": options,
+                "csrf_token": request.session.get(CSRF_SESSION_KEY, ""),
+            }
+        )
+
+    @post("/{provider:str}/register/complete")
+    async def complete_primary_method_registration(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        provider: str,
+    ) -> Response:
+        """Create a new account from a primary passkey registration."""
+        settings = get_settings()
+        if provider not in settings.auth.get_method_keys():
+            raise NotFoundException(f"Provider {provider} not configured")
+        if settings.auth.get_primary_auth_method_type(provider) != "passkey":
+            return _csrf_error(request, "unsupported_method")
+        if not await verify_csrf(request):
+            return _csrf_error(request, "invalid_csrf")
+
+        signup_state = get_primary_passkey_registration_state(request)
+        if signup_state is None or signup_state.method_key != provider:
+            return _csrf_error(request, "registration_state_missing")
+
+        form_data = await request.form()
+        credential_raw = str(form_data.get("credential", "")).strip()
+        if not credential_raw:
+            return _csrf_error(request, "credential_required")
+
+        try:
+            credential = json.loads(credential_raw)
+        except json.JSONDecodeError:
+            return _csrf_error(request, "invalid_credential")
+
+        try:
+            registration = complete_primary_passkey_registration(
+                request,
+                settings,
+                method_key=provider,
+                credential=credential,
+            )
+            factor_key = _get_passkey_factor_key_for_method(settings, provider)
+            login_result = await _create_primary_passkey_signup_login(
+                db_session,
+                method_key=provider,
+                factor_key=factor_key,
+                email=signup_state.email,
+                name=signup_state.name,
+                registration_result=registration,
+            )
+        except PasskeyRuntimeUnavailableError as exc:
+            return _csrf_error(request, str(exc), status_code=503)
+        except IntegrityError:
+            # Email uniqueness collision — either a concurrent signup won
+            # the race or the email was registered between begin and
+            # complete. Return a generic error to avoid leaking an
+            # enumeration signal; real reason is logged.
+            await db_session.rollback()
+            logger.info(
+                "Passkey signup rejected on complete: email collision (email_hash=%s)",
+                hashlib.sha256(signup_state.email.encode()).hexdigest()[:16],
+            )
+            return _csrf_error(request, "invalid_request")
+        except (PasskeyStateError, PasskeyVerificationError, ValueError) as exc:
+            return _csrf_error(request, str(exc))
+
+        redirect = await _finalize_primary_login(
+            request,
+            db_session,
+            settings,
+            login_result,
+            identity=ResolvedPrimaryIdentity(
+                method_key=provider,
+                method_type="passkey",
+                subject_id=registration.credential_id,
+                email=login_result.user.email,
+                name=login_result.user.name,
+                picture_url=login_result.user.picture_url,
+                raw_metadata={
+                    "credential_id": registration.credential_id,
+                    "factor_key": factor_key,
+                },
+                provided_fields={
+                    field_name
+                    for field_name, value in (
+                        ("email", login_result.user.email),
+                        ("name", login_result.user.name),
+                        ("picture_url", login_result.user.picture_url),
+                    )
+                    if value
+                },
+            ),
+        )
+        await db_session.commit()
+        return Response(content={"ok": True, "redirect": redirect.url}, status_code=201)
+
+    @post("/{provider:str}/complete")
+    async def complete_primary_method_auth(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        provider: str,
+    ) -> Response:
+        """Complete an interactive primary-auth method and start the login session."""
+        settings = get_settings()
+        if provider not in settings.auth.get_method_keys():
+            raise NotFoundException(f"Provider {provider} not configured")
+        if settings.auth.get_primary_auth_method_type(provider) != "passkey":
+            return _csrf_error(request, "unsupported_method")
+        if not await verify_csrf(request):
+            return _csrf_error(request, "invalid_csrf")
+
+        form_data = await request.form()
+        credential_raw = str(form_data.get("credential", "")).strip()
+        if not credential_raw:
+            return _csrf_error(request, "credential_required")
+
+        try:
+            credential = json.loads(credential_raw)
+        except json.JSONDecodeError:
+            return _csrf_error(request, "invalid_credential")
+
+        credential_id = str(credential.get("id") or credential.get("rawId") or "").strip()
+        if not credential_id:
+            return _csrf_error(request, "credential_id_required")
+
+        factor_key = _get_passkey_factor_key_for_method(settings, provider)
+        enrollment = await get_second_factor_enrollment_by_credential_id(
+            db_session,
+            factor_key=factor_key,
+            credential_id=credential_id,
+        )
+        if enrollment is None:
+            logger.info(
+                "Primary passkey login: credential not enrolled (credential_id=%s)",
+                credential_id[:16],
+            )
+            return _csrf_error(request, "invalid_credential")
+
+        try:
+            verification = complete_primary_passkey_authentication(
+                request,
+                settings,
+                method_key=provider,
+                enrollment=enrollment,
+                credential=credential,
+            )
+        except PasskeyRuntimeUnavailableError as exc:
+            return _csrf_error(request, str(exc), status_code=503)
+        except (PasskeyStateError, PasskeyVerificationError) as exc:
+            return _csrf_error(request, str(exc))
+
+        login_result = await find_login_result_for_passkey_credential(
+            db_session,
+            factor_key=factor_key,
+            method_key=provider,
+            credential_id=credential_id,
+        )
+        if login_result is None:
+            logger.info(
+                "Primary passkey login: enrollment lacks bound user (credential_id=%s)",
+                credential_id[:16],
+            )
+            return _csrf_error(request, "invalid_credential")
+
+        touch_second_factor_enrollment(
+            enrollment,
+            sign_count=verification.new_sign_count,
+            verification_metadata=verification.verification_metadata,
+        )
+        redirect = await _finalize_primary_login(
+            request,
+            db_session,
+            settings,
+            login_result,
+            identity=ResolvedPrimaryIdentity(
+                method_key=provider,
+                method_type="passkey",
+                subject_id=credential_id,
+                email=login_result.user.email,
+                name=login_result.user.name,
+                picture_url=login_result.user.picture_url,
+                raw_metadata={
+                    "credential_id": credential_id,
+                    "factor_key": factor_key,
+                },
+                provided_fields={
+                    field_name
+                    for field_name, value in (
+                        ("email", login_result.user.email),
+                        ("name", login_result.user.name),
+                        ("picture_url", login_result.user.picture_url),
+                    )
+                    if value
+                },
+                can_create_account=False,
+            ),
+        )
+        await db_session.commit()
+        return Response(content={"ok": True, "redirect": redirect.url})
+
+    @get("/passkeys")
+    async def passkeys_page(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+    ) -> Redirect | TemplateResponse:
+        """Render the passkey enrollment page for the current user."""
+        user = await _get_authenticated_user(request, db_session)
+        if user is None:
+            flash_error(request, "Please log in to manage passkeys.")
+            return Redirect(path="/auth/login?next=/auth/passkeys")
+
+        settings = get_settings()
+        factor_key = _get_default_passkey_factor_key(settings)
+        if not factor_key:
+            raise NotFoundException("No passkey second-factor method is configured")
+
+        enrollments = await list_second_factor_enrollments_for_factor(
+            db_session,
+            str(user.id),
+            factor_key,
+        )
+        method_descriptor = get_second_factor_method(factor_key).get_descriptor(settings)
+        template_name = resolve_template_name(
+            request.app.template_engine, "passkeys.html", "auth/passkeys.html"
+        )
+        return TemplateResponse(
+            template_name,
+            context={
+                "user": user,
+                "factor_key": factor_key,
+                "descriptor": method_descriptor,
+                "enrollments": enrollments,
+                "flash_messages": get_flash_messages(request),
+            },
+        )
+
+    @post("/passkeys/options")
+    async def begin_passkey_registration(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+    ) -> Response:
+        """Return browser registration options for a new passkey enrollment."""
+        user = await _get_authenticated_user(request, db_session)
+        if user is None:
+            return Response(content={"error": "unauthorized"}, status_code=401)
+        if not await verify_csrf(request):
+            return Response(content={"error": "invalid_csrf"}, status_code=400)
+
+        settings = get_settings()
+        factor_key = _get_default_passkey_factor_key(settings)
+        if not factor_key:
+            return Response(content={"error": "passkey_not_configured"}, status_code=404)
+
+        enrollments = await list_second_factor_enrollments_for_factor(
+            db_session,
+            str(user.id),
+            factor_key,
+        )
+        try:
+            options = begin_passkey_registration_flow(request, settings, user, enrollments)
+        except PasskeyRuntimeUnavailableError as exc:
+            return Response(content={"error": str(exc)}, status_code=503)
+
+        return Response(
+            content={
+                "options": options,
+                "csrf_token": request.session.get(CSRF_SESSION_KEY, ""),
+            }
+        )
+
+    @post("/passkeys/complete")
+    async def complete_passkey_registration(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+    ) -> Response:
+        """Persist a verified passkey enrollment for the current user."""
+        user = await _get_authenticated_user(request, db_session)
+        if user is None:
+            return Response(content={"error": "unauthorized"}, status_code=401)
+        if not await verify_csrf(request):
+            return Response(content={"error": "invalid_csrf"}, status_code=400)
+
+        settings = get_settings()
+        factor_key = _get_default_passkey_factor_key(settings)
+        if not factor_key:
+            return Response(content={"error": "passkey_not_configured"}, status_code=404)
+
+        form_data = await request.form()
+        display_name = str(form_data.get("display_name", "")).strip() or None
+        credential_raw = str(form_data.get("credential", "")).strip()
+        if not credential_raw:
+            return Response(content={"error": "credential_required"}, status_code=400)
+
+        try:
+            credential = json.loads(credential_raw)
+        except json.JSONDecodeError:
+            return Response(content={"error": "invalid_credential"}, status_code=400)
+
+        try:
+            verification = complete_passkey_registration_flow(request, settings, user, credential)
+            enrollment = await save_passkey_enrollment(
+                db_session,
+                user_id=str(user.id),
+                factor_key=factor_key,
+                display_name=display_name,
+                credential_id=verification.credential_id,
+                public_key=verification.public_key,
+                sign_count=verification.sign_count,
+                transports=verification.transports,
+                enrollment_metadata=verification.enrollment_metadata,
+            )
+        except PasskeyRuntimeUnavailableError as exc:
+            return Response(content={"error": str(exc)}, status_code=503)
+        except (PasskeyStateError, PasskeyVerificationError, ValueError) as exc:
+            return Response(content={"error": str(exc)}, status_code=400)
+
+        await db_session.commit()
+        return Response(
+            content={
+                "ok": True,
+                "enrollment": {
+                    "id": str(enrollment.id),
+                    "display_name": enrollment.display_name or "",
+                    "credential_id": enrollment.credential_id,
+                },
+            },
+            status_code=201,
+        )
+
+    @post("/passkeys/{enrollment_id:uuid}/delete")
+    async def delete_passkey(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        enrollment_id: UUID,
+    ) -> Redirect:
+        """Soft-delete a passkey enrollment owned by the current user.
+
+        Always redirects to ``/auth/passkeys`` regardless of outcome so a
+        malicious user cannot distinguish "not yours" from "does not
+        exist" (enumeration hygiene).
+        """
+        user = await _get_authenticated_user(request, db_session)
+        if user is None:
+            flash_error(request, "Please log in to manage passkeys.")
+            return Redirect(path="/auth/login?next=/auth/passkeys")
+
+        if not await verify_csrf(request):
+            logger.warning(
+                "Passkey deletion rejected: invalid CSRF (user_id=%s)",
+                user.id,
+            )
+            flash_error(request, "Your session expired. Please try again.")
+            return Redirect(path="/auth/passkeys")
+
+        deactivated = await deactivate_second_factor_enrollment(
+            db_session,
+            user_id=user.id,
+            enrollment_id=enrollment_id,
+        )
+        await db_session.commit()
+
+        if deactivated:
+            logger.info(
+                "Passkey enrollment removed (user_id=%s, enrollment_id=%s)",
+                user.id,
+                enrollment_id,
+            )
+            flash_success(request, "Passkey removed.")
+        return Redirect(path="/auth/passkeys")
+
+    @get("/verify")
+    async def verify_page(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+    ) -> Redirect | TemplateResponse:
+        """Show available second-factor verification options for a pending auth session."""
+        pending_auth = get_pending_authentication(request)
+        if pending_auth is None or pending_auth.user_id is None:
+            flash_error(request, "Your verification session is no longer available. Please log in again.")
+            clear_pending_authentication(request)
+            return Redirect(path="/auth/login")
+
+        settings = get_settings()
+        methods = await list_available_second_factor_descriptors(
+            db_session,
+            settings,
+            pending_auth.user_id,
+        )
+        if not methods:
+            flash_error(request, "No verification methods are available for this session. Please log in again.")
+            clear_pending_authentication(request)
+            return Redirect(path="/auth/login")
+
+        template_name = resolve_template_name(
+            request.app.template_engine, "verify.html", "auth/verify.html"
+        )
+        return TemplateResponse(
+            template_name,
+            context={
+                "methods": methods,
+                "pending_auth": pending_auth,
+                "flash_messages": get_flash_messages(request),
+            },
+        )
+
+    @get("/verify/{factor_key:str}")
+    async def verify_method_page(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        factor_key: str,
+    ) -> Redirect | TemplateResponse:
+        """Render a factor-specific verification page for the pending auth session."""
+        pending_auth = get_pending_authentication(request)
+        if pending_auth is None or pending_auth.user_id is None:
+            flash_error(request, "Your verification session is no longer available. Please log in again.")
+            clear_pending_authentication(request)
+            return Redirect(path="/auth/login")
+
+        settings = get_settings()
+        methods = await list_available_second_factor_descriptors(
+            db_session,
+            settings,
+            pending_auth.user_id,
+        )
+        descriptor = next((method for method in methods if method.key == factor_key), None)
+        if descriptor is None:
+            flash_error(request, "That verification method is not available for this session.")
+            return Redirect(path="/auth/verify")
+
+        if not _is_passkey_factor(settings, factor_key):
+            flash_error(request, "Second-factor verification is not implemented yet for this method.")
+            return Redirect(path="/auth/verify")
+
+        template_name = resolve_template_name(
+            request.app.template_engine,
+            "verify_passkey.html",
+            "auth/verify_passkey.html",
+        )
+        return TemplateResponse(
+            template_name,
+            context={
+                "descriptor": descriptor,
+                "factor_key": factor_key,
+                "pending_auth": pending_auth,
+                "flash_messages": get_flash_messages(request),
+            },
+        )
+
+    @post("/verify/{factor_key:str}/options")
+    async def begin_second_factor_verification(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        factor_key: str,
+    ) -> Response:
+        """Return browser assertion options for a pending second-factor verification."""
+        pending_auth = get_pending_authentication(request)
+        if pending_auth is None or pending_auth.user_id is None:
+            return Response(content={"error": "pending_auth_missing"}, status_code=401)
+        if not await verify_csrf(request):
+            return Response(content={"error": "invalid_csrf"}, status_code=400)
+
+        settings = get_settings()
+        if not _is_passkey_factor(settings, factor_key):
+            return Response(content={"error": "unsupported_factor"}, status_code=400)
+
+        result = await db_session.execute(
+            select(User).where(User.id == UUID(pending_auth.user_id))
+        )
+        user = result.scalar_one_or_none()
+        if user is None:
+            logger.info(
+                "Second-factor options: pending-auth user not found (user_id=%s)",
+                pending_auth.user_id,
+            )
+            clear_pending_authentication(request)
+            return Response(content={"error": "invalid_request"}, status_code=400)
+
+        enrollments = await list_second_factor_enrollments_for_factor(
+            db_session,
+            pending_auth.user_id,
+            factor_key,
+        )
+        if not enrollments:
+            logger.info(
+                "Second-factor options: user has no enrollments for factor (user_id=%s, factor=%s)",
+                pending_auth.user_id,
+                factor_key,
+            )
+            return Response(content={"error": "invalid_request"}, status_code=400)
+
+        try:
+            options = begin_passkey_authentication_flow(
+                request,
+                settings,
+                user,
+                pending_auth,
+                enrollments,
+            )
+        except PasskeyRuntimeUnavailableError as exc:
+            return Response(content={"error": str(exc)}, status_code=503)
+
+        return Response(
+            content={
+                "options": options,
+                "csrf_token": request.session.get(CSRF_SESSION_KEY, ""),
+            }
+        )
+
+    @post("/verify/{factor_key:str}/complete")
+    async def complete_second_factor_verification(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        factor_key: str,
+    ) -> Response:
+        """Verify a second-factor assertion and complete pending authentication."""
+        pending_auth = get_pending_authentication(request)
+        if pending_auth is None or pending_auth.user_id is None:
+            return Response(content={"error": "pending_auth_missing"}, status_code=401)
+        if not await verify_csrf(request):
+            return Response(content={"error": "invalid_csrf"}, status_code=400)
+
+        settings = get_settings()
+        if not _is_passkey_factor(settings, factor_key):
+            return Response(content={"error": "unsupported_factor"}, status_code=400)
+
+        result = await db_session.execute(
+            select(User).where(User.id == UUID(pending_auth.user_id))
+        )
+        user = result.scalar_one_or_none()
+        if user is None:
+            logger.info(
+                "Second-factor complete: pending-auth user not found (user_id=%s)",
+                pending_auth.user_id,
+            )
+            clear_pending_authentication(request)
+            return Response(content={"error": "invalid_request"}, status_code=400)
+
+        form_data = await request.form()
+        credential_raw = str(form_data.get("credential", "")).strip()
+        if not credential_raw:
+            return Response(content={"error": "credential_required"}, status_code=400)
+
+        try:
+            credential = json.loads(credential_raw)
+        except json.JSONDecodeError:
+            return Response(content={"error": "invalid_credential"}, status_code=400)
+
+        credential_id = str(credential.get("id") or credential.get("rawId") or "").strip()
+        if not credential_id:
+            return Response(content={"error": "credential_id_required"}, status_code=400)
+
+        enrollment = await get_second_factor_enrollment_by_credential_id(
+            db_session,
+            factor_key=factor_key,
+            credential_id=credential_id,
+        )
+        if enrollment is None or str(enrollment.user_id) != pending_auth.user_id:
+            logger.info(
+                "Second-factor complete: credential not found or not owned (credential_id=%s, user_id=%s)",
+                credential_id[:16],
+                pending_auth.user_id,
+            )
+            return Response(content={"error": "invalid_credential"}, status_code=400)
+
+        try:
+            verification = complete_passkey_authentication_flow(
+                request,
+                settings,
+                user,
+                pending_auth,
+                enrollment,
+                credential,
+            )
+        except PasskeyRuntimeUnavailableError as exc:
+            return Response(content={"error": str(exc)}, status_code=503)
+        except (PasskeyStateError, PasskeyVerificationError) as exc:
+            return Response(content={"error": str(exc)}, status_code=400)
+
+        touch_second_factor_enrollment(
+            enrollment,
+            sign_count=verification.new_sign_count,
+            verification_metadata=verification.verification_metadata,
+        )
+        await db_session.commit()
+        redirect = await _complete_pending_login(request, settings, user, pending_auth)
+        return Response(content={"ok": True, "redirect": redirect.url})
 
     @post("/dummy-login")
     async def dummy_login_submit(
@@ -371,7 +1164,7 @@ class AuthController(Controller):
         """Process dummy login form submission."""
         settings = get_settings()
 
-        if DUMMY_PROVIDER_KEY not in settings.auth.providers:
+        if DUMMY_PROVIDER_KEY not in settings.auth.get_method_keys():
             raise NotFoundException("Dummy provider not configured")
 
         if not await verify_csrf(request):
@@ -392,29 +1185,157 @@ class AuthController(Controller):
         oauth_id = f"dummy_{hashlib.sha256(email.encode()).hexdigest()[:16]}"
         dummy_metadata = {"id": oauth_id, "email": email, "name": name}
 
-        user_data = NormalizedUserData(
-            oauth_id=oauth_id, email=email, name=name, picture_url=None
+        # Dummy is dev-only (blocked in production). Treat its emails as
+        # verified so the account-linking email challenge doesn't fire during
+        # local development where no mailer is configured.
+        dummy_identity = ResolvedPrimaryIdentity(
+            method_key=DUMMY_PROVIDER_KEY,
+            method_type="dummy",
+            subject_id=oauth_id,
+            email=email,
+            name=name,
+            picture_url=None,
+            raw_metadata=dummy_metadata,
+            provided_fields={"email", "name"},
+            email_verified=True,
         )
-
-        login_result = await find_or_create_oauth_user(
-            db_session, DUMMY_PROVIDER_KEY, user_data, dummy_metadata
+        login_result = await find_or_create_user_for_identity(
+            db_session, dummy_identity
         )
+        # Dummy path never returns EmailVerificationRequired because
+        # ``email_verified=True`` on the identity.
+        assert isinstance(login_result, LoginResult)
         await db_session.commit()
 
         flash_success(request, "Successfully logged in!")
-        _set_login_session(request, login_result.user)
+        return await _finalize_primary_login(
+            request,
+            db_session,
+            settings,
+            login_result,
+            identity=dummy_identity,
+        )
 
-        await hooks.do_action("after_login", login_result, request)
-        if login_result.is_new_user:
-            await hooks.do_action("after_user_created", login_result, request)
+    @get("/verify-email/pending")
+    async def verify_email_pending(self, request: Request) -> TemplateResponse | Redirect:
+        """Render the 'check your inbox' page after an OAuth email challenge starts."""
+        masked = get_pending_link_masked_email(request)
+        if masked is None:
+            flash_error(request, "No pending sign-in. Please start again.")
+            return Redirect(path="/auth/login")
+        template_name = resolve_template_name(
+            request.app.template_engine,
+            "verify_email_pending.html",
+            "auth/verify_email_pending.html",
+        )
+        return TemplateResponse(template_name, context={"masked_email": masked})
 
-        next_url = _get_safe_redirect_url(request, settings.auth.allowed_redirect_domains)
-        next_url = await hooks.apply_filters("login_redirect", next_url, login_result, request)
-        return Redirect(path=next_url)
+    @get("/verify-email/claim/{token:str}")
+    async def verify_email_claim(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        token: str,
+    ) -> Redirect | TemplateResponse:
+        """Complete the deferred OAuth account link after email verification.
+
+        Strict checks (short-circuit on any failure with the same template):
+          1. Token signature + expiry + ``purpose`` field.
+          2. Revocation (via ``oauth2_service.is_token_revoked``).
+          3. Session's pending-auth ID matches the token's bound ID — this is
+             the primary defense against cross-browser / cross-user link
+             interception; only the browser that started the OAuth flow can
+             complete the link.
+          4. The target user exists.
+        """
+        from skrift.db.services import oauth2_service
+
+        settings = get_settings()
+
+        def _invalid() -> TemplateResponse:
+            template_name = resolve_template_name(
+                request.app.template_engine,
+                "verify_email_invalid.html",
+                "auth/verify_email_invalid.html",
+            )
+            return TemplateResponse(template_name, context={})
+
+        payload = verify_link_token(token, settings.secret_key)
+        if payload is None:
+            return _invalid()
+
+        jti = payload.get("jti")
+        if jti and await oauth2_service.is_token_revoked(db_session, jti):
+            return _invalid()
+
+        pending_auth = get_pending_authentication(request)
+        if pending_auth is None:
+            return _invalid()
+        if pending_auth.pending_auth_id != payload.get("pending_auth_id"):
+            return _invalid()
+
+        target_user_id = payload.get("user_id_to_link")
+        if not target_user_id:
+            return _invalid()
+
+        metadata = pop_pending_link_metadata(request)
+        tokens = pop_pending_link_tokens(request)
+
+        identity = ResolvedPrimaryIdentity(
+            method_key=str(payload.get("provider_key", "")),
+            method_type=str(payload.get("method_type", "oauth")),
+            subject_id=str(payload.get("subject_id", "")),
+            email=payload.get("email") or None,
+            name=payload.get("name") or None,
+            picture_url=payload.get("picture_url") or None,
+            raw_metadata=metadata,
+            provided_fields={"email"} if payload.get("email") else set(),
+            email_verified=True,
+        )
+
+        try:
+            login_result = await complete_verified_email_link(
+                db_session,
+                existing_user_id=str(target_user_id),
+                identity=identity,
+                tokens=tokens,
+            )
+        except ValueError:
+            return _invalid()
+
+        if jti:
+            await oauth2_service.revoke_token(
+                db_session, jti, "email_verify", expiry_from_payload(payload)
+            )
+
+        await db_session.commit()
+
+        clear_pending_link_state(request)
+        clear_pending_authentication(request)
+        finalize_authenticated_session(request, login_result.user)
+        flash_success(request, "Your account is linked.")
+
+        return await _build_post_login_redirect(request, settings, login_result)
 
     @get("/logout")
+    async def logout_confirm(self, request: Request) -> TemplateResponse:
+        """Render a confirm form that POSTs back to /auth/logout with a CSRF token.
+
+        GET is safe: a drive-by ``<img src="/auth/logout">`` no longer ends the
+        session. Logout only happens on the CSRF-protected POST below.
+        """
+        template_name = resolve_template_name(
+            request.app.template_engine, "logout_confirm.html", "auth/logout_confirm.html"
+        )
+        return TemplateResponse(template_name, context={})
+
+    @post("/logout")
     async def logout(self, request: Request) -> Redirect | TemplateResponse:
         """Clear session and redirect to home, or render logout template if available."""
+        if not await verify_csrf(request):
+            flash_error(request, "Invalid request. Please try again.")
+            return Redirect(path="/auth/logout")
+
         await hooks.do_action("before_logout", request)
         request.session.clear()
         try:

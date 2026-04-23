@@ -21,6 +21,11 @@ class NormalizedUserData:
     email: str | None
     name: str | None
     picture_url: str | None
+    # ``True`` only when the provider attested that the email address is
+    # verified. Defaults to ``False`` so any provider that cannot attest
+    # verification is treated as unverified — this gates the auto-link
+    # branch in :func:`skrift.auth.oauth_account_service.find_or_create_user_for_identity`.
+    email_verified: bool = False
 
 
 class OAuthProvider(ABC):
@@ -109,11 +114,17 @@ class GoogleProvider(OAuthProvider):
         return params
 
     def extract_user_data(self, user_info: dict) -> NormalizedUserData:
+        # Google userinfo exposes ``verified_email`` (v2 API) and ``email_verified``
+        # (OIDC). Accept whichever is present.
+        email_verified = bool(
+            user_info.get("email_verified") or user_info.get("verified_email")
+        )
         return NormalizedUserData(
             oauth_id=user_info.get("id"),
             email=user_info.get("email"),
             name=user_info.get("name"),
             picture_url=user_info.get("picture"),
+            email_verified=email_verified,
         )
 
 
@@ -121,19 +132,25 @@ class GitHubProvider(OAuthProvider):
     async def fetch_user_info(self, access_token: str) -> dict:
         user_info = await super().fetch_user_info(access_token)
 
-        if not user_info.get("email"):
-            headers = {"Authorization": f"Bearer {access_token}"}
-            async with httpx.AsyncClient() as client:
-                email_response = await client.get(
-                    "https://api.github.com/user/emails", headers=headers
-                )
-                if email_response.status_code == 200:
-                    emails = email_response.json()
-                    primary_email = next(
-                        (e["email"] for e in emails if e.get("primary")), None
-                    )
-                    if primary_email:
-                        user_info["email"] = primary_email
+        # Always call /user/emails so we can record whether GitHub verified
+        # the primary address. The public ``/user`` endpoint does not expose
+        # the ``verified`` flag and may return an unverified email that must
+        # not be trusted for account auto-linking.
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with httpx.AsyncClient() as client:
+            email_response = await client.get(
+                "https://api.github.com/user/emails", headers=headers
+            )
+        if email_response.status_code == 200:
+            emails = email_response.json() or []
+            primary = next((e for e in emails if e.get("primary")), None)
+            if primary:
+                user_info["email"] = primary.get("email") or user_info.get("email")
+                user_info["_email_verified"] = bool(primary.get("verified"))
+            else:
+                user_info.setdefault("_email_verified", False)
+        else:
+            user_info.setdefault("_email_verified", False)
 
         return user_info
 
@@ -143,16 +160,22 @@ class GitHubProvider(OAuthProvider):
             email=user_info.get("email"),
             name=user_info.get("name") or user_info.get("login"),
             picture_url=user_info.get("avatar_url"),
+            email_verified=bool(user_info.get("_email_verified")),
         )
 
 
 class MicrosoftProvider(OAuthProvider):
     def extract_user_data(self, user_info: dict) -> NormalizedUserData:
+        # Microsoft Graph does not expose a reliable "email verified" flag —
+        # ``mail`` may be populated with an unverified or alias address. Treat
+        # Microsoft emails as unverified so auto-linking falls through to the
+        # email-verification challenge path.
         return NormalizedUserData(
             oauth_id=user_info.get("id"),
             email=user_info.get("mail") or user_info.get("userPrincipalName"),
             name=user_info.get("displayName"),
             picture_url=None,
+            email_verified=False,
         )
 
 
@@ -173,17 +196,20 @@ class DiscordProvider(OAuthProvider):
             email=user_info.get("email"),
             name=user_info.get("global_name") or user_info.get("username"),
             picture_url=avatar_url,
+            email_verified=bool(user_info.get("verified")),
         )
 
 
 class FacebookProvider(OAuthProvider):
     def extract_user_data(self, user_info: dict) -> NormalizedUserData:
         picture = user_info.get("picture", {}).get("data", {})
+        # Facebook Graph does not expose an email-verified flag.
         return NormalizedUserData(
             oauth_id=user_info.get("id"),
             email=user_info.get("email"),
             name=user_info.get("name"),
             picture_url=picture.get("url") if not picture.get("is_silhouette") else None,
+            email_verified=False,
         )
 
 
@@ -227,11 +253,14 @@ class TwitterProvider(OAuthProvider):
         }
 
     def extract_user_data(self, user_info: dict) -> NormalizedUserData:
+        # Twitter's basic OAuth response does not provide email; Twitter is
+        # effectively unable to attest verification.
         return NormalizedUserData(
             oauth_id=user_info.get("id"),
             email=user_info.get("email"),
             name=user_info.get("name") or user_info.get("username"),
             picture_url=None,
+            email_verified=False,
         )
 
 
@@ -244,6 +273,7 @@ class GenericProvider(OAuthProvider):
             email=user_info.get("email"),
             name=user_info.get("name"),
             picture_url=user_info.get("picture"),
+            email_verified=bool(user_info.get("email_verified")),
         )
 
 
@@ -295,6 +325,7 @@ class SkriftProvider(OAuthProvider):
             email=user_info.get("email"),
             name=user_info.get("name"),
             picture_url=user_info.get("picture"),
+            email_verified=bool(user_info.get("email_verified")),
         )
 
 

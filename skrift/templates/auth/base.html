@@ -13,9 +13,35 @@
 </head>
 <body>
     <main class="sk-content">
+        {% if flash_messages %}
+        <div class="sk-flash-messages" role="status" aria-live="polite">
+            {% for msg in flash_messages %}
+            <article role="alert" class="sk-flash sk-flash-{{ msg.type.value }}" {% if msg.dismissible %}data-dismissible{% endif %}>
+                <span class="sk-flash-message">{{ msg.message }}</span>
+                {% if msg.dismissible %}
+                <button type="button" class="sk-flash-dismiss" aria-label="Dismiss">&times;</button>
+                {% endif %}
+            </article>
+            {% endfor %}
+        </div>
+        {% elif flash %}
+        <div class="sk-flash-messages" role="status" aria-live="polite">
+            <article role="alert" class="sk-flash sk-flash-info" data-dismissible>
+                <span class="sk-flash-message">{{ flash }}</span>
+                <button type="button" class="sk-flash-dismiss" aria-label="Dismiss">&times;</button>
+            </article>
+        </div>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
 
     {% block scripts %}{% endblock %}
+    <script nonce="{{ csp_nonce() }}">
+    document.querySelectorAll('.sk-flash-dismiss').forEach(btn => {
+        btn.addEventListener('click', () => {
+            btn.closest('.sk-flash').remove();
+        });
+    });
+    </script>
 </body>
 </html>
