@@ -13,6 +13,7 @@ import pytest
 
 from skrift.auth.second_factors.passkey_service import (
     PasskeyStateError,
+    _resolve_origin,
     _resolve_rp_id,
     validate_passkey_origin_config,
 )
@@ -71,3 +72,22 @@ def test_validate_passkey_origin_config_rejects_redirect_base_url_without_hostna
     # Relative URL has no hostname — must not count as configured.
     with pytest.raises(PasskeyStateError):
         validate_passkey_origin_config(_settings(redirect_base_url="/path"))
+
+
+def test_resolve_origin_refuses_host_header_fallback():
+    """``_resolve_origin`` must not fall back to ``request.base_url`` — a
+    spoofed Host header would otherwise bind a credential to the attacker's
+    origin. It must raise instead."""
+    request = MagicMock()
+    request.base_url = "https://attacker.example"
+    with pytest.raises(PasskeyStateError):
+        _resolve_origin(request, _settings())
+
+
+def test_resolve_origin_uses_configured_redirect_base_url():
+    request = MagicMock()
+    request.base_url = "https://attacker.example"
+    origin = _resolve_origin(
+        request, _settings(redirect_base_url="https://app.example/")
+    )
+    assert origin == "https://app.example"

@@ -945,3 +945,193 @@ class TestPasskeyEnumerationHygiene:
         assert matched, "expected a diagnostic log for duplicate-email signup"
         for record in matched:
             assert "sensitive@example.com" not in record.getMessage()
+
+
+# ---------------------------------------------------------------------------
+# Passkey deletion
+# ---------------------------------------------------------------------------
+
+
+class TestPasskeyDeletion:
+    """Delete-passkey UI endpoint — soft delete with enumeration hygiene."""
+
+    @staticmethod
+    def _enrollment_active(engine, enrollment_id: str) -> bool:
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        async def _check():
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                result = await session.execute(
+                    select(SecondFactorEnrollment).where(
+                        SecondFactorEnrollment.id == UUID(enrollment_id)
+                    )
+                )
+                row = result.scalar_one_or_none()
+                return row is not None and row.is_active
+
+        return _run(_check())
+
+    @staticmethod
+    def _enrollment_id_for(engine, user_id: str) -> str:
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        async def _fetch():
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                result = await session.execute(
+                    select(SecondFactorEnrollment).where(
+                        SecondFactorEnrollment.user_id == UUID(user_id)
+                    )
+                )
+                return str(result.scalar_one().id)
+
+        return _run(_fetch())
+
+    def test_owner_can_delete_own_passkey(self, client, engine):
+        user_id = _run(
+            _insert_user_and_enrollment(
+                engine,
+                email="owner@example.com",
+                credential_id=_b64url(b"owner-cred"),
+                public_key=_b64url(b"owner-pub"),
+            )
+        )
+        enrollment_id = self._enrollment_id_for(engine, user_id)
+        client.set_session_data({"user_id": user_id, CSRF_SESSION_KEY: "del-csrf"})
+
+        resp = client.post(
+            f"/auth/passkeys/{enrollment_id}/delete",
+            data={CSRF_FIELD_NAME: "del-csrf"},
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 303)
+        assert resp.headers["location"] == "/auth/passkeys"
+        assert self._enrollment_active(engine, enrollment_id) is False
+
+    def test_cross_user_delete_is_a_noop(self, client, engine):
+        """A different authenticated user must not be able to remove someone
+        else's passkey. Response is the same redirect as the happy path —
+        the target row stays active."""
+        owner_id = _run(
+            _insert_user_and_enrollment(
+                engine,
+                email="o@example.com",
+                credential_id=_b64url(b"o-cred"),
+                public_key=_b64url(b"o-pub"),
+            )
+        )
+        enrollment_id = self._enrollment_id_for(engine, owner_id)
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        async def _make_other():
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                other = User(email="other@example.com", name="Other")
+                session.add(other)
+                await session.commit()
+                return str(other.id)
+
+        other_id = _run(_make_other())
+        client.set_session_data({"user_id": other_id, CSRF_SESSION_KEY: "del-csrf"})
+
+        resp = client.post(
+            f"/auth/passkeys/{enrollment_id}/delete",
+            data={CSRF_FIELD_NAME: "del-csrf"},
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 303)
+        assert resp.headers["location"] == "/auth/passkeys"
+        assert self._enrollment_active(engine, enrollment_id) is True
+
+    def test_anonymous_delete_redirects_to_login(self, client, engine):
+        user_id = _run(
+            _insert_user_and_enrollment(
+                engine,
+                email="anon@example.com",
+                credential_id=_b64url(b"anon-cred"),
+                public_key=_b64url(b"anon-pub"),
+            )
+        )
+        enrollment_id = self._enrollment_id_for(engine, user_id)
+
+        resp = client.post(
+            f"/auth/passkeys/{enrollment_id}/delete",
+            data={CSRF_FIELD_NAME: "ignored"},
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 303)
+        assert "login" in resp.headers["location"]
+        assert self._enrollment_active(engine, enrollment_id) is True
+
+    def test_delete_without_csrf_is_rejected(self, client, engine):
+        user_id = _run(
+            _insert_user_and_enrollment(
+                engine,
+                email="csrf@example.com",
+                credential_id=_b64url(b"csrf-cred"),
+                public_key=_b64url(b"csrf-pub"),
+            )
+        )
+        enrollment_id = self._enrollment_id_for(engine, user_id)
+        client.set_session_data({"user_id": user_id, CSRF_SESSION_KEY: "real-csrf"})
+
+        # Send a wrong token — CSRF must fail and row must remain active.
+        resp = client.post(
+            f"/auth/passkeys/{enrollment_id}/delete",
+            data={CSRF_FIELD_NAME: "wrong-csrf"},
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 303)
+        assert resp.headers["location"] == "/auth/passkeys"
+        assert self._enrollment_active(engine, enrollment_id) is True
+
+    def test_re_enrollment_after_delete_reactivates_row(self, client, engine):
+        """``save_passkey_enrollment`` reactivates soft-deleted rows. If a
+        future refactor switches deletion to a hard delete, re-enrolling
+        the same credential would violate the uniqueness constraint. This
+        test locks in the soft-delete contract."""
+        # The webauthn stub returns credential_id=_b64url(b"fake-credential-id")
+        # from verify_registration_response — seed with the same value so the
+        # re-enrollment path lines up with the existing row.
+        user_id = _run(
+            _insert_user_and_enrollment(
+                engine,
+                email="re@example.com",
+                credential_id=_b64url(b"fake-credential-id"),
+                public_key=_b64url(b"re-pub"),
+            )
+        )
+        enrollment_id = self._enrollment_id_for(engine, user_id)
+        client.set_session_data({"user_id": user_id, CSRF_SESSION_KEY: "re-csrf"})
+
+        resp = client.post(
+            f"/auth/passkeys/{enrollment_id}/delete",
+            data={CSRF_FIELD_NAME: "re-csrf"},
+            follow_redirects=False,
+        )
+        assert resp.status_code in (302, 303)
+        assert self._enrollment_active(engine, enrollment_id) is False
+
+        # Delete rotated the CSRF token; re-seed a known one for the
+        # follow-up enrollment requests.
+        session = client.get_session_data()
+        session[CSRF_SESSION_KEY] = "re-csrf-2"
+        client.set_session_data(session)
+
+        resp = client.post("/auth/passkeys/options", data={CSRF_FIELD_NAME: "re-csrf-2"})
+        assert resp.status_code in (200, 201), resp.text
+        next_csrf = resp.json()["csrf_token"]
+
+        resp = client.post(
+            "/auth/passkeys/complete",
+            data={
+                "credential": json.dumps(
+                    {"id": "x", "type": "public-key", "response": {"transports": ["usb"]}}
+                ),
+                CSRF_FIELD_NAME: next_csrf,
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        # Same row — not a new insert.
+        assert self._enrollment_active(engine, enrollment_id) is True

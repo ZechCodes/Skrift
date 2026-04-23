@@ -126,19 +126,21 @@ def _require_unexpired_challenge(request, expires_at_key: str) -> None:
 
 
 def _resolve_origin(request, settings) -> str:
-    """Resolve the WebAuthn origin.
+    """Resolve the WebAuthn origin from trusted configuration only.
 
-    Prefers the explicitly configured ``auth.redirect_base_url`` so that a
-    spoofed Host header cannot steer registrations/assertions to the wrong
-    origin. Falls back to the request base URL only when no explicit config
-    is set; deployments with passkeys enabled must configure one of
-    ``settings.domain`` or ``auth.redirect_base_url`` — the startup check in
-    :func:`validate_passkey_origin_config` enforces this.
+    A spoofed Host header must not be able to steer registrations or
+    assertions to an attacker-controlled origin, so we refuse to fall back
+    to ``request.base_url``. Deployments that enable passkey methods must
+    configure ``auth.redirect_base_url`` (or rely on the startup check in
+    :func:`validate_passkey_origin_config`).
     """
-    origin = settings.auth.redirect_base_url.rstrip("/")
-    if origin:
-        return origin
-    return str(request.base_url).rstrip("/")
+    origin = (settings.auth.redirect_base_url or "").rstrip("/")
+    if not origin:
+        raise PasskeyStateError(
+            "Passkey origin is not configured: set 'auth.redirect_base_url' "
+            "in your app config"
+        )
+    return origin
 
 
 def _resolve_rp_id(request, settings) -> str:
@@ -401,6 +403,11 @@ def begin_primary_passkey_registration(
     generate_registration_options = symbols["generate_registration_options"]
     options_to_json = symbols["options_to_json"]
 
+    # Throwaway per-credential user handle, deliberately unlinked from
+    # ``User.id``: WebAuthn §5.1.3 recommends random values here so the
+    # relying party does not leak a stable internal identifier across
+    # credentials. Do NOT swap this for ``user.id`` — we have no user row
+    # at this point anyway (signup happens after verification).
     user_handle = uuid4().hex
     options = generate_registration_options(
         rp_id=_resolve_rp_id(request, settings),

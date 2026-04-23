@@ -77,6 +77,38 @@ async def get_second_factor_enrollment_by_credential_id(
     return result.scalar_one_or_none()
 
 
+async def deactivate_second_factor_enrollment(
+    db_session,
+    *,
+    user_id: str | UUID,
+    enrollment_id: str | UUID,
+) -> bool:
+    """Soft-delete a second-factor enrollment owned by ``user_id``.
+
+    Soft delete (not a row delete) because ``save_passkey_enrollment``
+    reactivates matching rows on re-enrollment — hard-deleting would
+    clash with the unique ``(factor_key, credential_id)`` constraint.
+    Returns ``True`` iff a row was flipped. The caller must commit.
+    """
+    user_uuid = UUID(str(user_id))
+    enrollment_uuid = UUID(str(enrollment_id))
+
+    result = await db_session.execute(
+        select(SecondFactorEnrollment).where(
+            SecondFactorEnrollment.id == enrollment_uuid,
+            SecondFactorEnrollment.user_id == user_uuid,
+            SecondFactorEnrollment.is_active.is_(True),
+        )
+    )
+    enrollment = result.scalar_one_or_none()
+    if enrollment is None:
+        return False
+
+    enrollment.is_active = False
+    await db_session.flush()
+    return True
+
+
 async def save_passkey_enrollment(
     db_session,
     *,

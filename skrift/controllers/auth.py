@@ -4,18 +4,17 @@ Supports multiple OAuth providers: Google, GitHub, Microsoft, Discord, Facebook,
 Also supports a development-only "dummy" provider for testing.
 """
 
-import fnmatch
 import hashlib
 import json
 import logging
 from typing import Annotated
-from urllib.parse import urlparse
 from uuid import UUID
 from litestar import Controller, Request, get, post
 from litestar.exceptions import HTTPException, NotFoundException
 from litestar.params import Parameter
 from litestar.response import Redirect, Response, Template as TemplateResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.email_link import (
@@ -57,6 +56,7 @@ from skrift.auth.second_factors.passkey_service import (
 from skrift.auth.second_factors.registry import get_second_factor_method
 from skrift.auth.second_factors.services import (
     build_second_factor_transition_decision,
+    deactivate_second_factor_enrollment,
     get_second_factor_enrollment_by_credential_id,
     list_available_second_factor_descriptors,
     list_second_factor_enrollments_for_factor,
@@ -82,6 +82,7 @@ from skrift.forms import verify_csrf
 from skrift.forms.core import CSRF_SESSION_KEY
 from skrift.lib.flash import flash_error, flash_success, get_flash_messages
 from skrift.lib.hooks import hooks
+from skrift.lib.redirects import get_safe_redirect_url, is_safe_redirect_url
 from skrift.lib.template import resolve_template_name
 from skrift.config import get_settings
 from skrift.setup.providers import DUMMY_PROVIDER_KEY
@@ -95,7 +96,7 @@ async def _build_post_login_redirect(request: Request, settings, login_result: L
     if login_result.is_new_user:
         await hooks.do_action("after_user_created", login_result, request)
 
-    next_url = _get_safe_redirect_url(request, settings.auth.allowed_redirect_domains)
+    next_url = get_safe_redirect_url(request, settings.auth.allowed_redirect_domains)
     next_url = await hooks.apply_filters("login_redirect", next_url, login_result, request)
     return Redirect(path=next_url)
 
@@ -157,12 +158,14 @@ async def _create_primary_passkey_signup_login(
     name: str | None,
     registration_result,
 ) -> LoginResult:
-    """Create a new user plus passkey enrollment for primary passkey signup."""
-    existing = await db_session.execute(select(User).where(User.email == email))
-    existing_user = existing.scalar_one_or_none()
-    if existing_user is not None:
-        raise ValueError("An account with that email already exists")
+    """Create a new user plus passkey enrollment for primary passkey signup.
 
+    Email uniqueness is enforced at the database level (unique index on
+    ``users.email``). We do not pre-check here — a pre-check would leak a
+    user-enumeration signal and lose the race against concurrent signups.
+    The caller is responsible for translating ``IntegrityError`` into a
+    generic failure response.
+    """
     login_result = await create_login_result_for_new_user(
         db_session,
         email=email,
@@ -242,54 +245,6 @@ async def _finalize_primary_login(
     return await _build_post_login_redirect(request, settings, login_result)
 
 
-def _is_safe_redirect_url(url: str, allowed_domains: list[str]) -> bool:
-    """Check if URL is safe to redirect to.
-
-    Supports wildcard patterns using fnmatch-style matching:
-    - "*.example.com" matches any subdomain of example.com
-    - "app-*.example.com" matches app-foo.example.com, app-bar.example.com, etc.
-    - "example.com" (no wildcards) matches example.com and all subdomains
-    """
-    # Relative paths are always safe (but not protocol-relative //domain.com)
-    if url.startswith("/") and not url.startswith("//"):
-        return True
-
-    # Parse absolute URL
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-
-    # Must have scheme and netloc
-    if not parsed.scheme or not parsed.netloc:
-        return False
-
-    # Only allow http/https
-    if parsed.scheme not in ("http", "https"):
-        return False
-
-    # Check if domain matches allowed list
-    host = parsed.netloc.lower().split(":")[0]  # Remove port
-    for pattern in allowed_domains:
-        pattern = pattern.lower()
-        # If pattern contains wildcards, use fnmatch
-        if "*" in pattern or "?" in pattern:
-            if fnmatch.fnmatch(host, pattern):
-                return True
-        else:
-            # No wildcards: exact match or subdomain match
-            if host == pattern or host.endswith(f".{pattern}"):
-                return True
-
-    return False
-
-
-def _get_safe_redirect_url(request: Request, allowed_domains: list[str], default: str = "/") -> str:
-    """Get the next redirect URL from session, validating it's safe."""
-    next_url = request.session.pop(SESSION_AUTH_NEXT, None)
-    if next_url and _is_safe_redirect_url(next_url, allowed_domains):
-        return next_url
-    return default
 
 
 async def _exchange_and_fetch(
@@ -496,7 +451,7 @@ class AuthController(Controller):
         settings = get_settings()
 
         # Store next URL in session if provided and valid
-        if next_url and _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
+        if next_url and is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
             request.session[SESSION_AUTH_NEXT] = next_url
 
         # Get configured providers (excluding dummy from main list)
@@ -656,6 +611,17 @@ class AuthController(Controller):
             )
         except PasskeyRuntimeUnavailableError as exc:
             return _csrf_error(request, str(exc), status_code=503)
+        except IntegrityError:
+            # Email uniqueness collision — either a concurrent signup won
+            # the race or the email was registered between begin and
+            # complete. Return a generic error to avoid leaking an
+            # enumeration signal; real reason is logged.
+            await db_session.rollback()
+            logger.info(
+                "Passkey signup rejected on complete: email collision (email_hash=%s)",
+                hashlib.sha256(signup_state.email.encode()).hexdigest()[:16],
+            )
+            return _csrf_error(request, "invalid_request")
         except (PasskeyStateError, PasskeyVerificationError, ValueError) as exc:
             return _csrf_error(request, str(exc))
 
@@ -925,6 +891,48 @@ class AuthController(Controller):
             },
             status_code=201,
         )
+
+    @post("/passkeys/{enrollment_id:uuid}/delete")
+    async def delete_passkey(
+        self,
+        request: Request,
+        db_session: AsyncSession,
+        enrollment_id: UUID,
+    ) -> Redirect:
+        """Soft-delete a passkey enrollment owned by the current user.
+
+        Always redirects to ``/auth/passkeys`` regardless of outcome so a
+        malicious user cannot distinguish "not yours" from "does not
+        exist" (enumeration hygiene).
+        """
+        user = await _get_authenticated_user(request, db_session)
+        if user is None:
+            flash_error(request, "Please log in to manage passkeys.")
+            return Redirect(path="/auth/login?next=/auth/passkeys")
+
+        if not await verify_csrf(request):
+            logger.warning(
+                "Passkey deletion rejected: invalid CSRF (user_id=%s)",
+                user.id,
+            )
+            flash_error(request, "Your session expired. Please try again.")
+            return Redirect(path="/auth/passkeys")
+
+        deactivated = await deactivate_second_factor_enrollment(
+            db_session,
+            user_id=user.id,
+            enrollment_id=enrollment_id,
+        )
+        await db_session.commit()
+
+        if deactivated:
+            logger.info(
+                "Passkey enrollment removed (user_id=%s, enrollment_id=%s)",
+                user.id,
+                enrollment_id,
+            )
+            flash_success(request, "Passkey removed.")
+        return Redirect(path="/auth/passkeys")
 
     @get("/verify")
     async def verify_page(

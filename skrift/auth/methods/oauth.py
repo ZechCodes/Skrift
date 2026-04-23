@@ -24,14 +24,8 @@ from skrift.auth.session_keys import (
     SESSION_OAUTH_STATE,
 )
 from skrift.config import get_settings
+from skrift.lib.redirects import is_safe_redirect_url
 from skrift.setup.providers import get_provider_info
-
-
-def _is_safe_redirect_url(url: str, allowed_domains: list[str]) -> bool:
-    """Import locally to avoid a controller dependency cycle."""
-    from skrift.controllers.auth import _is_safe_redirect_url as controller_helper
-
-    return controller_helper(url, allowed_domains)
 
 
 def _resolve_provider_info(method_key: str, provider_type: str):
@@ -68,7 +62,7 @@ class OAuthPrimaryAuthMethod(PrimaryAuthMethod):
         if self.method_key not in settings.auth.providers:
             raise NotFoundException(f"Provider {self.method_key} not configured")
 
-        if next_url and _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
+        if next_url and is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
             request.session[SESSION_AUTH_NEXT] = next_url
 
         state = secrets.token_urlsafe(32)

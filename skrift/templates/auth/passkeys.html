@@ -73,6 +73,44 @@
         color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.6));
         font-size: 0.95rem;
     }
+
+    .passkey-item-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .passkey-delete-form {
+        margin: 0;
+    }
+
+    .passkey-delete-btn {
+        background: transparent;
+        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.7));
+        border: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.12));
+        padding: 0.35rem 0.75rem;
+        border-radius: 0.6rem;
+        font: inherit;
+        font-size: 0.85rem;
+        cursor: pointer;
+    }
+
+    .passkey-delete-btn:hover {
+        background: rgba(255, 80, 80, 0.12);
+        border-color: rgba(255, 80, 80, 0.4);
+        color: #ffb4b4;
+    }
+
+    .passkey-last-warning {
+        margin: 0 0 0.75rem 0;
+        padding: 0.75rem 1rem;
+        border-radius: 0.75rem;
+        background: rgba(255, 180, 0, 0.08);
+        border: 1px solid rgba(255, 180, 0, 0.25);
+        color: var(--sk-color-text, #E8ECF4);
+        font-size: 0.9rem;
+    }
 </style>
 {% endblock %}
 
@@ -101,15 +139,28 @@
 
     <article class="passkey-card">
         <h2>Registered Passkeys</h2>
+        {% if enrollments|length == 1 %}
+        <p class="passkey-last-warning">
+            This is your only registered passkey. Removing it may lock you out if it's your only sign-in method — consider adding another first.
+        </p>
+        {% endif %}
         <div class="passkey-list">
             {% for enrollment in enrollments %}
             <div class="passkey-item">
-                <strong>{{ (enrollment.display_name or "Unnamed Passkey") | e }}</strong>
-                <div class="passkey-meta">
-                    Added {{ enrollment.enrolled_at.strftime('%Y-%m-%d %H:%M') if enrollment.enrolled_at else "recently" }}
-                    {% if enrollment.last_used_at %}
-                    • Last used {{ enrollment.last_used_at.strftime('%Y-%m-%d %H:%M') }}
-                    {% endif %}
+                <div class="passkey-item-row">
+                    <div>
+                        <strong>{{ (enrollment.display_name or "Unnamed Passkey") | e }}</strong>
+                        <div class="passkey-meta">
+                            Added {{ enrollment.enrolled_at.strftime('%Y-%m-%d %H:%M') if enrollment.enrolled_at else "recently" }}
+                            {% if enrollment.last_used_at %}
+                            • Last used {{ enrollment.last_used_at.strftime('%Y-%m-%d %H:%M') }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <form class="passkey-delete-form" method="post" action="/auth/passkeys/{{ enrollment.id }}/delete">
+                        {{ csrf_field() }}
+                        <button type="submit" class="passkey-delete-btn">Remove</button>
+                    </form>
                 </div>
             </div>
             {% else %}

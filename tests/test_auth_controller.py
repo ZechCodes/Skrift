@@ -5,11 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from skrift.controllers.auth import (
-    _is_safe_redirect_url,
-    _get_safe_redirect_url,
     _finalize_primary_login,
     _set_login_session,
     _exchange_and_fetch,
+)
+from skrift.lib.redirects import (
+    get_safe_redirect_url as _get_safe_redirect_url,
+    is_safe_redirect_url as _is_safe_redirect_url,
 )
 from skrift.auth.identities import ResolvedPrimaryIdentity
 from skrift.auth.session_service import (

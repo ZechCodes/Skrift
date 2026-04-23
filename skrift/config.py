@@ -17,6 +17,20 @@ load_dotenv(_env_file)
 # Pattern to match $VAR_NAME environment variable references
 ENV_VAR_PATTERN = re.compile(r"\$([A-Z_][A-Z0-9_]*)")
 
+# Auth method / second-factor keys are interpolated into URL paths and
+# JavaScript URL strings in templates. Restrict them to a safe subset so
+# a misconfigured YAML key cannot silently produce broken routes.
+_AUTH_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def _validate_auth_key(key: object, *, field: str) -> None:
+    """Validate an auth method / second-factor key at config-load time."""
+    if not isinstance(key, str) or not _AUTH_KEY_RE.match(key):
+        raise ValueError(
+            f"Invalid {field} key {key!r}: must match {_AUTH_KEY_RE.pattern} "
+            "(letters, digits, '-' or '_'; 1-64 chars; must start with an alphanumeric)."
+        )
+
 # Environment configuration
 SKRIFT_ENV = "SKRIFT_ENV"
 DEFAULT_ENVIRONMENT = "production"
@@ -211,6 +225,13 @@ class SecondFactorSettings(BaseModel):
     enabled: bool = False
     challenge_on_enrolled: bool = False
     methods: dict[str, dict] = {}
+
+    def __init__(self, **data):
+        methods = data.get("methods")
+        if isinstance(methods, dict):
+            for key in methods:
+                _validate_auth_key(key, field="second_factor method")
+        super().__init__(**data)
 
     def get_method_keys(self) -> list[str]:
         """Return configured second-factor method keys."""
@@ -519,6 +540,11 @@ class AuthConfig(BaseModel):
             data["methods"] = raw_methods
             provider_dicts = get_auth_provider_configs(data)
             data["providers"] = provider_dicts
+
+            for name in raw_methods:
+                _validate_auth_key(name, field="auth method")
+            for name in provider_dicts:
+                _validate_auth_key(name, field="auth provider")
 
             for name, config in raw_methods.items():
                 method_type = config.get("type", "") or "oauth"

@@ -8,6 +8,7 @@ from litestar.response import Template as TemplateResponse
 from skrift.auth.methods.base import PrimaryAuthMethod, PrimaryAuthMethodDescriptor
 from skrift.auth.session_keys import SESSION_AUTH_NEXT
 from skrift.config import get_settings
+from skrift.lib.redirects import is_safe_redirect_url
 from skrift.lib.template import resolve_template_name
 from skrift.setup.providers import DUMMY_PROVIDER_KEY
 
@@ -30,11 +31,8 @@ class DummyPrimaryAuthMethod(PrimaryAuthMethod):
         settings = get_settings()
         if DUMMY_PROVIDER_KEY not in settings.auth.providers:
             raise NotFoundException("Dummy provider not configured")
-        if next_url:
-            from skrift.controllers.auth import _is_safe_redirect_url
-
-            if _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
-                request.session[SESSION_AUTH_NEXT] = next_url
+        if next_url and is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
+            request.session[SESSION_AUTH_NEXT] = next_url
 
         flash = request.session.pop("flash", None)
         template_name = resolve_template_name(

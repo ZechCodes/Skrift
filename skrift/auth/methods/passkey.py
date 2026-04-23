@@ -9,6 +9,7 @@ from skrift.auth.second_factors.passkey_service import is_webauthn_available
 from skrift.auth.session_keys import SESSION_AUTH_NEXT
 from skrift.config import get_settings
 from skrift.lib.flash import get_flash_messages
+from skrift.lib.redirects import is_safe_redirect_url
 from skrift.lib.template import resolve_template_name
 
 
@@ -21,23 +22,24 @@ class PasskeyPrimaryAuthMethod(PrimaryAuthMethod):
         settings = get_settings()
         config = settings.auth.get_method_config(self.method_key)
         name = config.get("label", "") or "Passkey"
-        if not is_webauthn_available():
-            name = f"{name} (Unavailable)"
+        available = is_webauthn_available()
+        availability_note = (
+            "" if available else "Passkey sign-in is not available in this environment."
+        )
         return PrimaryAuthMethodDescriptor(
             key=self.method_key,
             method_type=self.method_type,
             name=name,
             icon="passkey",
             start_path=f"/auth/{self.method_key}/login",
+            is_available=available,
+            availability_note=availability_note,
         )
 
     async def begin_auth(self, request, *, next_url: str | None = None):
         settings = get_settings()
-        if next_url:
-            from skrift.controllers.auth import _is_safe_redirect_url
-
-            if _is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
-                request.session[SESSION_AUTH_NEXT] = next_url
+        if next_url and is_safe_redirect_url(next_url, settings.auth.allowed_redirect_domains):
+            request.session[SESSION_AUTH_NEXT] = next_url
 
         template_name = resolve_template_name(
             request.app.template_engine, "passkey_login.html", "auth/passkey_login.html"

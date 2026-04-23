@@ -18,6 +18,8 @@ class PrimaryAuthMethodDescriptor:
     name: str
     icon: str
     start_path: str
+    is_available: bool = True
+    availability_note: str = ""
 
 
 @dataclass(slots=True)

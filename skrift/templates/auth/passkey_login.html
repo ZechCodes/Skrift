@@ -75,8 +75,8 @@
         </header>
         <p>Use a registered passkey to sign in without redirecting to another provider.</p>
 
-        {% if 'Unavailable' in descriptor.name %}
-        <p class="passkey-login-note">Passkey login is configured but not available in this environment.</p>
+        {% if not descriptor.is_available %}
+        <p class="passkey-login-note">{{ descriptor.availability_note or "Passkey login is not available in this environment." }}</p>
         {% else %}
         <form id="passkey-login-form" class="passkey-signup-form">
             {{ csrf_field() }}
