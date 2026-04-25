@@ -262,6 +262,10 @@
                 this._removeDismissed(data.notification_id || data.id);
                 return;
             }
+            if (data.type === "disconnecting") {
+                this._handleDisconnecting();
+                return;
+            }
 
             // Track latest timestamp for reconnect replay
             if (data.created_at != null && (this._lastTimestamp == null || data.created_at > this._lastTimestamp)) {
@@ -298,6 +302,12 @@
             }
 
             this._displayedIds.add(data.id);
+        }
+
+        _handleDisconnecting() {
+            this._disconnect();
+            this._setStatus("reconnecting");
+            setTimeout(() => this._connect(), 1000);
         }
 
         _onSync() {

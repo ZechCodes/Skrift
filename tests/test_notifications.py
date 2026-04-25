@@ -1053,6 +1053,22 @@ class TestSourceSubscriptionModel:
         assert q2.get_nowait().id == n.id
 
     @pytest.mark.asyncio
+    async def test_disconnect_active_connections_broadcasts_disconnect_signal(self, svc):
+        q1 = await svc.register_connection("s1", None)
+        q2 = await svc.register_connection("s2", "alice")
+
+        await svc.disconnect_active_connections()
+
+        n1 = q1.get_nowait()
+        n2 = q2.get_nowait()
+        assert n1.type == "disconnecting"
+        assert n1.mode == NotificationMode.EPHEMERAL
+        assert n1.payload["reason"] == "server_shutdown"
+        assert n2.type == "disconnecting"
+        assert n2.mode == NotificationMode.EPHEMERAL
+        assert n2.payload["reason"] == "server_shutdown"
+
+    @pytest.mark.asyncio
     async def test_session_teardown_cleans_edges(self, svc):
         q = await svc.register_connection("abc", "alice")
         svc.unregister_connection("abc", q)

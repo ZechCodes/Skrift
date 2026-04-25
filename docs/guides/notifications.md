@@ -296,6 +296,7 @@ if (saved) window.__skriftNotifications.lastSeen = parseFloat(saved);
 
 - Auto-connects on page load and on `visibilitychange`/`focus`, disconnects on `blur` (opt out with `persistConnection: true`)
 - When `persistConnection` is enabled, force-reconnects if the page was hidden for more than 30 seconds (handles silently killed mobile connections)
+- On server shutdown, active clients receive a `disconnecting` notification and immediately start a reconnect attempt
 - Reconnects after 5 seconds on error
 - Deduplicates via internal ID set
 - Max visible toasts: 3 (desktop) / 2 (mobile); excess queued

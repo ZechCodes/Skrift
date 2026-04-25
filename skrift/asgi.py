@@ -979,6 +979,7 @@ def create_app() -> ASGIApp:
 
     async def on_shutdown(_app: Litestar) -> None:
         """Stop notification backend and storage on shutdown."""
+        await notification_service.disconnect_active_connections()
         await notification_service._get_backend().stop()
         await email_backend.stop()
         await storage_manager.close()

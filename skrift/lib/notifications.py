@@ -260,6 +260,16 @@ class NotificationService:
 
         await hooks.do_action(NOTIFICATION_SENT, notification, "broadcast", None)
 
+    async def disconnect_active_connections(self, *, reason: str = "server_shutdown") -> None:
+        """Tell active SSE clients to reconnect before this process shuts down."""
+        notification = Notification(
+            type="disconnecting",
+            mode=NotificationMode.EPHEMERAL,
+            payload={"reason": reason},
+        )
+        self._registry.push("global", notification)
+        await asyncio.sleep(0)
+
     async def send(self, source_key: str, notification: Notification) -> None:
         """Publish to any source key."""
         await self._send(source_key, notification)
