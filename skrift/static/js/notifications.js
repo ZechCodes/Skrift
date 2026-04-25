@@ -32,6 +32,8 @@
             this._lastTimestamp = null;
             this._hiddenSince = null;
             this._config = {};
+            this._watchers = [];
+            this._onNotification = (event) => this._handleWatchers(event);
 
             this._onVisibilityChange = () => {
                 if (document.visibilityState === "visible") {
@@ -53,8 +55,10 @@
             };
 
             document.addEventListener("visibilitychange", this._onVisibilityChange);
+            document.addEventListener("sk:notification", this._onNotification);
             window.addEventListener("focus", this._onFocus);
             window.addEventListener("blur", this._onBlur);
+            this._registerWatchers();
             this._connect();
         }
 
@@ -113,6 +117,59 @@
 
         set lastSeen(timestamp) {
             this._lastTimestamp = timestamp;
+        }
+
+        _registerWatchers() {
+            const elements = document.querySelectorAll("[skrift\\:watch-for][skrift\\:render]");
+            this._watchers = [];
+
+            elements.forEach((element) => {
+                const pattern = element.getAttribute("skrift:watch-for");
+                const rendererName = element.getAttribute("skrift:render");
+
+                let matcher;
+                try {
+                    matcher = new RegExp(pattern);
+                } catch (error) {
+                    console.warn("Invalid skrift:watch-for regex:", pattern, error);
+                    return;
+                }
+
+                const renderer = this._resolveGlobal(rendererName);
+                if (typeof renderer !== "function") {
+                    console.warn("Missing skrift:render function:", rendererName);
+                    return;
+                }
+
+                this._watchers.push({ element, matcher, renderer });
+            });
+        }
+
+        _resolveGlobal(path) {
+            if (!path) return undefined;
+
+            let value = window;
+            const parts = path.split(".");
+            for (const part of parts) {
+                if (!part) return undefined;
+                value = value?.[part];
+            }
+            return value;
+        }
+
+        _handleWatchers(event) {
+            const notification = event.detail;
+            if (!notification?.type) return;
+
+            this._watchers.forEach(({ element, matcher, renderer }) => {
+                matcher.lastIndex = 0;
+                if (!matcher.test(notification.type)) return;
+                try {
+                    renderer(element, notification, event);
+                } catch (error) {
+                    console.error("skrift:render function failed:", error);
+                }
+            });
         }
 
         _setStatus(status) {

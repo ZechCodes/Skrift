@@ -161,6 +161,34 @@ document.addEventListener('sk:notification', (e) => {
 
 Only `"generic"` type notifications render the built-in toast UI. All other types must be handled via event listeners.
 
+### Reactive Watchers
+
+For DOM-local notification handling, add `skrift:watch-for` and `skrift:render` to an element:
+
+```html
+<div
+    id="notification-panel"
+    skrift:watch-for="^notification(?:[:.].+)?$"
+    skrift:render="App.Notifications.render">
+</div>
+```
+
+`skrift:watch-for` is a JavaScript regular expression matched against `notification.type`.
+`skrift:render` is a global function path; inline expressions are not evaluated.
+
+```javascript
+window.App = {
+    Notifications: {
+        render(element, notification, event) {
+            event.preventDefault();  // Optional: suppresses the generic toast
+            element.textContent = notification.message || "";
+        },
+    },
+};
+```
+
+The render function receives `(element, notification, event)` and owns all DOM updates. Return values are ignored.
+
 ### Connection Status Events
 
 ```javascript
