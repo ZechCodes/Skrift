@@ -31,12 +31,11 @@ class TestGetAdminContext:
         request.url.path = "/admin"
 
         db_session = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        db_session.execute.return_value = mock_result
 
-        with patch("skrift.admin.helpers.select"), \
-             pytest.raises(NotAuthorizedException):
+        with (
+            patch("skrift.admin.helpers.get_by_pk", new_callable=AsyncMock, return_value=None),
+            pytest.raises(NotAuthorizedException),
+        ):
             await get_admin_context(request, db_session)
 
     @pytest.mark.asyncio
@@ -53,16 +52,27 @@ class TestGetAdminContext:
         request.url.path = "/admin"
 
         db_session = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        db_session.execute.return_value = mock_result
 
         mock_perms = MagicMock()
         mock_nav = [MagicMock()]
 
-        with patch("skrift.admin.helpers.select"), \
-             patch("skrift.admin.helpers.get_user_permissions", new_callable=AsyncMock, return_value=mock_perms), \
-             patch("skrift.admin.helpers.build_admin_nav", new_callable=AsyncMock, return_value=mock_nav):
+        with (
+            patch(
+                "skrift.admin.helpers.get_by_pk",
+                new_callable=AsyncMock,
+                return_value=mock_user,
+            ),
+            patch(
+                "skrift.admin.helpers.get_user_permissions",
+                new_callable=AsyncMock,
+                return_value=mock_perms,
+            ),
+            patch(
+                "skrift.admin.helpers.build_admin_nav",
+                new_callable=AsyncMock,
+                return_value=mock_nav,
+            ),
+        ):
             ctx = await get_admin_context(request, db_session)
 
         assert ctx["user"] is mock_user
