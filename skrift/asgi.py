@@ -828,6 +828,37 @@ def create_app() -> ASGIApp:
             )
         ]
 
+    # Bot detection middleware — opt-in via bot_detection.enabled. Runs
+    # after rate limiting so blocked requests never invoke detection.
+    bot_detection_middleware = []
+    bot_detection_metrics: list = []
+    bot_state_store = None
+    if settings.bot_detection.enabled:
+        from skrift.bot_detection.factory import (
+            build_bot_state_store,
+            build_initial_metrics,
+        )
+        from skrift.bot_detection.middleware import BotDetectionMiddleware
+        from skrift.bot_detection.setup import setup_honeypot_hooks
+
+        bot_state_store = build_bot_state_store(
+            settings.bot_detection, settings.redis, _redis_client
+        )
+        bot_detection_metrics = build_initial_metrics(settings.bot_detection)
+        # Register honeypot ROBOTS_TXT filter + ROBOTS_TXT_FETCHED
+        # action so the trap rule is injected and fetches are recorded.
+        setup_honeypot_hooks(
+            settings.bot_detection, bot_state_store, settings.secret_key
+        )
+        bot_detection_middleware = [
+            DefineMiddleware(
+                BotDetectionMiddleware,
+                config=settings.bot_detection,
+                store=bot_state_store,
+                metrics=bot_detection_metrics,
+            )
+        ]
+
     # Static files
     from skrift.lib.theme import get_themes_dir
     themes_dir = get_themes_dir()
@@ -878,21 +909,62 @@ def create_app() -> ASGIApp:
         return f"{url}{sep}size={size}"
 
     template_dirs = get_template_directories()
+
+    template_globals = {
+        "site_name": get_cached_site_name,
+        "site_tagline": get_cached_site_tagline,
+        "site_copyright_holder": get_cached_site_copyright_holder,
+        "site_copyright_start_year": get_cached_site_copyright_start_year,
+        "active_theme": get_cached_site_theme,
+        "themes_available": themes_available,
+        "Form": Form,
+        "csrf_field": _csrf_field_ctx,
+        "static_url": static_url,
+        "theme_url": ThemeStaticURL(static_url, get_cached_site_theme),
+        "asset_url": _asset_url,
+        "favicon_url": get_cached_favicon_url,
+    }
+
+    if (
+        settings.bot_detection.enabled
+        and settings.bot_detection.pixel_beacon.enabled
+        and settings.bot_detection.pixel_beacon.inject_pixel
+    ):
+        from skrift.bot_detection.beacon import (
+            make_pixel_token,
+            render_pixel_tag,
+        )
+
+        def _bot_detection_pixel():
+            token, signature = make_pixel_token(settings.secret_key)
+            return render_pixel_tag(
+                token,
+                signature,
+                css_beacon=settings.bot_detection.pixel_beacon.inject_css_beacon,
+            )
+
+        template_globals["bot_detection_pixel"] = _bot_detection_pixel
+
+    if (
+        settings.bot_detection.enabled
+        and settings.bot_detection.js_challenge.enabled
+    ):
+        from skrift.bot_detection.challenge import (
+            make_challenge_token,
+            render_challenge_tag,
+        )
+        from skrift.middleware.security import csp_nonce_var
+
+        def _bot_detection_challenge():
+            token, signature = make_challenge_token(settings.secret_key)
+            return render_challenge_tag(
+                token, signature, csp_nonce=csp_nonce_var.get("")
+            )
+
+        template_globals["bot_detection_challenge"] = _bot_detection_challenge
+
     engine_callback = build_template_engine_callback(
-        extra_globals={
-            "site_name": get_cached_site_name,
-            "site_tagline": get_cached_site_tagline,
-            "site_copyright_holder": get_cached_site_copyright_holder,
-            "site_copyright_start_year": get_cached_site_copyright_start_year,
-            "active_theme": get_cached_site_theme,
-            "themes_available": themes_available,
-            "Form": Form,
-            "csrf_field": _csrf_field_ctx,
-            "static_url": static_url,
-            "theme_url": ThemeStaticURL(static_url, get_cached_site_theme),
-            "asset_url": _asset_url,
-            "favicon_url": get_cached_favicon_url,
-        },
+        extra_globals=template_globals,
         extra_filters={"sized": _sized_url},
     )
     template_config = create_template_config(template_dirs, engine_callback)
@@ -927,6 +999,27 @@ def create_app() -> ASGIApp:
     webhook_handlers: list = []
     if settings.notifications.webhook_secret:
         webhook_handlers.append(NotificationsWebhookController)
+
+    # Bot detection controller — pixel + CSS beacons. Only registered
+    # when the component is enabled.
+    bot_detection_handlers: list = []
+    if settings.bot_detection.enabled:
+        from skrift.bot_detection.controllers import BotDetectionController
+
+        bot_detection_handlers.append(BotDetectionController)
+
+        # Honeypot trap — must be a real route handler so Litestar's
+        # router actually delivers requests to us. Application-level
+        # middleware does not run on unmatched routes.
+        if settings.bot_detection.robots_honeypot.enabled and bot_state_store is not None:
+            from skrift.bot_detection.trap_controller import build_trap_controller
+
+            bot_detection_handlers.append(
+                build_trap_controller(
+                    settings.bot_detection.robots_honeypot.trap_path,
+                    bot_state_store,
+                )
+            )
 
     # Notification backend setup
     if settings.notifications.backend:
@@ -972,6 +1065,14 @@ def create_app() -> ASGIApp:
             except ImportError:
                 logger.debug("pywebpush not installed, push notifications disabled")
 
+        # Apply the BOT_METRICS filter now that all hook handlers from
+        # user-loaded modules are registered. Mutates the list passed to
+        # the middleware in place.
+        if settings.bot_detection.enabled:
+            from skrift.bot_detection.factory import apply_metrics_filter
+
+            await apply_metrics_filter(bot_detection_metrics, settings.bot_detection)
+
         # Ensure local storage directories exist
         for store_cfg in settings.storage.stores.values():
             if store_cfg.backend == "local":
@@ -1006,9 +1107,9 @@ def create_app() -> ASGIApp:
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
-        route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *api_auth_handlers, *webhook_handlers, *controllers],
+        route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *api_auth_handlers, *webhook_handlers, *bot_detection_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
+        middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, *bot_detection_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
         template_config=template_config,
         compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream", compression_facade=SafeGzipCompression),
         exception_handlers=EXCEPTION_HANDLERS,
@@ -1018,6 +1119,8 @@ def create_app() -> ASGIApp:
     app.state.storage_manager = storage_manager
     app.state.trusted_proxy_manager = trusted_proxy_manager
     app.state.email_backend = email_backend
+    if bot_state_store is not None:
+        app.state.bot_detection_store = bot_state_store
 
     # Install the shared failed-auth limiter on app.state so the notification
     # webhook uses the Redis-backed counter when configured.

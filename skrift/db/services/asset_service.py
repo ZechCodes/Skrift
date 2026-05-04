@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from skrift.db.cache import evict_pk, get_by_pk, seed_instance
 from skrift.db.models.asset import Asset
 from skrift.db.models.page_asset import page_assets
 from skrift.lib.hooks import (
@@ -87,6 +88,7 @@ async def upload_asset(
     db_session.add(asset)
     await db_session.commit()
     await db_session.refresh(asset)
+    seed_instance(db_session, asset)
 
     # Fire after-upload action
     await hooks.do_action(AFTER_ASSET_UPLOAD, asset)
@@ -100,8 +102,7 @@ async def delete_asset(
     asset_id: UUID,
 ) -> bool:
     """Delete an asset. Removes backend file only when no other rows reference it."""
-    result = await db_session.execute(select(Asset).where(Asset.id == asset_id))
-    asset = result.scalar_one_or_none()
+    asset = await get_by_pk(db_session, Asset, asset_id)
     if not asset:
         return False
 
@@ -113,6 +114,7 @@ async def delete_asset(
 
     await db_session.delete(asset)
     await db_session.commit()
+    evict_pk(db_session, Asset, asset_id)
 
     # Check remaining references
     count_result = await db_session.execute(

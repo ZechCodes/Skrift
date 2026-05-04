@@ -8,12 +8,12 @@ from uuid import UUID
 
 from litestar import Request
 from litestar.exceptions import NotAuthorizedException
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.services import get_user_permissions
 from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.admin.navigation import build_admin_nav
+from skrift.db.cache import get_by_pk
 from skrift.db.models.user import User
 from skrift.db.services import page_service
 
@@ -92,10 +92,7 @@ async def get_admin_context(request: Request, db_session: AsyncSession) -> dict:
     if not user_id:
         raise NotAuthorizedException("Authentication required")
 
-    result = await db_session.execute(
-        select(User).where(User.id == UUID(user_id))
-    )
-    user = result.scalar_one_or_none()
+    user = await get_by_pk(db_session, User, UUID(user_id))
     if not user:
         raise NotAuthorizedException("Invalid user session")
 

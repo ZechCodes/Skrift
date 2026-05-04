@@ -172,7 +172,7 @@ def _run_alembic(project_root: Path, args: list[str]) -> None:
     skrift_versions = str(skrift_dir / "alembic" / "versions")
     user_versions = project_root / "migrations" / "versions"
     if user_versions.is_dir():
-        version_locations = f"{user_versions} {skrift_versions}"
+        version_locations = os.pathsep.join([str(user_versions), skrift_versions])
     else:
         version_locations = skrift_versions
 
@@ -187,6 +187,8 @@ def _run_alembic(project_root: Path, args: list[str]) -> None:
 
     # Build Config and inject version_locations
     cfg = Config(str(alembic_ini))
+    cfg.set_main_option("path_separator", "os")
+    cfg.set_main_option("version_path_separator", "os")
     cfg.set_main_option("version_locations", version_locations)
 
     # Parse and run through CommandLine for proper subcommand dispatch

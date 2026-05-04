@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from skrift.bot_detection.config import BotDetectionConfig
+
 # Load .env file early so env vars are available for YAML interpolation
 # Load from current working directory (where app.yaml lives)
 _env_file = Path.cwd() / ".env"
@@ -659,6 +661,9 @@ class Settings(BaseSettings):
     # Rate limit config (loaded from app.yaml)
     rate_limit: RateLimitConfig = RateLimitConfig()
 
+    # Bot detection config (loaded from app.yaml)
+    bot_detection: BotDetectionConfig = BotDetectionConfig()
+
     # Trusted proxy / client IP resolution (loaded from app.yaml)
     trusted_proxy: TrustedProxyConfig = TrustedProxyConfig()
 
@@ -760,6 +765,9 @@ def get_settings() -> Settings:
 
     if "rate_limit" in app_config:
         kwargs["rate_limit"] = RateLimitConfig(**app_config["rate_limit"])
+
+    if "bot_detection" in app_config:
+        kwargs["bot_detection"] = BotDetectionConfig(**app_config["bot_detection"])
 
     if "trusted_proxy" in app_config:
         kwargs["trusted_proxy"] = TrustedProxyConfig(**app_config["trusted_proxy"])

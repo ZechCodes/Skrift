@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from skrift.db.cache import evict_pk, get_by_pk, seed_instance
 from skrift.db.models import Page
 from skrift.db.services import revision_service
 from skrift.lib.hooks import hooks, BEFORE_PAGE_SAVE, AFTER_PAGE_SAVE, BEFORE_PAGE_DELETE, AFTER_PAGE_DELETE, AFTER_PAGE_PUBLISHED, AFTER_PAGE_UNPUBLISHED
@@ -122,8 +123,7 @@ async def get_page_by_id(
     Returns:
         Page object or None if not found
     """
-    result = await db_session.execute(select(Page).where(Page.id == page_id))
-    return result.scalar_one_or_none()
+    return await get_by_pk(db_session, Page, page_id)
 
 
 async def create_page(
@@ -189,6 +189,7 @@ async def create_page(
     db_session.add(page)
     await db_session.commit()
     await db_session.refresh(page)
+    seed_instance(db_session, page)
 
     # Fire after_page_save action
     await hooks.do_action(AFTER_PAGE_SAVE, page, is_new=True)
@@ -327,6 +328,7 @@ async def delete_page(
 
     await db_session.delete(page)
     await db_session.commit()
+    evict_pk(db_session, Page, page_id)
 
     # Fire after_page_delete action
     await hooks.do_action(AFTER_PAGE_DELETE, page)
