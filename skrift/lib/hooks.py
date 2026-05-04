@@ -337,3 +337,12 @@ AFTER_TOKEN_REVOKED = "after_token_revoked"
 # Page lifecycle hooks
 AFTER_PAGE_PUBLISHED = "after_page_published"
 AFTER_PAGE_UNPUBLISHED = "after_page_unpublished"
+
+# Bot detection hooks
+BOT_METRICS = "bot_metrics"                    # filter: list[BotMetric] -> list[BotMetric]
+BOT_DETECTION_RESULT = "bot_detection_result"  # filter: BotDetectionResult -> BotDetectionResult
+BOT_DETECTED = "bot_detected"                  # action: (scope, result)
+BOT_TRAP_HIT = "bot_trap_hit"                  # action: (scope, ip, ua, token)
+BOT_PIXEL_LOADED = "bot_pixel_loaded"          # action: (scope, ip, request_id)
+BOT_CHALLENGE_PASSED = "bot_challenge_passed"  # action: (scope, ip, session_id)
+ROBOTS_TXT_FETCHED = "robots_txt_fetched"      # action: (request, ip, ua)
