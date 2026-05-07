@@ -98,6 +98,14 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Observability](observability.md)
 
+-   :material-briefcase-clock:{ .lg .middle } **Workers**
+
+    ---
+
+    Run typed background jobs with queues, retries, persistence, and operator controls.
+
+    [:octicons-arrow-right-24: Workers](workers.md)
+
 -   :material-bell-ring:{ .lg .middle } **Notifications**
 
     ---
@@ -138,6 +146,7 @@ Step-by-step guides for building and customizing your Skrift site.
 | [Custom Middleware](custom-middleware.md) | Request processing | Python, ASGI |
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |
 | [Observability](observability.md) | Tracing & logging | None |
+| [Workers](workers.md) | Background jobs | Python, async |
 | [Notifications](notifications.md) | Real-time notifications | Python basics |
 | [Web Push](web-push.md) | Offline push notifications | Python basics |
 | [Multi-Subdomain Sites](multisite.md) | Subdomain architecture | Python, ASGI |

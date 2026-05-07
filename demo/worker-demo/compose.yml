@@ -2,7 +2,7 @@ x-skrift-app: &skrift_app
   image: ghcr.io/astral-sh/uv:python3.13-bookworm
   working_dir: /workspace/demo/worker-demo
   volumes:
-    - .:/workspace
+    - ../..:/workspace
   environment:
     SKRIFT_ENV: compose
     SECRET_KEY: compose-development-secret-key-change-me
@@ -41,7 +41,6 @@ services:
 
   migrate:
     <<: *skrift_app
-    profiles: ["worker-demo"]
     command: uv run skrift -f compose.app.yaml db upgrade heads
     depends_on:
       postgres:
@@ -50,7 +49,6 @@ services:
 
   web:
     <<: *skrift_app
-    profiles: ["worker-demo"]
     command: uv run skrift -f compose.app.yaml serve --host 0.0.0.0 --port 8080
     ports:
       - "8082:8080"
@@ -60,7 +58,6 @@ services:
 
   worker:
     <<: *skrift_app
-    profiles: ["worker-demo"]
     command: uv run skrift -f compose.app.yaml workers run --concurrency 4
     depends_on:
       migrate:
@@ -68,7 +65,6 @@ services:
 
   persister:
     <<: *skrift_app
-    profiles: ["worker-demo"]
     command: uv run skrift -f compose.app.yaml workers persister
     depends_on:
       migrate:

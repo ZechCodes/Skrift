@@ -1,0 +1,39 @@
+environment: compose
+controllers:
+  - workerdemo.controllers:WorkerDemoController
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+db:
+  url: $DATABASE_URL
+  pool_pre_ping: true
+redis:
+  url: redis://redis:6379
+auth:
+  redirect_base_url: http://localhost:8082
+  methods:
+    dummy:
+      type: dummy
+      label: Demo Login
+rate_limit:
+  enabled: false
+workers:
+  enabled: true
+  preset: distributed
+  queues:
+    - demo-fast
+    - demo-slow
+    - demo-io
+  concurrency: 4
+  poll_interval: 0.1
+  visibility_timeout: 30.0
+  max_reclaims: 3
+  imports:
+    - workerdemo.controllers
+  persistence:
+    streams:
+      - workers:lifecycle
+    batch_size: 100
+    flush_interval: 1.0
+    snapshot_keys:
+      - workers:queue_wait_history
+    snapshot_interval: 10.0

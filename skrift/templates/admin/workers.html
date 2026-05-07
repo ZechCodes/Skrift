@@ -1,0 +1,862 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Workers - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<div class="sk-admin-header">
+    <hgroup>
+        <h1>Workers</h1>
+        <p>Current process observer</p>
+    </hgroup>
+    <a href="/admin/workers" role="button" class="sk-btn-outline">Refresh</a>
+</div>
+
+<section class="sk-stats sk-worker-stats">
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Runtime</div>
+        <div class="sk-worker-stat-line">
+            <span id="sk-workers-mode">{{ snapshot.mode }}</span>
+            <span id="sk-workers-concurrency">{{ snapshot.concurrency }} concurrent</span>
+        </div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Queues</div>
+        <div class="sk-worker-stat-line">
+            <span id="sk-workers-queue-count">{{ snapshot.queues | length }} queues</span>
+            <span id="sk-workers-queued-total">0 jobs queued</span>
+        </div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Runs</div>
+        <div class="sk-worker-stat-line">
+            <span id="sk-workers-job-count">{{ snapshot.jobs | length }} runs</span>
+            <span id="sk-workers-active-total">0 active</span>
+        </div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Handlers</div>
+        <div class="sk-worker-stat-line">
+            <span id="sk-workers-handler-count">{{ snapshot.handlers | length }} registered</span>
+        </div>
+    </article>
+    <article class="sk-stat-card sk-worker-dlq-card" id="sk-workers-dlq-card">
+        <div class="sk-stat-label">Dead Letter Queue</div>
+        <a href="/admin/workers/dlq" class="sk-worker-stat-line">
+            <span id="sk-workers-dlq-open">0 open</span>
+            <span id="sk-workers-dlq-rate">+0 last hour</span>
+            <span id="sk-workers-dlq-cause">none</span>
+        </a>
+    </article>
+</section>
+
+<div class="sk-worker-chart-panels">
+    <section class="sk-panel sk-worker-panel">
+        <div class="sk-panel-head">
+            <h2>Queue Trend</h2>
+            <label class="sk-worker-select-label">
+                <span>Observe</span>
+                <select id="sk-workers-queue-select">
+                    <option value="__all__">All queues</option>
+                </select>
+            </label>
+        </div>
+        <div class="sk-panel-body">
+            <div class="sk-worker-legend" aria-label="Queue state legend">
+                <span><i class="sk-worker-dot sk-worker-dot-ready"></i>Ready</span>
+                <span><i class="sk-worker-dot sk-worker-dot-delayed"></i>Delayed</span>
+                <span><i class="sk-worker-dot sk-worker-dot-claimed"></i>Claimed</span>
+                <span><i class="sk-worker-dot sk-worker-dot-dead"></i>Dead</span>
+            </div>
+            <div class="sk-worker-chart-wrap">
+                <svg
+                    id="sk-workers-queue-chart"
+                    class="sk-worker-chart"
+                    viewBox="0 0 640 180"
+                    role="img"
+                    aria-label="Queue counts over time"
+                ></svg>
+            </div>
+            <div class="sk-worker-chart-summary" id="sk-workers-chart-summary"></div>
+        </div>
+    </section>
+
+    <section class="sk-panel sk-worker-panel">
+        <div class="sk-panel-head">
+            <h2>Completed Jobs</h2>
+        </div>
+        <div class="sk-panel-body">
+            <div class="sk-worker-chart-wrap">
+                <svg
+                    id="sk-workers-completed-chart"
+                    class="sk-worker-chart"
+                    viewBox="0 0 640 180"
+                    role="img"
+                    aria-label="Completed jobs over the last 24 hours"
+                ></svg>
+            </div>
+            <div class="sk-worker-chart-summary" id="sk-workers-completed-summary"></div>
+        </div>
+    </section>
+</div>
+
+<section class="sk-panel sk-worker-health-panel">
+    <div class="sk-panel-head">
+        <h2>Oldest Ready Wait Over Time</h2>
+        <label class="sk-worker-select-label">
+            <span>Range</span>
+            <select id="sk-workers-wait-range">
+                <option value="1">1 hour</option>
+                <option value="6">6 hours</option>
+                <option value="12">12 hours</option>
+                <option value="24" selected>24 hours</option>
+            </select>
+        </label>
+    </div>
+    <div class="sk-panel-body">
+        <div class="sk-worker-chart-wrap">
+            <svg
+                id="sk-workers-queue-health"
+                class="sk-worker-chart sk-worker-wait-chart"
+                viewBox="0 0 640 180"
+                role="img"
+                aria-label="Oldest ready wait by queue over time"
+            ></svg>
+        </div>
+        <div class="sk-worker-wait-summary" id="sk-workers-wait-summary"></div>
+    </div>
+</section>
+
+<section class="sk-panel sk-worker-live-panel">
+    <div class="sk-panel-head">
+        <h2>Live Events</h2>
+    </div>
+    <div class="sk-worker-feed" id="sk-workers-live-feed"></div>
+    <p class="sk-no-items" id="sk-workers-live-empty">
+        No lifecycle events have been emitted in this process.
+    </p>
+</section>
+
+<section class="sk-worker-tabs" aria-label="Worker details">
+    <div class="sk-worker-tablist" role="tablist">
+        <button
+            type="button"
+            class="sk-worker-tab active"
+            data-worker-tab="runs"
+            role="tab"
+            aria-selected="true"
+        >Runs</button>
+        <button
+            type="button"
+            class="sk-worker-tab"
+            data-worker-tab="handlers"
+            role="tab"
+            aria-selected="false"
+        >Handlers</button>
+        <button
+            type="button"
+            class="sk-worker-tab"
+            data-worker-tab="events"
+            role="tab"
+            aria-selected="false"
+        >Events</button>
+    </div>
+
+    <article class="sk-worker-tab-panel active" data-worker-panel="runs" role="tabpanel">
+        <table class="sk-admin-table">
+            <thead>
+                <tr>
+                    <th>Run</th>
+                    <th>Type</th>
+                    <th>Queue</th>
+                    <th>Status</th>
+                    <th>Attempt</th>
+                    <th>Updated</th>
+                </tr>
+            </thead>
+            <tbody id="sk-workers-jobs"></tbody>
+        </table>
+        <p class="sk-no-items" id="sk-workers-jobs-empty">
+            No worker runs have been submitted in this process.
+        </p>
+    </article>
+
+    <article class="sk-worker-tab-panel" data-worker-panel="handlers" role="tabpanel">
+        <table class="sk-admin-table">
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Payload</th>
+                    <th>Queue</th>
+                    <th>Max Attempts</th>
+                    <th>Visibility</th>
+                </tr>
+            </thead>
+            <tbody id="sk-workers-handlers"></tbody>
+        </table>
+        <p class="sk-no-items" id="sk-workers-handlers-empty">
+            No worker handlers are registered in this process.
+        </p>
+    </article>
+
+    <article class="sk-worker-tab-panel" data-worker-panel="events" role="tabpanel">
+        <table class="sk-admin-table">
+            <thead>
+                <tr>
+                    <th>Position</th>
+                    <th>Event</th>
+                    <th>Run</th>
+                    <th>Queue</th>
+                    <th>Attempt</th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+            <tbody id="sk-workers-events"></tbody>
+        </table>
+        <p class="sk-no-items" id="sk-workers-events-empty">
+            No lifecycle events have been emitted in this process.
+        </p>
+    </article>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script nonce="{{ csp_nonce() }}">
+(function () {
+    "use strict";
+
+    const ids = {
+        mode: document.getElementById("sk-workers-mode"),
+        concurrency: document.getElementById("sk-workers-concurrency"),
+        queueCount: document.getElementById("sk-workers-queue-count"),
+        queuedTotal: document.getElementById("sk-workers-queued-total"),
+        jobCount: document.getElementById("sk-workers-job-count"),
+        activeTotal: document.getElementById("sk-workers-active-total"),
+        handlerCount: document.getElementById("sk-workers-handler-count"),
+        dlqCard: document.getElementById("sk-workers-dlq-card"),
+        dlqOpen: document.getElementById("sk-workers-dlq-open"),
+        dlqRate: document.getElementById("sk-workers-dlq-rate"),
+        dlqCause: document.getElementById("sk-workers-dlq-cause"),
+        queueSelect: document.getElementById("sk-workers-queue-select"),
+        queueChart: document.getElementById("sk-workers-queue-chart"),
+        chartSummary: document.getElementById("sk-workers-chart-summary"),
+        completedChart: document.getElementById("sk-workers-completed-chart"),
+        completedSummary: document.getElementById("sk-workers-completed-summary"),
+        queueHealth: document.getElementById("sk-workers-queue-health"),
+        waitRange: document.getElementById("sk-workers-wait-range"),
+        waitSummary: document.getElementById("sk-workers-wait-summary"),
+        liveFeed: document.getElementById("sk-workers-live-feed"),
+        jobs: document.getElementById("sk-workers-jobs"),
+        handlers: document.getElementById("sk-workers-handlers"),
+        events: document.getElementById("sk-workers-events"),
+        liveEmpty: document.getElementById("sk-workers-live-empty"),
+        jobsEmpty: document.getElementById("sk-workers-jobs-empty"),
+        handlersEmpty: document.getElementById("sk-workers-handlers-empty"),
+        eventsEmpty: document.getElementById("sk-workers-events-empty"),
+    };
+    const maxSamples = 180;
+    const history = [];
+    const waitBucketCount = 96;
+    const waitPalette = [
+        "#16a34a",
+        "#2563eb",
+        "#d97706",
+        "#dc2626",
+        "#7c3aed",
+        "#0891b2",
+        "#be123c",
+        "#4f46e5",
+        "#65a30d",
+        "#c2410c",
+    ];
+    let selectedQueue = "__all__";
+    let waitWindowHours = 24;
+    let highlightedWaitQueue = null;
+    let latestSnapshot = null;
+
+    function esc(value) {
+        return String(value ?? "").replace(/[&<>"']/g, function (ch) {
+            return {
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+            }[ch];
+        });
+    }
+
+    function setEmpty(element, isEmpty) {
+        if (element) element.hidden = !isEmpty;
+    }
+
+    function queueMetric(queue, key) {
+        return Number((queue || {})[key]) || 0;
+    }
+
+    function queueTotal(queue) {
+        return queueMetric(queue, "ready") +
+            queueMetric(queue, "delayed") +
+            queueMetric(queue, "claimed") +
+            queueMetric(queue, "dead_lettered");
+    }
+
+    function readyAge(queue) {
+        return Math.max(0, queue.oldest_ready_age_seconds || 0);
+    }
+
+    function aggregateQueues(queues) {
+        return queues.reduce((total, queue) => ({
+            queue: "__all__",
+            ready: total.ready + queueMetric(queue, "ready"),
+            delayed: total.delayed + queueMetric(queue, "delayed"),
+            claimed: total.claimed + queueMetric(queue, "claimed"),
+            dead_lettered: total.dead_lettered + queueMetric(queue, "dead_lettered"),
+            oldest_ready_age_seconds: Math.max(
+                total.oldest_ready_age_seconds,
+                readyAge(queue),
+            ),
+        }), {
+            queue: "__all__",
+            ready: 0,
+            delayed: 0,
+            claimed: 0,
+            dead_lettered: 0,
+            oldest_ready_age_seconds: 0,
+        });
+    }
+
+    function normalizedQueueCounts(queue, name) {
+        return {
+            queue: name,
+            ready: queueMetric(queue, "ready"),
+            delayed: queueMetric(queue, "delayed"),
+            claimed: queueMetric(queue, "claimed"),
+            dead_lettered: queueMetric(queue, "dead_lettered"),
+            oldest_ready_age_seconds: readyAge(queue),
+        };
+    }
+
+    function selectedQueueCounts(queues) {
+        if (selectedQueue === "__all__") return aggregateQueues(queues);
+        return normalizedQueueCounts(
+            queues.find((queue) => queue.queue === selectedQueue),
+            selectedQueue,
+        );
+    }
+
+    function inSelectedQueue(item) {
+        return selectedQueue === "__all__" || item.queue === selectedQueue;
+    }
+
+    function chartMax(values) {
+        const recorded = recordedMax(values);
+        if (recorded <= 0) return 1;
+        return niceTickStep(recorded / 2) * 2;
+    }
+
+    function niceTickStep(rawStep) {
+        const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+        const normalized = rawStep / magnitude;
+        for (const multiplier of [1, 2, 2.5, 5, 10]) {
+            if (normalized <= multiplier) return multiplier * magnitude;
+        }
+        return 10 * magnitude;
+    }
+
+    function recordedMax(values) {
+        return Math.max(...values, 0);
+    }
+
+    function plotBounds() {
+        return { left: 52, right: 16, top: 16, bottom: 16 };
+    }
+
+    function yForValue(value, maxValue, height, bounds) {
+        const plotHeight = height - bounds.top - bounds.bottom;
+        return height - bounds.bottom - ((value / maxValue) * plotHeight);
+    }
+
+    function chartScale(recordedValue, formatter, width, height, bounds) {
+        const scaleMax = chartMax([recordedValue]);
+        const ticks = recordedValue > 0 ? [
+            { value: scaleMax, label: formatter(scaleMax) },
+            { value: scaleMax / 2, label: formatter(scaleMax / 2) },
+            { value: 0, label: formatter(0) },
+        ] : [
+            { value: 0, label: formatter(0) },
+        ];
+        return ticks.map((tick) => {
+            const y = yForValue(tick.value, scaleMax, height, bounds);
+            return "<line class=\"sk-worker-chart-grid\" x1=\"" + bounds.left +
+                "\" y1=\"" + y.toFixed(1) + "\" x2=\"" + (width - bounds.right) +
+                "\" y2=\"" + y.toFixed(1) + "\" />" +
+                "<text class=\"sk-worker-chart-label\" x=\"" + (bounds.left - 8) +
+                "\" y=\"" + (y + 4).toFixed(1) + "\">" + esc(tick.label) + "</text>";
+        }).join("");
+    }
+
+    function formatCountScale(value) {
+        if (Number.isInteger(value)) return String(value);
+        return value.toFixed(1);
+    }
+
+    function formatDuration(seconds) {
+        if (seconds > 0 && seconds < 1) return Math.round(seconds * 1000) + "ms";
+        if (seconds < 1) return "0s";
+        if (seconds < 60) return Math.round(seconds) + "s";
+        if (seconds < 3600) return Math.floor(seconds / 60) + "m " +
+            Math.round(seconds % 60) + "s";
+        return Math.floor(seconds / 3600) + "h " +
+            Math.floor((seconds % 3600) / 60) + "m";
+    }
+
+    function queueAtSample(sample, name) {
+        return (sample.queues || []).find((queue) => queue.queue === name);
+    }
+
+    function sampleTime(sample) {
+        const parsed = Date.parse(sample.timestamp || "");
+        return Number.isNaN(parsed) ? Date.now() : parsed;
+    }
+
+    function waitPoints(samples, name) {
+        return samples.map((sample) => {
+            const queue = queueAtSample(sample, name);
+            if (!queue) return null;
+            return {
+                time: sampleTime(sample),
+                value: readyAge(queue),
+            };
+        }).filter(Boolean);
+    }
+
+    function xForTime(time, start, end, width, bounds) {
+        const plotWidth = width - bounds.left - bounds.right;
+        const ratio = Math.max(0, Math.min(1, (time - start) / (end - start || 1)));
+        return bounds.left + ratio * plotWidth;
+    }
+
+    function timedPointsFor(points, maxValue, width, height, bounds, start, end) {
+        return points.map((point) => {
+            const x = xForTime(point.time, start, end, width, bounds);
+            const y = yForValue(point.value, maxValue, height, bounds);
+            return x.toFixed(1) + "," + y.toFixed(1);
+        }).join(" ");
+    }
+
+    function waitWindowMs() {
+        return waitWindowHours * 60 * 60 * 1000;
+    }
+
+    function formatIntervalDuration(seconds) {
+        if (seconds < 60) return Math.round(seconds) + "s";
+        if (seconds < 3600) return Math.round(seconds / 60) + "min";
+        return Math.round(seconds / 3600) + "h";
+    }
+
+    function waitHistoryForRange(samples, queues) {
+        const now = Date.now();
+        const start = now - waitWindowMs();
+        const filtered = samples.filter((sample) => {
+            const timestamp = sampleTime(sample);
+            return timestamp >= start && timestamp <= now;
+        });
+        return filtered.length ? filtered : [{
+            timestamp: new Date().toISOString(),
+            queues,
+        }];
+    }
+
+    function renderQueueHealth(queues, samples) {
+        if (!queues.length) {
+            ids.queueHealth.innerHTML = "";
+            ids.waitSummary.innerHTML = "<p class=\"sk-no-items\">No queues observed.</p>";
+            return;
+        }
+
+        const sourceSamples = samples.length ? samples : [{
+            timestamp: new Date().toISOString(),
+            queues,
+        }];
+        const historySamples = waitHistoryForRange(sourceSamples, queues);
+        const names = queues.map((queue) => queue.queue).sort();
+        if (highlightedWaitQueue && !names.includes(highlightedWaitQueue)) {
+            highlightedWaitQueue = null;
+        }
+
+        const width = 640;
+        const height = 180;
+        const bounds = plotBounds();
+        const now = Date.now();
+        const start = now - waitWindowMs();
+        const end = now;
+        const maxAge = recordedMax(
+            names.flatMap((name) => waitPoints(historySamples, name).map((point) => point.value)),
+        );
+        const scaleMax = chartMax([maxAge]);
+        const lines = names.map((name, index) => {
+            const active = !highlightedWaitQueue || highlightedWaitQueue === name;
+            const className = "sk-worker-wait-line" + (active ? "" : " muted");
+            const pointClassName = "sk-worker-wait-point" + (active ? "" : " muted");
+            const color = waitPalette[index % waitPalette.length];
+            const points = waitPoints(historySamples, name);
+            let markup = "";
+            if (points.length === 1) {
+                const x = xForTime(points[0].time, start, end, width, bounds);
+                const y = yForValue(points[0].value, scaleMax, height, bounds);
+                markup = "<circle class=\"" + pointClassName + "\" " +
+                    "data-wait-queue=\"" + esc(name) + "\" " +
+                    "style=\"fill:" + color + "; stroke:" + color + "\" " +
+                    "cx=\"" + x.toFixed(1) + "\" cy=\"" + y.toFixed(1) +
+                    "\" r=\"4\" />";
+            } else if (points.length > 1) {
+                markup = "<polyline class=\"" + className + "\" " +
+                    "data-wait-queue=\"" + esc(name) + "\" " +
+                    "style=\"stroke:" + color + "\" " +
+                    "points=\"" +
+                    timedPointsFor(
+                        points,
+                        scaleMax,
+                        width,
+                        height,
+                        bounds,
+                        start,
+                        end,
+                    ) +
+                    "\" />";
+            }
+            return {
+                name,
+                markup,
+            };
+        });
+        const highlighted = lines.filter((line) => line.name === highlightedWaitQueue);
+        const muted = lines.filter((line) => line.name !== highlightedWaitQueue);
+        ids.queueHealth.innerHTML =
+            chartScale(maxAge, formatDuration, width, height, bounds) +
+            muted.map((line) => line.markup).join("") +
+            highlighted.map((line) => line.markup).join("");
+
+        ids.queueHealth.querySelectorAll("[data-wait-queue]").forEach((line) => {
+            line.addEventListener("click", () => {
+                const queue = line.getAttribute("data-wait-queue");
+                highlightedWaitQueue = highlightedWaitQueue === queue ? null : queue;
+                if (latestSnapshot) renderQueueHealth(
+                    latestSnapshot.queues,
+                    latestSnapshot.queue_wait_history || [],
+                );
+            });
+        });
+
+        ids.waitSummary.innerHTML = names.map((name, index) => {
+            const queue = queues.find((item) => item.queue === name) || {};
+            const active = !highlightedWaitQueue || highlightedWaitQueue === name;
+            const color = waitPalette[index % waitPalette.length];
+            return "<button type=\"button\" class=\"sk-worker-wait-key" +
+                (active ? "" : " muted") + "\" data-wait-key=\"" + esc(name) + "\">" +
+                "<i style=\"background:" + color + "\"></i>" +
+                "<span>" + esc(name) + "</span>" +
+                "<strong>" + esc(formatDuration(readyAge(queue))) + "</strong>" +
+                "</button>";
+        }).join("") + "<span class=\"sk-worker-wait-range\">" +
+            esc(waitWindowHours) + "h range · " +
+            esc(formatIntervalDuration(
+                latestSnapshot.queue_wait_bucket_seconds ||
+                ((waitWindowMs() / waitBucketCount) / 1000)
+            )) +
+            " intervals</span>";
+        ids.waitSummary.querySelectorAll("[data-wait-key]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const queue = button.getAttribute("data-wait-key");
+                highlightedWaitQueue = highlightedWaitQueue === queue ? null : queue;
+                if (latestSnapshot) renderQueueHealth(
+                    latestSnapshot.queues,
+                    latestSnapshot.queue_wait_history || [],
+                );
+            });
+        });
+    }
+
+    function updateQueueSelect(queues) {
+        const names = queues.map((queue) => queue.queue).sort();
+        if (selectedQueue !== "__all__" && !names.includes(selectedQueue)) {
+            selectedQueue = "__all__";
+        }
+        ids.queueSelect.innerHTML = "<option value=\"__all__\">All queues</option>" +
+            names.map((name) =>
+                "<option value=\"" + esc(name) + "\">" + esc(name) + "</option>"
+            ).join("");
+        ids.queueSelect.value = selectedQueue;
+    }
+
+    function seedTrendHistory(samples) {
+        history.length = 0;
+        (samples || []).forEach((sample) => {
+            const time = sampleTime(sample);
+            if (!Number.isNaN(time)) {
+                history.push({
+                    time,
+                    queues: sample.queues || [],
+                });
+            }
+        });
+        while (history.length > maxSamples) history.shift();
+    }
+
+    function setTrendHistory(samples) {
+        seedTrendHistory(samples || []);
+    }
+
+    function pointsFor(values, maxValue, width, height, bounds) {
+        if (values.length === 1) {
+            const y = yForValue(values[0], maxValue, height, bounds);
+            return bounds.left + "," + y + " " + (width - bounds.right) + "," + y;
+        }
+        return values.map((value, index) => {
+            const plotWidth = width - bounds.left - bounds.right;
+            const x = bounds.left + (index / (values.length - 1)) * plotWidth;
+            const y = yForValue(value, maxValue, height, bounds);
+            return x.toFixed(1) + "," + y.toFixed(1);
+        }).join(" ");
+    }
+
+    function renderTrendChart() {
+        if (!history.length) return;
+        const width = 640;
+        const height = 180;
+        const bounds = plotBounds();
+        const series = history.map((sample) => selectedQueueCounts(sample.queues));
+        const times = history.map((sample) => sample.time);
+        const start = Math.min(...times);
+        const end = Math.max(...times);
+        const points = {
+            ready: series.map((sample, index) => ({ time: times[index], value: sample.ready })),
+            delayed: series.map((sample, index) => ({ time: times[index], value: sample.delayed })),
+            claimed: series.map((sample, index) => ({ time: times[index], value: sample.claimed })),
+            dead_lettered: series.map((sample, index) => ({
+                time: times[index],
+                value: sample.dead_lettered,
+            })),
+        };
+        const maxValue = recordedMax(
+            Object.values(points).flat().map((point) => point.value),
+        );
+        const scaleMax = chartMax([maxValue]);
+        const latest = series[series.length - 1] || selectedQueueCounts([]);
+        const lineFor = (metricPoints) => metricPoints.length > 1
+            ? timedPointsFor(metricPoints, scaleMax, width, height, bounds, start, end)
+            : pointsFor(metricPoints.map((point) => point.value), scaleMax, width, height, bounds);
+
+        ids.queueChart.innerHTML =
+            chartScale(maxValue, formatCountScale, width, height, bounds) +
+            "<polyline class=\"sk-worker-chart-ready\" points=\"" +
+            lineFor(points.ready) + "\" />" +
+            "<polyline class=\"sk-worker-chart-delayed\" points=\"" +
+            lineFor(points.delayed) + "\" />" +
+            "<polyline class=\"sk-worker-chart-claimed\" points=\"" +
+            lineFor(points.claimed) + "\" />" +
+            "<polyline class=\"sk-worker-chart-dead\" points=\"" +
+            lineFor(points.dead_lettered) + "\" />";
+
+        ids.chartSummary.innerHTML =
+            "<span>Ready <strong>" + esc(latest.ready) + "</strong></span>" +
+            "<span>Delayed <strong>" + esc(latest.delayed) + "</strong></span>" +
+            "<span>Claimed <strong>" + esc(latest.claimed) + "</strong></span>" +
+            "<span>Dead <strong>" + esc(latest.dead_lettered) + "</strong></span>";
+    }
+
+    function completedValue(bucket) {
+        if (!bucket) return 0;
+        if (selectedQueue === "__all__") return bucket.total || 0;
+        return (bucket.queues || {})[selectedQueue] || 0;
+    }
+
+    function renderCompletedChart(snapshot) {
+        const buckets = snapshot.completed_history || [];
+        const width = 640;
+        const height = 180;
+        const bounds = plotBounds();
+        const values = buckets.map(completedValue);
+        const maxValue = chartMax(values);
+        const innerWidth = width - bounds.left - bounds.right;
+        const innerHeight = height - bounds.top - bounds.bottom;
+        const gap = 1;
+        const barWidth = Math.max(1, (innerWidth / Math.max(values.length, 1)) - gap);
+        const bars = values.map((value, index) => {
+            const x = bounds.left + index * (innerWidth / Math.max(values.length, 1));
+            const barHeight = maxValue ? (value / maxValue) * innerHeight : 0;
+            const y = bounds.top + innerHeight - barHeight;
+            return "<rect class=\"sk-worker-chart-ready\" x=\"" + x.toFixed(2) +
+                "\" y=\"" + y.toFixed(2) +
+                "\" width=\"" + barWidth.toFixed(2) +
+                "\" height=\"" + Math.max(0, barHeight).toFixed(2) + "\" />";
+        }).join("");
+        ids.completedChart.innerHTML =
+            chartScale(maxValue, formatCountScale, width, height, bounds) + bars;
+
+        const total = values.reduce((sum, value) => sum + value, 0);
+        const peak = recordedMax(values);
+        const intervalSeconds = buckets.length
+            ? (24 * 60 * 60) / buckets.length
+            : 15 * 60;
+        const intervalLabel = formatIntervalDuration(intervalSeconds);
+        ids.completedSummary.innerHTML =
+            "<span>Total 24h <strong>" + esc(total) + "</strong></span>" +
+            "<span>Busiest " + esc(intervalLabel) +
+            " <strong>" + esc(peak) + "</strong></span>" +
+            "<span>Bars <strong>" + esc(intervalLabel) + "</strong></span>" +
+            "<span>Scope <strong>" + esc(selectedQueue === "__all__" ? "all queues" : selectedQueue) +
+            "</strong></span>";
+    }
+
+    function scopedJobs(snapshot) {
+        return snapshot.jobs.filter(inSelectedQueue);
+    }
+
+    function scopedHandlers(snapshot) {
+        return snapshot.handlers.filter(inSelectedQueue);
+    }
+
+    function scopedEvents(snapshot) {
+        return snapshot.events.filter(inSelectedQueue);
+    }
+
+    function renderSnapshot(snapshot) {
+        const queuedTotal = snapshot.queues.reduce(
+            (sum, queue) => sum + queueTotal(queue),
+            0,
+        );
+        const activeTotal = snapshot.jobs_active_total ?? snapshot.jobs.filter((job) =>
+            ["claimed", "running", "paused"].includes(job.status)
+        ).length;
+
+        ids.mode.textContent = snapshot.mode;
+        ids.concurrency.textContent = snapshot.concurrency + " concurrent";
+        ids.queueCount.textContent = snapshot.queues.length + " queues";
+        ids.queuedTotal.textContent = queuedTotal + " jobs queued";
+        const totalJobs = snapshot.jobs_total ?? snapshot.jobs.length;
+        ids.jobCount.textContent = "All time " + totalJobs + " runs";
+        ids.activeTotal.textContent = activeTotal + " active";
+        ids.handlerCount.textContent = snapshot.handlers.length + " registered";
+        ids.dlqOpen.textContent = snapshot.dlq.open + " open";
+        ids.dlqRate.textContent = "+" + snapshot.dlq.last_hour + " last hour";
+        ids.dlqCause.textContent = snapshot.dlq.top_cause || "none";
+        ids.dlqCard.classList.toggle("active", snapshot.dlq.open > 0);
+
+        updateQueueSelect(snapshot.queues);
+        renderCompletedChart(snapshot);
+        renderQueueHealth(snapshot.queues, snapshot.queue_wait_history || []);
+
+        const jobs = scopedJobs(snapshot);
+        const handlers = scopedHandlers(snapshot);
+        const events = scopedEvents(snapshot);
+
+        ids.jobs.innerHTML = jobs.map((job) =>
+            "<tr>" +
+            "<td><code>" + esc(job.short_id) + "</code></td>" +
+            "<td>" + esc(job.type) + "</td>" +
+            "<td>" + esc(job.queue) + "</td>" +
+            "<td><span class=\"sk-role-badge\">" + esc(job.status) + "</span></td>" +
+            "<td>" + esc(job.attempt) + " / " + esc(job.max_attempts) + "</td>" +
+            "<td>" + esc(job.updated_at) + "</td>" +
+            "</tr>"
+        ).join("");
+
+        ids.handlers.innerHTML = handlers.map((handler) =>
+            "<tr>" +
+            "<td>" + esc(handler.job_type) + "</td>" +
+            "<td>" + esc(handler.payload) + "</td>" +
+            "<td>" + esc(handler.queue) + "</td>" +
+            "<td>" + esc(handler.max_attempts) + "</td>" +
+            "<td>" + esc(handler.visibility_timeout) + "s</td>" +
+            "</tr>"
+        ).join("");
+
+        ids.events.innerHTML = events.map(renderEventRow).join("");
+        ids.liveFeed.innerHTML = events.slice(0, 10).map(renderFeedItem).join("");
+        setEmpty(ids.jobsEmpty, jobs.length === 0);
+        setEmpty(ids.handlersEmpty, handlers.length === 0);
+        setEmpty(ids.eventsEmpty, events.length === 0);
+        setEmpty(ids.liveEmpty, events.length === 0);
+    }
+
+    function renderEventRow(event) {
+        return "<tr data-worker-event-position=\"" + esc(event.position) + "\">" +
+            "<td>" + esc(event.position) + "</td>" +
+            "<td>" + esc(event.type) + "</td>" +
+            "<td><code>" + esc(event.short_job_id) + "</code></td>" +
+            "<td>" + esc(event.queue) + "</td>" +
+            "<td>" + esc(event.attempt) + "</td>" +
+            "<td>" + esc(event.timestamp) + "</td>" +
+            "</tr>";
+    }
+
+    function renderFeedItem(event) {
+        return "<div class=\"sk-worker-feed-item\">" +
+            "<strong>" + esc(event.type) + "</strong>" +
+            "<span><code>" + esc(event.short_job_id) + "</code> " +
+            esc(event.queue) + " · attempt " + esc(event.attempt) + "</span>" +
+            "</div>";
+    }
+
+    function prependEvent(event) {
+        if (!inSelectedQueue(event)) return;
+        if (ids.events.querySelector("[data-worker-event-position=\"" + event.position + "\"]")) {
+            return;
+        }
+        ids.events.insertAdjacentHTML("afterbegin", renderEventRow(event));
+        ids.liveFeed.insertAdjacentHTML("afterbegin", renderFeedItem(event));
+        while (ids.events.children.length > 25) {
+            ids.events.lastElementChild.remove();
+        }
+        while (ids.liveFeed.children.length > 10) {
+            ids.liveFeed.lastElementChild.remove();
+        }
+        setEmpty(ids.eventsEmpty, false);
+        setEmpty(ids.liveEmpty, false);
+    }
+
+    document.querySelectorAll("[data-worker-tab]").forEach((tab) => {
+        tab.addEventListener("click", () => {
+            const name = tab.dataset.workerTab;
+            document.querySelectorAll("[data-worker-tab]").forEach((other) => {
+                const active = other === tab;
+                other.classList.toggle("active", active);
+                other.setAttribute("aria-selected", active ? "true" : "false");
+            });
+            document.querySelectorAll("[data-worker-panel]").forEach((panel) => {
+                panel.classList.toggle("active", panel.dataset.workerPanel === name);
+            });
+        });
+    });
+
+    ids.queueSelect.addEventListener("change", () => {
+        selectedQueue = ids.queueSelect.value;
+        if (latestSnapshot) renderSnapshot(latestSnapshot);
+        renderTrendChart();
+    });
+
+    ids.waitRange.addEventListener("change", () => {
+        waitWindowHours = Number(ids.waitRange.value) || 24;
+        if (latestSnapshot) {
+            renderQueueHealth(
+                latestSnapshot.queues,
+                latestSnapshot.queue_wait_history || [],
+            );
+        }
+    });
+
+    const stream = new EventSource("/admin/workers/stream");
+    stream.addEventListener("workers_snapshot", function (event) {
+        latestSnapshot = JSON.parse(event.data);
+        setTrendHistory(latestSnapshot.queue_trend_history || []);
+        renderSnapshot(latestSnapshot);
+        renderTrendChart();
+    });
+    stream.addEventListener("worker_event", function (event) {
+        prependEvent(JSON.parse(event.data));
+    });
+})();
+</script>
+{% endblock %}

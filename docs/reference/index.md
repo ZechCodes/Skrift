@@ -14,6 +14,14 @@ Technical reference documentation for Skrift.
 
     [:octicons-arrow-right-24: CLI Reference](cli.md)
 
+-   :material-briefcase-clock:{ .lg .middle } **Workers Reference**
+
+    ---
+
+    Worker configuration, built-in backends, custom backend contracts, and operator commands.
+
+    [:octicons-arrow-right-24: Workers Reference](workers.md)
+
 </div>
 
 ## Configuration
@@ -101,6 +109,7 @@ Technical reference documentation for Skrift.
 | Topic | Description |
 |-------|-------------|
 | [CLI Reference](cli.md) | Command-line interface |
+| [Workers Reference](workers.md) | Worker configuration and backend contracts |
 | [Environment Variables](environment-variables.md) | Configuration and secrets |
 | [OAuth Providers](auth-providers.md) | Authentication setup |
 | [Security Features](security-features.md) | Security implementation details |

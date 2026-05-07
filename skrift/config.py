@@ -6,7 +6,7 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from skrift.bot_detection.config import BotDetectionConfig
@@ -483,6 +483,171 @@ class NotificationsConfig(BaseModel):
     webhook_secret: str = ""  # empty = webhook disabled
 
 
+class WorkerBackendConfig(BaseModel):
+    """Import paths for worker backend implementations."""
+
+    state_store: str = "skrift.workers.memory:InMemoryStateStore"
+    event_log: str = "skrift.workers.memory:InMemoryEventLog"
+    queue: str = "skrift.workers.memory:InMemoryQueue"
+    dead_letter_store: str = "skrift.workers.memory:InMemoryDeadLetterStore"
+    archive: str = "skrift.workers.memory:InMemoryArchive"
+
+
+WORKER_MEMORY_BACKENDS = WorkerBackendConfig()
+WORKER_SQLALCHEMY_BACKENDS = WorkerBackendConfig(
+    state_store="skrift.workers.sqlalchemy:SQLAlchemyStateStore",
+    event_log="skrift.workers.sqlalchemy:SQLAlchemyEventLog",
+    queue="skrift.workers.sqlalchemy:SQLAlchemyQueue",
+    dead_letter_store="skrift.workers.sqlalchemy:SQLAlchemyDeadLetterStore",
+    archive="skrift.workers.sqlalchemy:SQLAlchemyArchive",
+)
+WORKER_REDIS_DISTRIBUTED_BACKENDS = WorkerBackendConfig(
+    state_store="skrift.workers.redis:RedisStateStore",
+    event_log="skrift.workers.redis:RedisEventLog",
+    queue="skrift.workers.redis:RedisQueue",
+    dead_letter_store="skrift.workers.sqlalchemy:SQLAlchemyDeadLetterStore",
+    archive="skrift.workers.sqlalchemy:SQLAlchemyArchive",
+)
+
+
+class WorkerPersistenceConfig(BaseModel):
+    """Worker cold-storage persistence service configuration."""
+
+    streams: list[str] = ["workers:lifecycle"]
+    batch_size: int = Field(default=100, ge=1)
+    flush_interval: float = Field(default=1.0, gt=0)
+    snapshot_keys: list[str] = ["workers:queue_wait_history"]
+    snapshot_prefixes: list[str] = []
+    snapshot_interval: float = Field(default=60.0, gt=0)
+
+
+class WorkerRetentionConfig(BaseModel):
+    """Worker hot-path and archive retention configuration."""
+
+    enabled: bool = True
+    prune_interval: float = Field(default=300.0, gt=0)
+    terminal_job_state_ttl: float = Field(default=7 * 24 * 60 * 60, gt=0)
+    redis_event_ttl: float = Field(default=24 * 60 * 60, gt=0)
+    redis_event_max_entries: int = Field(default=100_000, ge=1)
+    dead_queue_marker_ttl: float = Field(default=24 * 60 * 60, gt=0)
+    archive_event_ttl: float = Field(default=90 * 24 * 60 * 60, gt=0)
+    archive_snapshot_ttl: float = Field(default=30 * 24 * 60 * 60, gt=0)
+    dlq_resolved_ttl: float = Field(default=30 * 24 * 60 * 60, gt=0)
+
+
+class WorkersConfig(BaseModel):
+    """Worker runtime configuration."""
+
+    enabled: bool = False
+    preset: Literal["custom", "local", "single_node", "distributed"] = "custom"
+    execution: Literal["inline", "in_process", "out_of_process"] = "inline"
+    queues: list[str] = ["default"]
+    concurrency: int = Field(default=1, ge=1)
+    poll_interval: float = Field(default=0.05, gt=0)
+    visibility_timeout: float = Field(default=30.0, gt=0)
+    max_reclaims: int = Field(default=3, ge=0)
+    imports: list[str] = []
+    backends: WorkerBackendConfig = WorkerBackendConfig()
+    persistence: WorkerPersistenceConfig = WorkerPersistenceConfig()
+    retention: WorkerRetentionConfig = WorkerRetentionConfig()
+
+    @model_validator(mode="before")
+    @classmethod
+    def apply_preset_defaults(cls, data):
+        if not isinstance(data, dict):
+            return data
+        preset = data.get("preset", "custom")
+        if preset == "custom":
+            return data
+
+        preset_defaults = {
+            "local": {
+                "execution": "inline",
+                "backends": WORKER_MEMORY_BACKENDS.model_dump(),
+            },
+            "single_node": {
+                "execution": "in_process",
+                "backends": WORKER_SQLALCHEMY_BACKENDS.model_dump(),
+            },
+            "distributed": {
+                "execution": "out_of_process",
+                "backends": WORKER_REDIS_DISTRIBUTED_BACKENDS.model_dump(),
+            },
+        }
+        defaults = dict(preset_defaults.get(preset, {}))
+        if not defaults:
+            return data
+
+        merged = {**defaults, **data}
+        if "backends" in defaults or "backends" in data:
+            merged["backends"] = {
+                **defaults.get("backends", {}),
+                **data.get("backends", {}),
+            }
+        return merged
+
+
+def worker_memory_backends(
+    backends: WorkerBackendConfig,
+    *,
+    names: tuple[str, ...] = ("state_store", "event_log", "queue", "dead_letter_store", "archive"),
+) -> list[str]:
+    """Return configured worker backend fields that use process-local memory."""
+    return [
+        name
+        for name in names
+        if ".memory:" in str(getattr(backends, name, ""))
+    ]
+
+
+def validate_worker_runtime_config(
+    workers: WorkersConfig,
+    *,
+    context: Literal["web", "worker", "persister", "inspect"],
+    allow_memory_backends: bool = False,
+) -> None:
+    """Fail fast for worker backend/mode combinations that cannot share state."""
+    if allow_memory_backends:
+        return
+
+    requirements = {
+        "web": (
+            ("state_store", "event_log", "queue", "dead_letter_store"),
+            "out_of_process workers require shared worker backends",
+            workers.execution == "out_of_process",
+        ),
+        "worker": (
+            ("state_store", "event_log", "queue", "dead_letter_store"),
+            "Standalone worker processes require shared worker backends",
+            True,
+        ),
+        "persister": (
+            ("state_store", "event_log", "archive"),
+            "Worker persister requires shared persistence backends",
+            True,
+        ),
+        "inspect": (
+            ("state_store", "event_log", "queue", "dead_letter_store"),
+            "Worker inspection commands require shared worker backends",
+            True,
+        ),
+    }
+    names, message, applies = requirements[context]
+    if not applies:
+        return
+
+    memory_backends = worker_memory_backends(workers.backends, names=names)
+    if not memory_backends:
+        return
+
+    joined = ", ".join(memory_backends)
+    raise ValueError(
+        f"{message}. Memory backends configured for: {joined}. "
+        "Use SQLAlchemy/Redis-style shared backends, choose an appropriate "
+        "workers.preset, or pass --allow-memory-backends for local CLI tests."
+    )
+
+
 class EmailConfig(BaseModel):
     """Outbound transactional email configuration."""
 
@@ -640,6 +805,9 @@ class Settings(BaseSettings):
     # Subdomain sites (loaded from app.yaml)
     sites: dict[str, SiteConfig] = {}
 
+    # Controller import specs (loaded from app.yaml)
+    controllers: list[str] = []
+
     # Database config (loaded from app.yaml)
     db: DatabaseConfig = DatabaseConfig()
 
@@ -672,6 +840,9 @@ class Settings(BaseSettings):
 
     # Notifications config (loaded from app.yaml)
     notifications: NotificationsConfig = NotificationsConfig()
+
+    # Worker runtime config (loaded from app.yaml)
+    workers: WorkersConfig = WorkersConfig()
 
     # Email config (loaded from app.yaml)
     email: EmailConfig = EmailConfig()
@@ -778,6 +949,9 @@ def get_settings() -> Settings:
     if "notifications" in app_config:
         kwargs["notifications"] = NotificationsConfig(**app_config["notifications"])
 
+    if "workers" in app_config:
+        kwargs["workers"] = WorkersConfig(**app_config["workers"])
+
     if "email" in app_config:
         kwargs["email"] = EmailConfig(**app_config["email"])
 
@@ -817,6 +991,9 @@ def get_settings() -> Settings:
         kwargs["sites"] = {
             name: SiteConfig(**cfg) for name, cfg in app_config["sites"].items()
         }
+
+    if "controllers" in app_config:
+        kwargs["controllers"] = list(app_config["controllers"])
 
     # Create Settings with YAML nested configs
     # BaseSettings will still load debug/secret_key from env, but kwargs take precedence

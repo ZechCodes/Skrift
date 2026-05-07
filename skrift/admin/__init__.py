@@ -4,6 +4,7 @@ from skrift.admin.controller import (
     AdminController,
     UserAdminController,
     SettingsAdminController,
+    WorkersAdminController,
 )
 from skrift.admin.navigation import AdminNavItem, build_admin_nav, ADMIN_NAV_TAG
 
@@ -11,6 +12,7 @@ __all__ = [
     "AdminController",
     "UserAdminController",
     "SettingsAdminController",
+    "WorkersAdminController",
     "AdminNavItem",
     "build_admin_nav",
     "ADMIN_NAV_TAG",

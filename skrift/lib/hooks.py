@@ -293,6 +293,10 @@ RESOLVE_THEME = "resolve_theme"
 # Observability hooks
 LOGFIRE_CONFIGURED = "logfire_configured"
 
+# Application lifecycle hooks
+APP_STARTUP = "app_startup"
+APP_SHUTDOWN = "app_shutdown"
+
 # Notification hooks
 NOTIFICATION_SENT = "notification_sent"
 NOTIFICATION_DISMISSED = "notification_dismissed"
