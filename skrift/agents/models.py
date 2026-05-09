@@ -37,10 +37,18 @@ class Steer(BaseModel):
 
 class ToolPolicy(BaseModel):
     approval: bool = False
+    approval_mode: Literal["none", "static", "callable"] = "none"
+    approval_callable_name: str | None = None
     idempotent: bool = False
     detached: bool = False
     approval_on_retry: bool = False
     policy_description: str | None = None
+
+
+class ApprovalRejection(BaseModel):
+    rejected: Literal[True] = True
+    reason: str
+    payload: Any | None = None
 
 
 class ToolExecutionState(BaseModel):

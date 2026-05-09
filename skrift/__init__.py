@@ -2,6 +2,7 @@
 
 from skrift.agents import (
     Agent,
+    ApprovalRejection,
     BlobRef,
     Chat,
     ReasoningLevel,
@@ -32,6 +33,7 @@ from skrift.workers import (
 
 __all__ = [
     "Agent",
+    "ApprovalRejection",
     "BlobRef",
     "Chat",
     "Job",

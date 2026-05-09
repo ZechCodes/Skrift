@@ -10,7 +10,7 @@ from skrift.agents.blob import (
 )
 from skrift.agents.chat import Chat
 from skrift.agents.context import set_actor
-from skrift.agents.models import BlobRef, ResumeContext, Steer
+from skrift.agents.models import ApprovalRejection, BlobRef, ResumeContext, Steer
 from skrift.agents.registry import registry
 from skrift.agents.session import AgentSessionError, Session, session
 from skrift.agents.turns import ReasoningLevel
@@ -21,6 +21,7 @@ from skrift.agents import runtime as _runtime  # noqa: F401
 __all__ = [
     "Agent",
     "AgentSessionError",
+    "ApprovalRejection",
     "ArchiveBlobStore",
     "AuditTrail",
     "BlobIntegrityError",

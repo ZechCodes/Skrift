@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import functools
+import inspect
 from typing import Any, Callable
 from uuid import uuid4
 
-from pydantic_ai import Agent as PydanticAgent
-from pydantic_ai.exceptions import CallDeferred
+from pydantic_ai import Agent as PydanticAgent, RunContext
+from pydantic_ai.exceptions import ApprovalRequired, CallDeferred
 
 from skrift.agents.config import get_agents_config
 from skrift.agents.context import current_session_id, resolve_actor
@@ -49,6 +50,7 @@ class Agent(PydanticAgent):
         self.skrift_name = name
         self.deps_factory = deps_factory
         self._tool_policies: dict[str, ToolPolicy] = {}
+        self._approval_gates: dict[str, Callable[..., Any]] = {}
         self._detached_tools: dict[str, Callable[..., Any]] = {}
         registry.register(
             AgentDefinition(
@@ -79,24 +81,35 @@ class Agent(PydanticAgent):
                 "looks up resources internally, or wait for the context rehydration path."
             )
         metadata = dict(kwargs.pop("metadata", {}) or {})
-        if approval and "requires_approval" not in kwargs:
-            kwargs["requires_approval"] = True
+        policy_approval, approval_mode, approval_callable_name, approval_gate = (
+            self._configure_approval(approval, kwargs)
+        )
         metadata["skrift_policy"] = ToolPolicy(
-            approval=bool(approval),
+            approval=policy_approval,
+            approval_mode=approval_mode,
+            approval_callable_name=approval_callable_name,
             idempotent=idempotent,
             detached=detached,
             approval_on_retry=approval_on_retry,
             policy_description=policy_description,
         ).model_dump(mode="json")
         original_func = func
-        if detached and func is not None:
-            func = self._deferred_tool_wrapper(func)
+        if func is not None:
+            if approval_gate is not None:
+                func = self._approval_gate_wrapper(func, approval_gate, plain=False)
+            elif detached:
+                func = self._deferred_tool_wrapper(func)
         decorator = super().tool(func, metadata=metadata, **kwargs)
         if func is not None:
             self._record_tool_policy(
                 kwargs.get("name") or getattr(original_func, "__name__", ""),
                 metadata["skrift_policy"],
             )
+            if approval_gate is not None:
+                self._record_approval_gate(
+                    kwargs.get("name") or getattr(original_func, "__name__", ""),
+                    approval_gate,
+                )
             if detached and original_func is not None:
                 self._record_detached_tool(
                     kwargs.get("name") or getattr(original_func, "__name__", ""),
@@ -107,7 +120,9 @@ class Agent(PydanticAgent):
             decorator,
             kwargs.get("name"),
             metadata["skrift_policy"],
+            approval_gate=approval_gate,
             detached=detached,
+            plain=False,
         )
 
     def tool_plain(
@@ -123,24 +138,41 @@ class Agent(PydanticAgent):
         **kwargs: Any,
     ) -> Any:
         metadata = dict(kwargs.pop("metadata", {}) or {})
-        if approval and "requires_approval" not in kwargs:
-            kwargs["requires_approval"] = True
+        policy_approval, approval_mode, approval_callable_name, approval_gate = (
+            self._configure_approval(approval, kwargs)
+        )
         metadata["skrift_policy"] = ToolPolicy(
-            approval=bool(approval),
+            approval=policy_approval,
+            approval_mode=approval_mode,
+            approval_callable_name=approval_callable_name,
             idempotent=idempotent,
             detached=detached,
             approval_on_retry=approval_on_retry,
             policy_description=policy_description,
         ).model_dump(mode="json")
         original_func = func
-        if detached and func is not None:
-            func = self._deferred_tool_wrapper(func)
-        decorator = super().tool_plain(func, metadata=metadata, **kwargs)
+        if func is not None:
+            if approval_gate is not None:
+                func = self._approval_gate_wrapper(
+                    func,
+                    approval_gate,
+                    plain=True,
+                    detached=detached,
+                )
+            elif detached:
+                func = self._deferred_tool_wrapper(func)
+        register_tool = super().tool if approval_gate is not None else super().tool_plain
+        decorator = register_tool(func, metadata=metadata, **kwargs)
         if func is not None:
             self._record_tool_policy(
                 kwargs.get("name") or getattr(original_func, "__name__", ""),
                 metadata["skrift_policy"],
             )
+            if approval_gate is not None:
+                self._record_approval_gate(
+                    kwargs.get("name") or getattr(original_func, "__name__", ""),
+                    approval_gate,
+                )
             if detached and original_func is not None:
                 self._record_detached_tool(
                     kwargs.get("name") or getattr(original_func, "__name__", ""),
@@ -151,8 +183,23 @@ class Agent(PydanticAgent):
             decorator,
             kwargs.get("name"),
             metadata["skrift_policy"],
+            approval_gate=approval_gate,
             detached=detached,
+            plain=True,
         )
+
+    def _configure_approval(
+        self,
+        approval: bool | Callable[..., Any],
+        kwargs: dict[str, Any],
+    ) -> tuple[bool, str, str | None, Callable[..., Any] | None]:
+        if callable(approval):
+            gate = approval
+            kwargs["requires_approval"] = False
+            return False, "callable", _callable_name(gate), gate
+        if approval and "requires_approval" not in kwargs:
+            kwargs["requires_approval"] = True
+        return bool(approval), "static" if approval else "none", None, None
 
     def _wrap_tool_decorator(
         self,
@@ -160,15 +207,28 @@ class Agent(PydanticAgent):
         explicit_name: str | None,
         policy: dict[str, Any],
         *,
+        approval_gate: Callable[..., Any] | None = None,
         detached: bool = False,
+        plain: bool = False,
     ) -> Any:
         if not callable(decorator):
             return decorator
 
         def wrapped(func: Any) -> Any:
-            self._record_tool_policy(explicit_name or getattr(func, "__name__", ""), policy)
+            name = explicit_name or getattr(func, "__name__", "")
+            self._record_tool_policy(name, policy)
+            if approval_gate is not None:
+                self._record_approval_gate(name, approval_gate)
+                return decorator(
+                    self._approval_gate_wrapper(
+                        func,
+                        approval_gate,
+                        plain=plain,
+                        detached=detached,
+                    )
+                )
             if detached:
-                self._record_detached_tool(explicit_name or getattr(func, "__name__", ""), func)
+                self._record_detached_tool(name, func)
                 return decorator(self._deferred_tool_wrapper(func))
             return decorator(func)
 
@@ -181,6 +241,101 @@ class Agent(PydanticAgent):
     def _record_detached_tool(self, name: str, func: Callable[..., Any]) -> None:
         if name:
             self._detached_tools[name] = func
+
+    def _record_approval_gate(self, name: str, gate: Callable[..., Any]) -> None:
+        if name:
+            self._approval_gates[name] = gate
+
+    def _approval_gate_wrapper(
+        self,
+        func: Callable[..., Any],
+        gate: Callable[..., Any],
+        *,
+        plain: bool,
+        detached: bool = False,
+    ) -> Callable[..., Any]:
+        call_func = self._deferred_tool_wrapper(func) if detached else func
+
+        if plain:
+            signature = inspect.signature(func)
+            context_param = inspect.Parameter(
+                "ctx",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=RunContext[Any],
+            )
+
+            @functools.wraps(func)
+            async def plain_wrapper(ctx: RunContext[Any], *args: Any, **kwargs: Any) -> Any:
+                await self._apply_dynamic_approval(ctx, gate, kwargs)
+                result = call_func(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
+
+            plain_wrapper.__signature__ = signature.replace(  # type: ignore[attr-defined]
+                parameters=[context_param, *signature.parameters.values()]
+            )
+            plain_wrapper.__annotations__ = {
+                **getattr(func, "__annotations__", {}),
+                "ctx": RunContext[Any],
+            }
+            return plain_wrapper
+
+        @functools.wraps(func)
+        async def context_wrapper(ctx: RunContext[Any], *args: Any, **kwargs: Any) -> Any:
+            await self._apply_dynamic_approval(ctx, gate, kwargs)
+            result = call_func(ctx, *args, **kwargs)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        return context_wrapper
+
+    async def _apply_dynamic_approval(
+        self,
+        ctx: RunContext[Any],
+        gate: Callable[..., Any],
+        args: dict[str, Any],
+    ) -> None:
+        if ctx.tool_call_approved:
+            return
+        gate_result = gate(**args)
+        if inspect.isawaitable(gate_result):
+            gate_result = await gate_result
+        gated = bool(gate_result)
+        decision = {
+            "gated": gated,
+            "policy": "callable",
+            "callable_name": _callable_name(gate),
+        }
+        await self._record_dynamic_approval_decision(ctx, args, decision)
+        if gated:
+            raise ApprovalRequired({"skrift_approval_decision": decision})
+
+    async def _record_dynamic_approval_decision(
+        self,
+        ctx: RunContext[Any],
+        args: dict[str, Any],
+        decision: dict[str, Any],
+    ) -> None:
+        session_id = current_session_id()
+        if not session_id:
+            return
+
+        async def mutate(state: RunState) -> RunState:
+            append_event(
+                state,
+                "ToolApprovalDecision",
+                {
+                    "tool_call_id": ctx.tool_call_id,
+                    "tool_name": ctx.tool_name,
+                    "args": args,
+                    "approval_decision": decision,
+                },
+            )
+            return state
+
+        await update_runstate(session_id, mutate)
 
     @staticmethod
     def _deferred_tool_wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -316,6 +471,10 @@ def _safe_name(value: Any) -> str | None:
     if isinstance(value, type):
         return f"{value.__module__}.{value.__qualname__}"
     return repr(value)
+
+
+def _callable_name(value: Callable[..., Any]) -> str:
+    return getattr(value, "__name__", None) or repr(value)
 
 
 def _snapshot_callables(value: Any) -> list[str]:
