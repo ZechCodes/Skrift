@@ -458,8 +458,11 @@ async def test_hitl_approval_pauses_and_resumes_tool_call():
     session = await agent.run("use the tool", actor="ada")
     await runtime.start()
     try:
-        while await session.status() != "awaiting_approval":
-            await asyncio.sleep(0.01)
+        async def wait_for_approval() -> None:
+            while await session.status() != "awaiting_approval":
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait_for_approval(), timeout=1)
         state = await session.state()
         tool_call_id = state.pending_approvals[0]["tool_call_id"]
 
@@ -474,6 +477,96 @@ async def test_hitl_approval_pauses_and_resumes_tool_call():
     assert "ToolCallAwaitingApproval" in event_types
     assert "ToolCallApproved" in event_types
     assert "ToolCallCompleted" in event_types
+
+
+async def test_callable_approval_false_runs_tool_inline():
+    decisions: list[tuple[int, int]] = []
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    def needs_approval(x: int, y: int) -> bool:
+        decisions.append((x, y))
+        return False
+
+    @agent.tool_plain(approval=needs_approval, policy_description="conditional approval")
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    session = await agent.run("use the tool", actor="ada")
+
+    assert await session.status() == "completed"
+    assert await session.result() == '{"add":0}'
+    assert decisions == [(0, 0)]
+
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    event_types = [event["type"] for _, event in events]
+    assert "ToolApprovalDecision" in event_types
+    assert "ToolCallAwaitingApproval" not in event_types
+    decision = next(event for _, event in events if event["type"] == "ToolApprovalDecision")
+    assert decision["payload"]["approval_decision"] == {
+        "gated": False,
+        "policy": "callable",
+        "callable_name": "needs_approval",
+    }
+
+
+async def test_callable_approval_true_pauses_then_resumes_tool_call_once():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    decisions: list[tuple[int, int]] = []
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    def needs_approval(x: int, y: int) -> bool:
+        decisions.append((x, y))
+        return True
+
+    @agent.tool_plain(approval=needs_approval, policy_description="conditional approval")
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    session = await agent.run("use the tool", actor="ada")
+    await runtime.start()
+    try:
+        async def wait_for_approval() -> None:
+            while await session.status() != "awaiting_approval":
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait_for_approval(), timeout=1)
+        state = await session.state()
+        approval = state.pending_approvals[0]
+        assert approval["approval_decision"]["gated"] is True
+        assert decisions == [(0, 0)]
+
+        await session.approve(approval["tool_call_id"], actor="ada", note="ok")
+
+        assert await session.result() == '{"add":0}'
+        assert decisions == [(0, 0)]
+    finally:
+        await runtime.stop()
+
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    event_types = [event["type"] for _, event in events]
+    assert "ToolApprovalDecision" in event_types
+    assert "ToolCallAwaitingApproval" in event_types
+    assert "ToolCallCompleted" in event_types
+
+
+async def test_callable_approval_supports_async_gate_on_context_tool():
+    decisions: list[tuple[int, int]] = []
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    async def needs_approval(x: int, y: int) -> bool:
+        await asyncio.sleep(0)
+        decisions.append((x, y))
+        return False
+
+    @agent.tool(approval=needs_approval, policy_description="conditional approval")
+    def add(ctx: RunContext[None], x: int, y: int) -> int:
+        return x + y
+
+    session = await agent.run("use the tool", actor="ada")
+
+    assert await session.status() == "completed"
+    assert await session.result() == '{"add":0}'
+    assert decisions == [(0, 0)]
 
 
 async def test_hitl_rejection_returns_denial_to_model():
@@ -501,6 +594,53 @@ async def test_hitl_rejection_returns_denial_to_model():
     events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
     event_types = [event["type"] for _, event in events]
     assert "ToolCallRejected" in event_types
+
+
+async def test_hitl_rejection_with_payload_returns_structured_denial_to_model_and_audit():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    @agent.tool_plain(approval=True, policy_description="approval required")
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    session = await agent.run("use the tool", actor="ada")
+    await runtime.start()
+    try:
+        while await session.status() != "awaiting_approval":
+            await asyncio.sleep(0.01)
+        await runtime.stop()
+
+        state = await session.state()
+        tool_call_id = state.pending_approvals[0]["tool_call_id"]
+
+        await session.reject(
+            tool_call_id,
+            actor="ada",
+            reason="user redirected to draft",
+            payload={"action": "saved_as_draft", "draft_id": "draft_123"},
+        )
+
+        state = await session.state()
+        assert state.deferred_tool_results["approvals"][tool_call_id]["payload"] == {
+            "action": "saved_as_draft",
+            "draft_id": "draft_123",
+        }
+
+        await runtime.start()
+        assert await session.result() == (
+            '{"add":{"rejected":true,"reason":"user redirected to draft",'
+            '"payload":{"action":"saved_as_draft","draft_id":"draft_123"}}}'
+        )
+    finally:
+        await runtime.stop()
+
+    audit = await skrift.audit_export(session.id)
+    rejection = next(event for event in audit.events if event["type"] == "ToolCallRejected")
+    assert rejection["payload"]["payload"] == {
+        "action": "saved_as_draft",
+        "draft_id": "draft_123",
+    }
 
 
 async def test_detached_tool_runs_in_tool_call_job_and_wakes_parent():

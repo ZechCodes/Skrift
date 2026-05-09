@@ -15,6 +15,7 @@ from skrift.agents.context import reset_current_session_id, set_current_session_
 from skrift.agents.models import (
     AgentRunJob,
     AgentToolCallJob,
+    ApprovalRejection,
     OutboxSubmit,
     ResumeContext,
     ToolExecutionState,
@@ -238,12 +239,16 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
             for event_type, event_payload in _tool_events_from_messages(new_messages):
                 append_event(runstate, event_type, event_payload)
             for call in output.approvals:
+                metadata = output.metadata.get(call.tool_call_id, {})
                 approval = {
                     "tool_call_id": call.tool_call_id,
                     "tool_name": call.tool_name,
                     "args": call.args_as_dict(),
-                    "requesting_context": {},
+                    "requesting_context": metadata,
                 }
+                approval_decision = metadata.get("skrift_approval_decision")
+                if approval_decision is not None:
+                    approval["approval_decision"] = approval_decision
                 if not any(
                     existing.get("tool_call_id") == call.tool_call_id
                     for existing in runstate.pending_approvals
@@ -624,9 +629,15 @@ def _deferred_tool_results(state) -> DeferredToolResults | None:
         if decision.get("approved"):
             resolved[tool_call_id] = True
         else:
-            resolved[tool_call_id] = ToolDenied(
-                decision.get("message") or "The tool call was denied."
-            )
+            reason = decision.get("message") or "The tool call was denied."
+            if "payload" in decision:
+                denial = ApprovalRejection(
+                    reason=reason,
+                    payload=decision.get("payload"),
+                ).model_dump(mode="json")
+            else:
+                denial = reason
+            resolved[tool_call_id] = ToolDenied(denial)
     return DeferredToolResults(approvals=resolved, calls=calls)
 
 

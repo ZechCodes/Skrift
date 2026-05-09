@@ -6,6 +6,8 @@ import asyncio
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
+from pydantic_core import PydanticSerializationError, to_jsonable_python
+
 from skrift.agents.blob import dereference_blob_refs
 from skrift.agents.context import resolve_actor
 from skrift.agents.models import Actor, RunState, Steer
@@ -296,8 +298,21 @@ class Session:
     async def approve(self, tool_call_id: str, *, actor: Actor | dict | str | None = None, note: str | None = None) -> None:
         await self._decision(tool_call_id, approved=True, actor=actor, note=note)
 
-    async def reject(self, tool_call_id: str, *, actor: Actor | dict | str | None = None, reason: str) -> None:
-        await self._decision(tool_call_id, approved=False, actor=actor, note=reason)
+    async def reject(
+        self,
+        tool_call_id: str,
+        *,
+        actor: Actor | dict | str | None = None,
+        reason: str,
+        payload: Any | None = None,
+    ) -> None:
+        await self._decision(
+            tool_call_id,
+            approved=False,
+            actor=actor,
+            note=reason,
+            rejection_payload=_jsonable_payload(payload),
+        )
 
     async def _decision(
         self,
@@ -306,6 +321,7 @@ class Session:
         approved: bool,
         actor: Actor | dict | str | None,
         note: str | None,
+        rejection_payload: Any | None = None,
     ) -> None:
         resolved = resolve_actor(actor)
         event_type = "ToolCallApproved" if approved else "ToolCallRejected"
@@ -320,14 +336,21 @@ class Session:
                 "approved": approved,
                 "message": note,
             }
+            approval_results = state.deferred_tool_results["approvals"]
+            if not approved and rejection_payload is not None:
+                approval_results[tool_call_id]["payload"] = rejection_payload
             state.status = "queued"
-            payload = {
+            event_payload = {
                 "tool_call_id": tool_call_id,
                 "actor": actor_payload(resolved),
                 "decided_at": utcnow().isoformat(),
             }
-            payload["note" if approved else "reason"] = note
-            append_event(state, event_type, payload)
+            event_payload["note" if approved else "reason"] = note
+            if not approved:
+                stored_rejection_payload = approval_results[tool_call_id].get("payload")
+                if stored_rejection_payload is not None:
+                    event_payload["payload"] = stored_rejection_payload
+            append_event(state, event_type, event_payload)
             if state.current_run_job_id:
                 append_wake(state, state.current_run_job_id)
             return state
@@ -366,6 +389,15 @@ class Session:
             if state.status == "cancelled":
                 raise asyncio.CancelledError(f"Agent session {self.id} was cancelled")
             await asyncio.sleep(poll_interval)
+
+
+def _jsonable_payload(payload: Any | None) -> Any | None:
+    if payload is None:
+        return None
+    try:
+        return to_jsonable_python(payload)
+    except PydanticSerializationError as exc:
+        raise AgentSessionError("Rejection payload must be JSON-serializable") from exc
 
 
 async def session(session_id: str) -> Session:
