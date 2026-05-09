@@ -569,6 +569,99 @@ async def test_callable_approval_supports_async_gate_on_context_tool():
     assert decisions == [(0, 0)]
 
 
+async def test_callable_approval_can_use_context_deps_for_async_gate():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    gate_checks: list[tuple[str | None, str | None, str]] = []
+
+    class EmailStore:
+        async def threat_level(self, record_id: str) -> str:
+            await asyncio.sleep(0)
+            return "high"
+
+    async def deps_factory(ctx):
+        return EmailStore()
+
+    agent = skrift.Agent(TestModel(), name="demo", deps_type=EmailStore, deps_factory=deps_factory)
+
+    async def needs_approval(ctx: skrift.ApprovalContext, record_id: str) -> bool:
+        threat_level = await ctx.deps.threat_level(record_id)
+        gate_checks.append((ctx.session_id, ctx.tool_name, threat_level))
+        return threat_level == "high"
+
+    @agent.tool_plain(approval=needs_approval, idempotent=True)
+    async def read_email(record_id: str) -> str:
+        return f"body:{record_id}"
+
+    session = await agent.run("read the email", actor="ada")
+    await runtime.start()
+    try:
+        async def wait_for_approval() -> None:
+            while await session.status() != "awaiting_approval":
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait_for_approval(), timeout=1)
+        state = await session.state()
+        approval = state.pending_approvals[0]
+        assert approval["tool_name"] == "read_email"
+        assert approval["approval_decision"] == {
+            "gated": True,
+            "policy": "callable",
+            "callable_name": "needs_approval",
+        }
+        assert gate_checks == [(session.id, "read_email", "high")]
+
+        await session.approve(approval["tool_call_id"], actor="ada", note="ok")
+
+        assert await session.result() == '{"read_email":"body:a"}'
+        assert gate_checks == [(session.id, "read_email", "high")]
+    finally:
+        await runtime.stop()
+
+
+async def test_require_approval_pauses_context_tool_until_approved():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    attempts: list[str] = []
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    @agent.tool(idempotent=True)
+    async def read_email(ctx: RunContext[None], record_id: str) -> str:
+        attempts.append(record_id)
+        await skrift.require_approval(
+            ctx,
+            reason="flagged_email",
+            payload={"record_id": record_id, "threat_level": "high"},
+        )
+        return f"body:{record_id}"
+
+    session = await agent.run("read the email", actor="ada")
+    await runtime.start()
+    try:
+        async def wait_for_approval() -> None:
+            while await session.status() != "awaiting_approval":
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait_for_approval(), timeout=1)
+        state = await session.state()
+        approval = state.pending_approvals[0]
+        assert approval["approval_decision"] == {
+            "gated": True,
+            "policy": "runtime",
+            "reason": "flagged_email",
+        }
+        assert approval["requesting_context"]["skrift_runtime_approval"] == {
+            "reason": "flagged_email",
+            "payload": {"record_id": "a", "threat_level": "high"},
+        }
+        assert attempts == ["a"]
+
+        await session.approve(approval["tool_call_id"], actor="ada", note="ok")
+
+        assert await session.result() == '{"read_email":"body:a"}'
+        assert attempts == ["a", "a"]
+    finally:
+        await runtime.stop()
+
+
 async def test_hitl_rejection_returns_denial_to_model():
     runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
     agent = skrift.Agent(TestModel(), name="demo")

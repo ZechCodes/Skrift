@@ -1,6 +1,7 @@
 """Durable agent subsystem."""
 
 from skrift.agents.agent import Agent
+from skrift.agents.approval import ApprovalContext, require_approval
 from skrift.agents.audit import AuditTrail, audit_export, replay
 from skrift.agents.blob import (
     ArchiveBlobStore,
@@ -21,6 +22,7 @@ from skrift.agents import runtime as _runtime  # noqa: F401
 __all__ = [
     "Agent",
     "AgentSessionError",
+    "ApprovalContext",
     "ApprovalRejection",
     "ArchiveBlobStore",
     "AuditTrail",
@@ -35,6 +37,7 @@ __all__ = [
     "audit_export",
     "registry",
     "replay",
+    "require_approval",
     "session",
     "set_actor",
     "set_blob_store",

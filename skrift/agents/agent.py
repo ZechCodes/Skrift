@@ -10,6 +10,7 @@ from uuid import uuid4
 from pydantic_ai import Agent as PydanticAgent, RunContext
 from pydantic_ai.exceptions import ApprovalRequired, CallDeferred
 
+from skrift.agents.approval import ApprovalContext, _record_tool_approval_decision
 from skrift.agents.config import get_agents_config
 from skrift.agents.context import current_session_id, resolve_actor
 from skrift.agents.models import ResumeContext, RunState, ToolPolicy
@@ -299,7 +300,16 @@ class Agent(PydanticAgent):
     ) -> None:
         if ctx.tool_call_approved:
             return
-        gate_result = gate(**args)
+        gate_kwargs = dict(args)
+        if _accepts_approval_context(gate):
+            gate_kwargs["ctx"] = ApprovalContext(
+                session_id=current_session_id(),
+                tool_call_id=ctx.tool_call_id,
+                tool_name=ctx.tool_name,
+                deps=ctx.deps,
+                metadata=dict(ctx.metadata or {}),
+            )
+        gate_result = gate(**gate_kwargs)
         if inspect.isawaitable(gate_result):
             gate_result = await gate_result
         gated = bool(gate_result)
@@ -308,34 +318,9 @@ class Agent(PydanticAgent):
             "policy": "callable",
             "callable_name": _callable_name(gate),
         }
-        await self._record_dynamic_approval_decision(ctx, args, decision)
+        await _record_tool_approval_decision(ctx, args, decision)
         if gated:
             raise ApprovalRequired({"skrift_approval_decision": decision})
-
-    async def _record_dynamic_approval_decision(
-        self,
-        ctx: RunContext[Any],
-        args: dict[str, Any],
-        decision: dict[str, Any],
-    ) -> None:
-        session_id = current_session_id()
-        if not session_id:
-            return
-
-        async def mutate(state: RunState) -> RunState:
-            append_event(
-                state,
-                "ToolApprovalDecision",
-                {
-                    "tool_call_id": ctx.tool_call_id,
-                    "tool_name": ctx.tool_name,
-                    "args": args,
-                    "approval_decision": decision,
-                },
-            )
-            return state
-
-        await update_runstate(session_id, mutate)
 
     @staticmethod
     def _deferred_tool_wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -475,6 +460,13 @@ def _safe_name(value: Any) -> str | None:
 
 def _callable_name(value: Callable[..., Any]) -> str:
     return getattr(value, "__name__", None) or repr(value)
+
+
+def _accepts_approval_context(value: Callable[..., Any]) -> bool:
+    try:
+        return "ctx" in inspect.signature(value).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _snapshot_callables(value: Any) -> list[str]:
