@@ -1086,10 +1086,12 @@ def create_app() -> ASGIApp:
                 Path(store_cfg.local_path).mkdir(parents=True, exist_ok=True)
 
         if settings.workers.enabled:
+            from skrift.agents.config import configure_agent_runtime
             from skrift.workers import configure_workers
             from skrift.config import validate_worker_runtime_config
 
             validate_worker_runtime_config(settings.workers, context="web")
+            configure_agent_runtime(settings.agents)
 
             worker_runtime = configure_workers(
                 mode=settings.workers.execution,

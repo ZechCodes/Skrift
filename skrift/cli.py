@@ -1188,6 +1188,241 @@ def db(ctx):
     _run_alembic(project_root, args)
 
 
+def _configure_agents_cli_runtime(settings, *, allow_memory_backends: bool):
+    from skrift.agents.config import configure_agent_runtime
+
+    _validate_worker_process_backends(
+        settings,
+        allow_memory_backends=allow_memory_backends,
+        context="inspect",
+    )
+    _import_worker_modules(settings)
+    configure_agent_runtime(settings.agents)
+    db_config = _build_db_config(settings)
+    return _configure_worker_runtime(
+        settings,
+        session_maker=db_config.get_session,
+        queues=tuple(settings.workers.queues),
+        concurrency=settings.workers.concurrency,
+        mode=settings.workers.execution,
+    )
+
+
+@cli.group("agents")
+def agents_group():
+    """Inspect and operate durable agent sessions."""
+    pass
+
+
+@agents_group.command("list")
+def agents_list():
+    """List registered agents."""
+    from skrift.config import get_settings
+    from skrift.agents.registry import registry as agent_registry
+
+    settings = get_settings()
+    _import_worker_modules(settings)
+    rows = [[item.name, len(item.tool_policies)] for item in agent_registry.list()]
+    if rows:
+        _echo_table(["Agent", "Tools"], rows)
+    else:
+        click.echo("No agents registered.")
+
+
+@agents_group.command("trace")
+@click.argument("session_id")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+@click.option("--allow-memory-backends", is_flag=True, help="Allow process-local backends.")
+def agents_trace(session_id, as_json, allow_memory_backends):
+    """Show agent session events."""
+    import asyncio
+    from skrift.config import get_settings
+    from skrift.agents.state import stream_name
+
+    async def _run():
+        runtime = _configure_agents_cli_runtime(
+            get_settings(),
+            allow_memory_backends=allow_memory_backends,
+        )
+        rows = await runtime.event_log.read(stream_name(session_id))
+        payload = [{"position": position, **event} for position, event in rows]
+        if as_json:
+            click.echo(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        _echo_table(
+            ["Pos", "Seq", "Type", "Timestamp"],
+            [
+                [item["position"], item.get("seq", ""), item.get("type", ""), item.get("ts", "")]
+                for item in payload
+            ],
+        )
+
+    asyncio.run(_run())
+
+
+@agents_group.command("replay")
+@click.argument("session_id")
+@click.option("--allow-memory-backends", is_flag=True, help="Allow process-local backends.")
+def agents_replay(session_id, allow_memory_backends):
+    """Replay an agent session event stream."""
+    import asyncio
+    from skrift.config import get_settings
+    from skrift.agents import replay
+
+    async def _run():
+        _configure_agents_cli_runtime(get_settings(), allow_memory_backends=allow_memory_backends)
+        click.echo(json.dumps(await replay(session_id), indent=2, sort_keys=True))
+
+    asyncio.run(_run())
+
+
+@agents_group.group("audit")
+def agents_audit():
+    """Export agent audit trails."""
+    pass
+
+
+@agents_audit.command("export")
+@click.argument("session_id")
+@click.option("--lineage/--no-lineage", default=True, help="Include lineage metadata.")
+@click.option("--format", "output_format", type=click.Choice(["flat", "nested"]), default="flat")
+@click.option("--out", "out_path", type=click.Path(dir_okay=False, resolve_path=True))
+@click.option("--allow-memory-backends", is_flag=True, help="Allow process-local backends.")
+def agents_audit_export(session_id, lineage, output_format, out_path, allow_memory_backends):
+    """Export a full agent audit trail."""
+    import asyncio
+    from skrift.config import get_settings
+    from skrift.agents import audit_export
+
+    async def _run():
+        _configure_agents_cli_runtime(get_settings(), allow_memory_backends=allow_memory_backends)
+        payload = (await audit_export(session_id, include_lineage=lineage, format=output_format)).model_dump(mode="json")
+        text = json.dumps(payload, indent=2, sort_keys=True)
+        if out_path:
+            Path(out_path).write_text(text)
+        else:
+            click.echo(text)
+
+    asyncio.run(_run())
+
+
+@agents_group.group("sessions")
+def agents_sessions():
+    """Inspect and mutate agent sessions."""
+    pass
+
+
+@agents_sessions.command("inspect")
+@click.argument("session_id")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+@click.option("--allow-memory-backends", is_flag=True, help="Allow process-local backends.")
+def agents_sessions_inspect(session_id, as_json, allow_memory_backends):
+    """Inspect an agent session RunState."""
+    import asyncio
+    from skrift.config import get_settings
+    from skrift.agents.state import load_runstate
+
+    async def _run():
+        _configure_agents_cli_runtime(get_settings(), allow_memory_backends=allow_memory_backends)
+        state = await load_runstate(session_id)
+        if state is None:
+            raise click.ClickException(f"Unknown agent session {session_id!r}")
+        payload = state.model_dump(mode="json")
+        if as_json:
+            click.echo(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        click.echo(f"Session: {state.session_id}")
+        click.echo(f"Agent: {state.agent_name}")
+        click.echo(f"Status: {state.status}")
+        click.echo(f"Version: {state.version}")
+        click.echo(f"Current job: {state.current_run_job_id or ''}")
+
+    asyncio.run(_run())
+
+
+def _cli_actor(value: str | None):
+    return {"kind": "service", "id": value or f"cli:{os.environ.get('USER', 'unknown')}"}
+
+
+def _session_mutation(command_name: str, session_id: str, actor: str | None, message: str | None, allow_memory_backends: bool):
+    import asyncio
+    from skrift.config import get_settings
+    from skrift.agents import session as get_session
+
+    async def _run():
+        _configure_agents_cli_runtime(get_settings(), allow_memory_backends=allow_memory_backends)
+        handle = await get_session(session_id)
+        if command_name == "cancel":
+            await handle.cancel(actor=_cli_actor(actor))
+        elif command_name == "pause":
+            await handle.pause(actor=_cli_actor(actor))
+        elif command_name == "resume":
+            await handle.resume(actor=_cli_actor(actor))
+        elif command_name == "steer":
+            await handle.steer(message or "", actor=_cli_actor(actor))
+        click.echo(f"{command_name} recorded for {session_id}")
+
+    asyncio.run(_run())
+
+
+@agents_sessions.command("cancel")
+@click.argument("session_id")
+@click.option("--actor", default=None)
+@click.option("--allow-memory-backends", is_flag=True)
+def agents_sessions_cancel(session_id, actor, allow_memory_backends):
+    """Cancel an agent session."""
+    _session_mutation("cancel", session_id, actor, None, allow_memory_backends)
+
+
+@agents_sessions.command("pause")
+@click.argument("session_id")
+@click.option("--actor", default=None)
+@click.option("--allow-memory-backends", is_flag=True)
+def agents_sessions_pause(session_id, actor, allow_memory_backends):
+    """Pause an agent session."""
+    _session_mutation("pause", session_id, actor, None, allow_memory_backends)
+
+
+@agents_sessions.command("resume")
+@click.argument("session_id")
+@click.option("--actor", default=None)
+@click.option("--allow-memory-backends", is_flag=True)
+def agents_sessions_resume(session_id, actor, allow_memory_backends):
+    """Resume an agent session."""
+    _session_mutation("resume", session_id, actor, None, allow_memory_backends)
+
+
+@agents_sessions.command("steer")
+@click.argument("session_id")
+@click.option("--message", required=True)
+@click.option("--actor", default=None)
+@click.option("--allow-memory-backends", is_flag=True)
+def agents_sessions_steer(session_id, message, actor, allow_memory_backends):
+    """Inject steering text into an agent session."""
+    _session_mutation("steer", session_id, actor, message, allow_memory_backends)
+
+
+@agents_group.command("drain")
+@click.argument("session_id", required=False)
+@click.option("--allow-memory-backends", is_flag=True, help="Allow process-local backends.")
+def agents_drain(session_id, allow_memory_backends):
+    """Drain one agent session outbox, or all pending outboxes."""
+    import asyncio
+    from skrift.config import get_settings
+    from skrift.agents.state import drain_outbox, drain_pending_outboxes
+
+    async def _run():
+        _configure_agents_cli_runtime(get_settings(), allow_memory_backends=allow_memory_backends)
+        if session_id:
+            await drain_outbox(session_id)
+            click.echo(f"Drained {session_id}")
+            return
+        drained = await drain_pending_outboxes()
+        click.echo(f"Drained {len(drained)} session(s)")
+
+    asyncio.run(_run())
+
+
 @cli.group()
 def claude():
     """Manage Claude Code skills for Skrift development."""

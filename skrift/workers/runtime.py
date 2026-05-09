@@ -32,6 +32,7 @@ from skrift.workers.models import (
     DeadLetterCause,
     DeadLetterState,
     JobEnvelope,
+    JobIdConflict,
     JobState,
     JobStatus,
     LifecycleEventType,
@@ -251,6 +252,7 @@ class WorkerRuntime:
         correlation_id: str | None = None,
         parent_job_id: str | None = None,
         visibility_timeout: float | None = None,
+        job_id: str | None = None,
     ) -> JobHandle:
         try:
             job_type, descriptor, payload_model = self._resolve_submission(job_or_type, payload)
@@ -266,6 +268,7 @@ class WorkerRuntime:
                 correlation_id=correlation_id,
                 parent_job_id=parent_job_id,
                 visibility_timeout=visibility_timeout,
+                job_id=job_id,
             )
             attempt = self._attempt_from_exception(job, exc, started_at=utcnow())
             await self._dead_letter(
@@ -287,7 +290,13 @@ class WorkerRuntime:
             correlation_id=correlation_id,
             parent_job_id=parent_job_id,
             visibility_timeout=visibility_timeout,
+            job_id=job_id,
         )
+        existing_state = await self.get_job_state(job.id)
+        if existing_state is not None:
+            if self._same_idempotent_job(existing_state.job, job):
+                return JobHandle(self, job.id)
+            raise JobIdConflict(f"job id {job.id!r} already exists")
         await self._set_state(JobState(job=job, status=JobStatus.SUBMITTED))
         await self.emit_lifecycle(LifecycleEventType.JOB_SUBMITTED, job)
         handle = JobHandle(self, job.id)
@@ -295,7 +304,7 @@ class WorkerRuntime:
             claimed = ClaimedJob(job=job, token="inline")
             await self.execute_claim(claimed, inline=True)
         elif self.config.mode in {"in_process", "out_of_process"}:
-            await self.queue.submit(job)
+            await self.queue.submit(job, job_id=job.id)
         else:
             raise NotImplementedError(f"Unsupported worker execution mode {self.config.mode!r}")
         return handle
@@ -313,9 +322,11 @@ class WorkerRuntime:
         parent_job_id: str | None,
         visibility_timeout: float | None,
         replayed_from: str | None = None,
+        job_id: str | None = None,
     ) -> JobEnvelope:
         policy = retry_policy or descriptor.retry_policy
         return JobEnvelope(
+            id=job_id or JobEnvelope.model_fields["id"].default_factory(),
             type=job_type,
             queue=queue or descriptor.queue,
             payload=payload_data,
@@ -477,7 +488,7 @@ class WorkerRuntime:
         if self.config.mode == "inline":
             await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
         else:
-            await self.queue.submit(job)
+            await self.queue.submit(job, job_id=job.id)
             await self.queue.cancel(entry.queue, entry.job.id)
         entry.state = DeadLetterState.REPLAYED
         entry.replayed_to_job_id = job.id
@@ -886,7 +897,19 @@ class WorkerRuntime:
             )
         )
         await self.emit_lifecycle(LifecycleEventType.JOB_DEAD_LETTERED, job, error=error)
+        descriptor = self.registry.get(job.type)
+        if descriptor.dead_callback is not None:
+            await self._call_dead_callback(descriptor, entry)
         return entry
+
+    async def _call_dead_callback(
+        self,
+        descriptor: HandlerDescriptor,
+        entry: DeadJobEntry,
+    ) -> None:
+        result = descriptor.dead_callback(entry)
+        if inspect.isawaitable(result):
+            await result
 
     async def _record_queue_history_loop(self) -> None:
         while True:
@@ -1173,6 +1196,10 @@ class WorkerRuntime:
     @staticmethod
     def _job_key(job_id: str) -> str:
         return f"workers:jobs:{job_id}"
+
+    @staticmethod
+    def _same_idempotent_job(existing: JobEnvelope, incoming: JobEnvelope) -> bool:
+        return existing.idempotency_payload() == incoming.idempotency_payload()
 
 
 _runtime: WorkerRuntime | None = None

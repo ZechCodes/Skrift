@@ -12,7 +12,14 @@ from typing import Any
 from uuid import uuid4
 
 from skrift.workers.interfaces import BackendCapabilities, UpdateFn
-from skrift.workers.models import ClaimedJob, DeadJobEntry, JobEnvelope, QueueStats
+from skrift.workers.models import (
+    ClaimedJob,
+    DeadJobEntry,
+    EventIdConflict,
+    JobEnvelope,
+    JobIdConflict,
+    QueueStats,
+)
 
 
 def _now() -> datetime:
@@ -88,6 +95,15 @@ class InMemoryEventLog:
 
     async def append(self, stream: str, event: dict[str, Any]) -> int:
         async with self._condition:
+            event_id = event.get("event_id")
+            if event_id is not None:
+                for position, existing in enumerate(self._streams.get(stream, [])):
+                    if existing.get("event_id") == event_id:
+                        if existing == event:
+                            return position
+                        raise EventIdConflict(
+                            f"event_id {event_id!r} already exists in stream {stream!r}"
+                        )
             self._streams[stream].append(dict(event))
             position = len(self._streams[stream]) - 1
             self._condition.notify_all()
@@ -159,12 +175,20 @@ class InMemoryQueue:
         self._entries: dict[str, dict[str, _QueueEntry]] = defaultdict(dict)
         self._condition = asyncio.Condition()
 
-    async def submit(self, job: JobEnvelope) -> None:
+    async def submit(self, job: JobEnvelope, *, job_id: str | None = None) -> JobEnvelope:
+        if job_id is not None:
+            job = job.model_copy(update={"id": job_id})
         visible_at = job.scheduled_for or _now()
         job.ready_since = visible_at if visible_at <= _now() else None
         async with self._condition:
+            existing = self._entries[job.queue].get(job.id)
+            if existing is not None:
+                if existing.job.idempotency_payload() == job.idempotency_payload():
+                    return existing.job
+                raise JobIdConflict(f"job id {job.id!r} already exists")
             self._entries[job.queue][job.id] = _QueueEntry(job=job, visible_at=visible_at)
             self._condition.notify_all()
+            return job
 
     def _release_expired_claims(self) -> None:
         now = _now()

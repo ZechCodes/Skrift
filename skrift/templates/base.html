@@ -110,7 +110,7 @@
     {% block scripts %}{% endblock %}
 
     <script src="{{ static_url('skrift/js/notifications.js') }}"></script>
-    <script>
+    <script nonce="{{ csp_nonce() }}">
     // Flash message dismissal
     document.querySelectorAll('.sk-flash-dismiss').forEach(btn => {
         btn.addEventListener('click', () => {

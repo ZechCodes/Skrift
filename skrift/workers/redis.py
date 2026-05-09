@@ -12,7 +12,15 @@ from typing import Any
 from uuid import uuid4
 
 from skrift.workers.interfaces import BackendCapabilities, UpdateFn
-from skrift.workers.models import ClaimedJob, JobEnvelope, JobState, JobStatus, QueueStats
+from skrift.workers.models import (
+    ClaimedJob,
+    EventIdConflict,
+    JobEnvelope,
+    JobIdConflict,
+    JobState,
+    JobStatus,
+    QueueStats,
+)
 
 
 def _now() -> datetime:
@@ -235,6 +243,22 @@ class RedisEventLog(_RedisBackend):
     capabilities = BackendCapabilities({"replay", "live_tail", "delete"})
 
     async def append(self, stream: str, event: dict[str, Any]) -> int:
+        event_id = event.get("event_id")
+        if event_id is not None:
+            index_key = self._event_id_key(stream)
+            existing_position = await self._client.hget(index_key, str(event_id))
+            if existing_position is not None:
+                existing_position_int = int(
+                    existing_position.decode()
+                    if isinstance(existing_position, bytes)
+                    else existing_position
+                )
+                existing = await self.read(stream, from_position=existing_position_int, limit=1)
+                if existing and existing[0][1] == event:
+                    return existing_position_int
+                raise EventIdConflict(
+                    f"event_id {event_id!r} already exists in stream {stream!r}"
+                )
         position = int(await self._client.incr(self._position_key(stream))) - 1
         fields = {
             "position": str(position),
@@ -245,6 +269,8 @@ class RedisEventLog(_RedisBackend):
             fields["job_id"] = str(job_id)
         entry_id = await self._client.xadd(self._stream_key(stream), fields)
         await self._client.hset(self._id_key(stream), position, entry_id)
+        if event_id is not None:
+            await self._client.hset(self._event_id_key(stream), str(event_id), position)
         if job_id is not None:
             await self._client.zadd(
                 self._filter_key(stream, "job_id", str(job_id)),
@@ -366,6 +392,9 @@ class RedisEventLog(_RedisBackend):
     def _id_key(self, stream: str) -> str:
         return self._key("events", stream, "ids")
 
+    def _event_id_key(self, stream: str) -> str:
+        return self._key("events", stream, "event_ids")
+
     def _filter_key(self, stream: str, field: str, value: str) -> str:
         return self._key("events", stream, "filters", field, value)
 
@@ -396,15 +425,23 @@ class RedisQueue(_RedisBackend):
         {"named_queues", "delayed", "visibility_timeout", "retry", "dead_letter", "inspect"}
     )
 
-    async def submit(self, job: JobEnvelope) -> None:
+    async def submit(self, job: JobEnvelope, *, job_id: str | None = None) -> JobEnvelope:
+        if job_id is not None:
+            job = job.model_copy(update={"id": job_id})
         now = _now()
         visible_at = job.scheduled_for or now
         job.ready_since = visible_at if visible_at <= now else None
         async with self._queue_lock():
+            existing = await self._get_job(job.id)
+            if existing is not None:
+                if existing.idempotency_payload() == job.idempotency_payload():
+                    return existing
+                raise JobIdConflict(f"job id {job.id!r} already exists")
             await self._client.set(self._job_key(job.id), _job_to_json(job))
             await self._client.sadd(self._queue_names_key(), job.queue)
             await self._client.sadd(self._queue_jobs_key(job.queue), job.id)
             await self._client.zadd(self._ready_key(job.queue), {job.id: _score(visible_at)})
+            return job
 
     async def claim(
         self, queues: list[str], *, visibility_timeout: float

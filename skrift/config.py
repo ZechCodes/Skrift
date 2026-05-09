@@ -587,6 +587,27 @@ class WorkersConfig(BaseModel):
         return merged
 
 
+class AgentsAuditConfig(BaseModel):
+    """Agent audit trail configuration."""
+
+    retention_seconds: float | None = None
+    large_value_threshold_bytes: int = Field(default=262_144, ge=1)
+
+
+class AgentsConfig(BaseModel):
+    """Durable agent runtime configuration."""
+
+    default_queue: str = "agents"
+    tool_call_queue: str = "agents"
+    state_snapshot_interval: float = Field(default=60.0, gt=0)
+    default_subagent_dispatch: Literal["queued", "same_worker"] = "queued"
+    steer_prefix: str = "[steer] "
+    audit: AgentsAuditConfig = AgentsAuditConfig()
+    blob_backend: str = "skrift.agents.blob:InMemoryBlobStore"
+    outbox_drain_reconciler_interval: float = Field(default=60.0, ge=0)
+    outbox_max_entries: int = Field(default=100, ge=1)
+
+
 def worker_memory_backends(
     backends: WorkerBackendConfig,
     *,
@@ -844,6 +865,9 @@ class Settings(BaseSettings):
     # Worker runtime config (loaded from app.yaml)
     workers: WorkersConfig = WorkersConfig()
 
+    # Agent runtime config (loaded from app.yaml)
+    agents: AgentsConfig = AgentsConfig()
+
     # Email config (loaded from app.yaml)
     email: EmailConfig = EmailConfig()
 
@@ -951,6 +975,9 @@ def get_settings() -> Settings:
 
     if "workers" in app_config:
         kwargs["workers"] = WorkersConfig(**app_config["workers"])
+
+    if "agents" in app_config:
+        kwargs["agents"] = AgentsConfig(**app_config["agents"])
 
     if "email" in app_config:
         kwargs["email"] = EmailConfig(**app_config["email"])

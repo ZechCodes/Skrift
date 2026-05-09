@@ -22,6 +22,14 @@ Technical reference documentation for Skrift.
 
     [:octicons-arrow-right-24: Workers Reference](workers.md)
 
+-   :material-robot:{ .lg .middle } **Agents Reference**
+
+    ---
+
+    Public preview API for durable agents, chat, sessions, tools, reasoning, and audit helpers.
+
+    [:octicons-arrow-right-24: Agents Reference](agents.md)
+
 </div>
 
 ## Configuration
@@ -110,6 +118,7 @@ Technical reference documentation for Skrift.
 |-------|-------------|
 | [CLI Reference](cli.md) | Command-line interface |
 | [Workers Reference](workers.md) | Worker configuration and backend contracts |
+| [Agents Reference](agents.md) | Durable agent, chat, session, tool, and audit APIs |
 | [Environment Variables](environment-variables.md) | Configuration and secrets |
 | [OAuth Providers](auth-providers.md) | Authentication setup |
 | [Security Features](security-features.md) | Security implementation details |

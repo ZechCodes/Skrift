@@ -22,6 +22,7 @@ class HandlerDescriptor:
     queue: str
     retry_policy: RetryPolicy
     visibility_timeout: float
+    dead_callback: Callable[..., Any] | None = None
 
 
 class HandlerRegistry:
@@ -62,6 +63,25 @@ class HandlerRegistry:
         self._by_type[job_type] = descriptor
         self._by_model[model] = job_type
         return descriptor
+
+    def set_dead_callback(
+        self,
+        job_type: str,
+        callback: Callable[..., Any],
+    ) -> HandlerDescriptor:
+        descriptor = self.get(job_type)
+        updated = HandlerDescriptor(
+            job_type=descriptor.job_type,
+            func=descriptor.func,
+            payload_model=descriptor.payload_model,
+            queue=descriptor.queue,
+            retry_policy=descriptor.retry_policy,
+            visibility_timeout=descriptor.visibility_timeout,
+            dead_callback=callback,
+        )
+        self._by_type[job_type] = updated
+        self._by_model[updated.payload_model] = job_type
+        return updated
 
     def get(self, job_type: str) -> HandlerDescriptor:
         try:
@@ -128,6 +148,12 @@ def handler(
             max_attempts=max_attempts,
             visibility_timeout=visibility_timeout,
         )
+
+        def on_dead(callback: Callable[..., Any]) -> Callable[..., Any]:
+            registry.set_dead_callback(job_type, callback)
+            return callback
+
+        setattr(func, "on_dead", on_dead)
         return func
 
     return decorator

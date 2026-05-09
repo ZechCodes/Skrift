@@ -43,6 +43,14 @@ class DeadLetterState(StrEnum):
     DISCARDED = "discarded"
 
 
+class EventIdConflict(ValueError):
+    """Raised when an event_id is reused with a different event payload."""
+
+
+class JobIdConflict(ValueError):
+    """Raised when a job id is reused with a different job envelope."""
+
+
 class LifecycleEventType(StrEnum):
     JOB_SUBMITTED = "job_submitted"
     JOB_CLAIMED = "job_claimed"
@@ -88,6 +96,14 @@ class JobEnvelope(BaseModel):
     replayed_from: str | None = None
     reclaim_count: int = 0
     max_reclaims: int = 3
+
+    def idempotency_payload(self) -> dict[str, Any]:
+        """Return stable fields used to compare caller-supplied job id submissions."""
+
+        payload = self.model_dump(mode="json")
+        for key in ("attempt", "ready_since", "submitted_at", "reclaim_count"):
+            payload.pop(key, None)
+        return payload
 
 
 class ClaimedJob(BaseModel):

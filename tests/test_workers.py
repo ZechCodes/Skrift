@@ -41,7 +41,7 @@ from skrift.workers import (
     WorkerConfig,
     WorkerRuntime,
 )
-from skrift.workers.models import JobEnvelope, utcnow
+from skrift.workers.models import JobEnvelope, JobIdConflict, utcnow
 from skrift.workers.registry import registry
 
 
@@ -728,6 +728,41 @@ async def test_permanent_failure_requires_force_replay():
     assert replayed_entry is not None
     assert replayed_entry.state == DeadLetterState.REPLAYED
     assert replayed_entry.replayed_to_job_id == replay.id
+
+
+async def test_handler_on_dead_callback_runs_for_dead_lettered_job():
+    seen = []
+
+    @skrift.handler("dead_callback", max_attempts=1)
+    async def dead_callback(payload: Greeting):
+        raise RuntimeError(f"boom {payload.name}")
+
+    @dead_callback.on_dead
+    async def on_dead(entry: DeadJobEntry):
+        seen.append((entry.job_type, entry.latest_error))
+
+    runtime = skrift.configure_workers(mode="inline")
+    handle = await runtime.submit(Greeting(name="Ada"))
+
+    with pytest.raises(JobFailed, match="boom Ada"):
+        await handle.result()
+
+    assert seen == [("dead_callback", "RuntimeError: boom Ada")]
+
+
+async def test_runtime_submit_accepts_idempotent_caller_supplied_job_id():
+    @skrift.handler("idempotent_job")
+    async def idempotent_job(payload: Greeting):
+        return f"hi {payload.name}"
+
+    runtime = skrift.configure_workers(mode="inline")
+    first = await runtime.submit(Greeting(name="Ada"), job_id="fixed-job")
+    second = await runtime.submit(Greeting(name="Ada"), job_id="fixed-job")
+
+    assert first.id == second.id == "fixed-job"
+    assert await second.result() == "hi Ada"
+    with pytest.raises(JobIdConflict):
+        await runtime.submit(Greeting(name="Grace"), job_id="fixed-job")
 
 
 async def test_poison_payload_goes_to_dlq():

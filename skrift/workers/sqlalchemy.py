@@ -26,7 +26,9 @@ from skrift.workers.models import (
     ClaimedJob,
     DeadJobEntry,
     DeadLetterState,
+    EventIdConflict,
     JobEnvelope,
+    JobIdConflict,
     JobState,
     JobStatus,
     QueueStats,
@@ -239,7 +241,22 @@ class SQLAlchemyEventLog(_SQLAlchemyBackend):
 
     async def append(self, stream: str, event: dict[str, Any]) -> int:
         job_id = event.get("job_id")
+        event_id = event.get("event_id")
         async with self._session_maker() as session:
+            if event_id is not None:
+                existing = await session.execute(
+                    select(WorkerEventRecord).where(
+                        WorkerEventRecord.stream == stream,
+                        WorkerEventRecord.event["event_id"].as_string() == str(event_id),
+                    )
+                )
+                record = existing.scalar_one_or_none()
+                if record is not None:
+                    if dict(record.event) == event:
+                        return int(record.position)
+                    raise EventIdConflict(
+                        f"event_id {event_id!r} already exists in stream {stream!r}"
+                    )
             result = await session.execute(
                 select(func.max(WorkerEventRecord.position))
                 .where(WorkerEventRecord.stream == stream)
@@ -397,11 +414,22 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
         {"named_queues", "delayed", "visibility_timeout", "retry", "dead_letter", "inspect"}
     )
 
-    async def submit(self, job: JobEnvelope) -> None:
+    async def submit(self, job: JobEnvelope, *, job_id: str | None = None) -> JobEnvelope:
+        if job_id is not None:
+            job = job.model_copy(update={"id": job_id})
         now = _now()
         visible_at = job.scheduled_for or now
         job.ready_since = visible_at if visible_at <= now else None
         async with self._session_maker() as session:
+            result = await session.execute(
+                select(WorkerQueueRecord).where(WorkerQueueRecord.job_id == job.id)
+            )
+            existing = result.scalar_one_or_none()
+            if existing is not None:
+                existing_job = JobEnvelope.model_validate(existing.job)
+                if existing_job.idempotency_payload() == job.idempotency_payload():
+                    return existing_job
+                raise JobIdConflict(f"job id {job.id!r} already exists")
             session.add(
                 WorkerQueueRecord(
                     job_id=job.id,
@@ -412,6 +440,7 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
                 )
             )
             await session.commit()
+            return job
 
     async def claim(
         self, queues: list[str], *, visibility_timeout: float

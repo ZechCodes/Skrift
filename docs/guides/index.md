@@ -106,6 +106,30 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Workers](workers.md)
 
+-   :material-robot:{ .lg .middle } **Agents**
+
+    ---
+
+    Build durable Pydantic AI sessions with stateful chat turns, tool approvals, and audit trails.
+
+    [:octicons-arrow-right-24: Agents](agents.md)
+
+-   :material-message-text:{ .lg .middle } **Basic Agent Chat**
+
+    ---
+
+    Build a string-in/string-out chat assistant with simple tools and per-turn model settings.
+
+    [:octicons-arrow-right-24: Basic Agent Chat](agent-chat.md)
+
+-   :material-shape:{ .lg .middle } **Object Processing**
+
+    ---
+
+    Use typed outputs for multi-turn classification, extraction, routing, and workflow decisions.
+
+    [:octicons-arrow-right-24: Object Processing](agent-object-processing.md)
+
 -   :material-bell-ring:{ .lg .middle } **Notifications**
 
     ---
@@ -147,6 +171,10 @@ Step-by-step guides for building and customizing your Skrift site.
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |
 | [Observability](observability.md) | Tracing & logging | None |
 | [Workers](workers.md) | Background jobs | Python, async |
+| [Agents](agents.md) | Stateful AI sessions | Python, async, workers |
+| [Basic Agent Chat](agent-chat.md) | String chat with tools | Python, async, workers |
+| [Object Processing](agent-object-processing.md) | Typed multi-turn workflows | Python, async, workers |
+| [Adapting Pydantic AI Agents](pydantic-ai-agents.md) | Migration and limitations | Pydantic AI basics |
 | [Notifications](notifications.md) | Real-time notifications | Python basics |
 | [Web Push](web-push.md) | Offline push notifications | Python basics |
 | [Multi-Subdomain Sites](multisite.md) | Subdomain architecture | Python, ASGI |

@@ -31,7 +31,7 @@ from skrift.workers import (
     SQLAlchemyStateStore,
     WorkerPruner,
 )
-from skrift.workers.models import JobEnvelope, JobState, JobStatus, utcnow
+from skrift.workers.models import EventIdConflict, JobEnvelope, JobIdConflict, JobState, JobStatus, utcnow
 
 
 @pytest.fixture
@@ -86,6 +86,10 @@ async def _assert_event_log_contract(log) -> None:
     assert await log.append("contract", {"n": 1}) == 0
     assert await log.append("contract", {"n": 2}) == 1
     assert await log.append("contract", {"n": 3, "job_id": "job-1"}) == 2
+    assert await log.append("contract", {"event_id": "evt-1", "n": 4}) == 3
+    assert await log.append("contract", {"event_id": "evt-1", "n": 4}) == 3
+    with pytest.raises(EventIdConflict):
+        await log.append("contract", {"event_id": "evt-1", "n": 5})
     assert await log.read("contract", from_position=0, limit=2) == [
         (0, {"n": 1}),
         (1, {"n": 2}),
@@ -97,14 +101,14 @@ async def _assert_event_log_contract(log) -> None:
     read_tail = getattr(log, "read_tail", None)
     if callable(read_tail):
         assert await read_tail("contract", limit=2) == [
-            (1, {"n": 2}),
             (2, {"n": 3, "job_id": "job-1"}),
+            (3, {"event_id": "evt-1", "n": 4}),
         ]
 
-    subscription = log.subscribe("contract", from_position=3)
+    subscription = log.subscribe("contract", from_position=4)
     next_event = asyncio.create_task(anext(subscription))
     await log.append("contract", {"n": 4})
-    assert await asyncio.wait_for(next_event, timeout=1) == (3, {"n": 4})
+    assert await asyncio.wait_for(next_event, timeout=1) == (4, {"n": 4})
     await subscription.aclose()
 
     await log.delete("contract")
@@ -130,7 +134,10 @@ async def _assert_queue_contract(queue) -> None:
     assert (await queue.stats("default")).dead_lettered == 1
 
     ready = JobEnvelope(type="ready")
-    await queue.submit(ready)
+    assert (await queue.submit(ready)).id == ready.id
+    assert (await queue.submit(ready.model_copy(deep=True))).id == ready.id
+    with pytest.raises(JobIdConflict):
+        await queue.submit(ready.model_copy(update={"type": "different"}))
     claimed_ready = await queue.claim(["default"], visibility_timeout=1)
     assert claimed_ready is not None
     assert claimed_ready.job.id == ready.id
