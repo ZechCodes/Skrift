@@ -2,6 +2,7 @@
 
 from skrift.agents import (
     Agent,
+    ApprovalContext,
     ApprovalRejection,
     BlobRef,
     Chat,
@@ -11,6 +12,7 @@ from skrift.agents import (
     Steer,
     audit_export,
     replay,
+    require_approval,
     session,
     set_actor,
     set_blob_store,
@@ -33,6 +35,7 @@ from skrift.workers import (
 
 __all__ = [
     "Agent",
+    "ApprovalContext",
     "ApprovalRejection",
     "BlobRef",
     "Chat",
@@ -53,6 +56,7 @@ __all__ = [
     "handler",
     "local_executor",
     "replay",
+    "require_approval",
     "session",
     "set_actor",
     "set_blob_store",
