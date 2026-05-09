@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+
+{% block title %}Agent Audit - {{ site_name() }}{% endblock %}
+
+{% block content %}
+<main class="audit-shell">
+    <section class="audit-panel">
+        <header class="audit-header">
+            <div>
+                <h1>Agent Audit Trail</h1>
+                <p>Replayable events, actors, tool calls, inputs, outputs, and payloads.</p>
+            </div>
+            <a href="/" class="audit-link">Back to Chat</a>
+        </header>
+
+        <form class="audit-form" method="get" action="/audit">
+            <input
+                type="text"
+                name="session_id"
+                value="{{ session_id }}"
+                placeholder="Paste an agent session id"
+                aria-label="Agent session id"
+            >
+            <button type="submit">Load Audit</button>
+        </form>
+
+        {% if audit_error %}
+            <div class="audit-error">{{ audit_error }}</div>
+        {% endif %}
+
+        {% if audit %}
+            <div class="audit-summary">
+                <article>
+                    <span>Session</span>
+                    <strong>{{ audit.session_id }}</strong>
+                </article>
+                <article>
+                    <span>Status</span>
+                    <strong>{{ audit.terminal_status or "active" }}</strong>
+                </article>
+                <article>
+                    <span>Events</span>
+                    <strong>{{ audit.events | length }}</strong>
+                </article>
+                <article>
+                    <span>Tools</span>
+                    <strong>{{ audit.tools_called | length }}</strong>
+                </article>
+            </div>
+
+            <div class="audit-grid">
+                <section class="audit-events">
+                    <h2>Events</h2>
+                    {% for event in audit.events %}
+                        <article class="audit-event">
+                            <header>
+                                <div>
+                                    <strong>#{{ event.seq }} {{ event.type }}</strong>
+                                    <span>{{ event.ts }}</span>
+                                </div>
+                                <span>{{ event.session_stream_id }}</span>
+                            </header>
+                            <pre>{{ event.payload | tojson(indent=2) }}</pre>
+                        </article>
+                    {% endfor %}
+                </section>
+
+                <aside class="audit-side">
+                    <section>
+                        <h2>Actors</h2>
+                        {% if audit.actors %}
+                            <pre>{{ audit.actors | tojson(indent=2) }}</pre>
+                        {% else %}
+                            <p>No actors recorded.</p>
+                        {% endif %}
+                    </section>
+                    <section>
+                        <h2>Tools Called</h2>
+                        {% if audit.tools_called %}
+                            <pre>{{ audit.tools_called | tojson(indent=2) }}</pre>
+                        {% else %}
+                            <p>No tool calls recorded.</p>
+                        {% endif %}
+                    </section>
+                    <section>
+                        <h2>Lineage</h2>
+                        <pre>{{ audit.lineage | tojson(indent=2) }}</pre>
+                    </section>
+                    <section>
+                        <h2>Raw Export</h2>
+                        <details>
+                            <summary>Show JSON</summary>
+                            <pre>{{ audit_json }}</pre>
+                        </details>
+                    </section>
+                </aside>
+            </div>
+        {% else %}
+            <section class="audit-empty">
+                <h2>No session loaded</h2>
+                <p>Start an agent session on the chat page, then open its audit trail.</p>
+            </section>
+        {% endif %}
+    </section>
+</main>
+
+<style nonce="{{ csp_nonce() }}">
+    .audit-shell {
+        min-height: calc(100vh - 4rem);
+        padding: 2rem 1rem 3rem;
+        background:
+            radial-gradient(circle at 28% 12%, rgba(45, 212, 191, 0.10), transparent 32rem),
+            rgba(2, 6, 23, 0.72);
+        color: #e7eef8;
+    }
+
+    .audit-panel {
+        max-width: 1280px;
+        margin: 0 auto;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        background: rgba(8, 13, 24, 0.92);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.30);
+    }
+
+    .audit-header,
+    .audit-form {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.20);
+    }
+
+    .audit-header h1 {
+        margin: 0;
+        color: #f8fafc;
+        font-size: 1.25rem;
+    }
+
+    .audit-header p {
+        margin: 0.25rem 0 0;
+        color: #9fb0c7;
+    }
+
+    .audit-link,
+    .audit-form button {
+        border: 0;
+        background: #2dd4bf;
+        color: #06111d;
+        padding: 0.625rem 0.875rem;
+        text-decoration: none;
+        font-weight: 700;
+    }
+
+    .audit-form input {
+        flex: 1;
+        min-width: 0;
+        border: 1px solid rgba(148, 163, 184, 0.34);
+        background: rgba(15, 23, 42, 0.90);
+        color: #f8fafc;
+        padding: 0.75rem 0.875rem;
+    }
+
+    .audit-error {
+        margin: 1rem 1.25rem 0;
+        color: #fdba74;
+        font-weight: 700;
+    }
+
+    .audit-summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.75rem;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.20);
+    }
+
+    .audit-summary article,
+    .audit-event,
+    .audit-side section,
+    .audit-empty {
+        border: 1px solid rgba(148, 163, 184, 0.20);
+        background: rgba(15, 23, 42, 0.72);
+    }
+
+    .audit-summary article {
+        padding: 0.875rem;
+    }
+
+    .audit-summary span,
+    .audit-event header span {
+        display: block;
+        color: #8ea0b8;
+        font-size: 0.8125rem;
+    }
+
+    .audit-summary strong {
+        display: block;
+        overflow: hidden;
+        color: #f8fafc;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .audit-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        min-height: 680px;
+    }
+
+    .audit-events,
+    .audit-side {
+        min-height: 0;
+        padding: 1rem;
+        overflow: auto;
+    }
+
+    .audit-side {
+        border-left: 1px solid rgba(148, 163, 184, 0.20);
+        background: rgba(2, 6, 23, 0.28);
+    }
+
+    .audit-events h2,
+    .audit-side h2,
+    .audit-empty h2 {
+        margin: 0 0 0.75rem;
+        color: #f8fafc;
+        font-size: 1rem;
+    }
+
+    .audit-event {
+        margin-bottom: 0.875rem;
+    }
+
+    .audit-event header {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.75rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+    }
+
+    .audit-event header strong {
+        color: #ccfbf1;
+    }
+
+    .audit-side section {
+        margin-bottom: 0.875rem;
+        padding: 0.875rem;
+    }
+
+    .audit-empty {
+        margin: 1rem;
+        padding: 1rem;
+    }
+
+    .audit-empty p,
+    .audit-side p {
+        color: #9fb0c7;
+    }
+
+    .audit-panel pre {
+        max-height: 420px;
+        margin: 0;
+        overflow: auto;
+        padding: 0.875rem;
+        background: rgba(2, 6, 23, 0.62);
+        color: #dbe7f7;
+        font-size: 0.8125rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    .audit-side details summary {
+        cursor: pointer;
+        color: #ccfbf1;
+        font-weight: 700;
+    }
+
+    @media (max-width: 920px) {
+        .audit-header,
+        .audit-form {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .audit-summary {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .audit-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .audit-side {
+            border-top: 1px solid rgba(148, 163, 184, 0.20);
+            border-left: 0;
+        }
+    }
+</style>
+{% endblock %}
+

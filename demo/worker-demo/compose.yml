@@ -1,0 +1,71 @@
+x-skrift-app: &skrift_app
+  image: ghcr.io/astral-sh/uv:python3.13-bookworm
+  working_dir: /workspace/demo/worker-demo
+  volumes:
+    - ../..:/workspace
+  environment:
+    SKRIFT_ENV: compose
+    SECRET_KEY: compose-development-secret-key-change-me
+    DATABASE_URL: postgresql+asyncpg://skrift_test:skrift_test@postgres:5432/skrift_test
+    PYTHONUNBUFFERED: "1"
+    UV_CACHE_DIR: /tmp/uv-cache
+    UV_LINK_MODE: copy
+    UV_PROJECT_ENVIRONMENT: /tmp/skrift-compose-venv
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: skrift_test
+      POSTGRES_PASSWORD: skrift_test
+      POSTGRES_DB: skrift_test
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skrift_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    <<: *skrift_app
+    command: uv run skrift -f compose.app.yaml db upgrade heads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    <<: *skrift_app
+    command: uv run skrift -f compose.app.yaml serve --host 0.0.0.0 --port 8080
+    ports:
+      - "8082:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *skrift_app
+    command: uv run skrift -f compose.app.yaml workers run --concurrency 4
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  persister:
+    <<: *skrift_app
+    command: uv run skrift -f compose.app.yaml workers persister
+    depends_on:
+      migrate:
+        condition: service_completed_successfully

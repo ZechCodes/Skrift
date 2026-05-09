@@ -71,6 +71,12 @@ nav:
     - Markdown Content: guides/markdown-content.md
     - Protecting Routes: guides/protecting-routes.md
     - Observability: guides/observability.md
+    - Workers: guides/workers.md
+    - Agents:
+      - Overview: guides/agents.md
+      - Basic Chat: guides/agent-chat.md
+      - Multi-turn Object Processing: guides/agent-object-processing.md
+      - Adapting Pydantic AI Agents: guides/pydantic-ai-agents.md
     - Notifications: guides/notifications.md
     - Multi-Subdomain Sites: guides/multisite.md
   - Admin:
@@ -81,6 +87,8 @@ nav:
   - Reference:
     - reference/index.md
     - CLI Reference: reference/cli.md
+    - Workers Reference: reference/workers.md
+    - Agents Reference: reference/agents.md
     - Environment Variables: reference/environment-variables.md
     - Environment-Specific Config: reference/environments.md
     - OAuth Providers: reference/auth-providers.md

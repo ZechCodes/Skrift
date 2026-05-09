@@ -1,0 +1,110 @@
+{% extends "admin/base.html" %}
+
+{% block title %}DLQ Entry - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<div class="sk-admin-header">
+    <hgroup>
+        <h1>DLQ Entry</h1>
+        <p>{% if entry %}{{ entry.short_id }} · {{ entry.cause }}{% else %}Not found{% endif %}</p>
+    </hgroup>
+    <a href="/admin/workers/dlq" role="button" class="sk-btn-outline">Back to DLQ</a>
+</div>
+
+{% if not entry %}
+<p class="sk-no-items">DLQ entry not found.</p>
+{% else %}
+<section class="sk-stats sk-worker-stats">
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Job</div>
+        <div class="sk-worker-stat-line">
+            <span>{{ entry.short_job_id }}</span>
+            <span>{{ entry.job_type }}</span>
+        </div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Queue</div>
+        <div class="sk-worker-stat-line">
+            <span>{{ entry.queue }}</span>
+            <span>{{ entry.state }}</span>
+        </div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Cause</div>
+        <div class="sk-worker-stat-line">
+            <span>{{ entry.cause }}</span>
+            <span>{{ entry.attempts }} attempts</span>
+        </div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Replay</div>
+        <div class="sk-worker-stat-line">
+            <span>{{ entry.replayed_to_job_id or "not replayed" }}</span>
+        </div>
+    </article>
+</section>
+
+<form
+    method="post"
+    action="/admin/workers/dlq/action"
+    class="sk-worker-dlq-actions"
+>
+    {{ csrf_field() }}
+    <input type="hidden" name="entry_id" value="{{ entry.id }}">
+    <input type="hidden" name="next" value="/admin/workers/dlq/{{ entry.id }}">
+    <button type="submit" name="action" value="retry" class="sk-btn-outline">Retry</button>
+    <button
+        type="submit"
+        name="action"
+        value="force_retry"
+        class="sk-btn-outline"
+    >Force retry</button>
+    <button type="submit" name="action" value="discard" class="sk-btn-outline">Discard</button>
+    <input type="text" name="reason" placeholder="Discard reason">
+</form>
+
+<section class="sk-panel sk-worker-panel">
+    <div class="sk-panel-head">
+        <h2>Payload</h2>
+    </div>
+    <div class="sk-panel-body">
+        <pre class="sk-worker-dlq-pre">{{ entry.payload }}</pre>
+    </div>
+</section>
+
+<section class="sk-worker-tabs">
+    <table class="sk-admin-table">
+        <thead>
+            <tr>
+                <th>Attempt</th>
+                <th>Started</th>
+                <th>Worker</th>
+                <th>Duration</th>
+                <th>Exception</th>
+                <th>Error</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for attempt in entry.attempt_history %}
+            <tr>
+                <td>{{ attempt.attempt }}</td>
+                <td>{{ attempt.started_at }}</td>
+                <td>{{ attempt.worker_id }}</td>
+                <td>{{ attempt.duration_seconds }}</td>
+                <td>{{ attempt.exception_type }}</td>
+                <td>{{ attempt.error }}</td>
+            </tr>
+            <tr>
+                <td colspan="6">
+                    <pre class="sk-worker-dlq-pre">{{ attempt.traceback }}</pre>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if not entry.attempt_history %}
+    <p class="sk-no-items">No attempt history was recorded.</p>
+    {% endif %}
+</section>
+{% endif %}
+{% endblock %}

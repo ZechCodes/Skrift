@@ -13,5 +13,38 @@ from skrift.db.models.role import Role, RolePermission, user_roles
 from skrift.db.models.setting import Setting
 from skrift.db.models.second_factor import SecondFactorEnrollment
 from skrift.db.models.user import User
+from skrift.db.models.worker import (
+    WorkerArchiveEventRecord,
+    WorkerArchiveSnapshotRecord,
+    WorkerDeadLetterRecord,
+    WorkerEventRecord,
+    WorkerQueueRecord,
+    WorkerStateRecord,
+)
 
-__all__ = ["APIKey", "Asset", "DismissedNotification", "OAuth2Client", "OAuthAccount", "Page", "PageRevision", "PushSubscription", "RevokedFamily", "RevokedToken", "Role", "RolePermission", "SecondFactorEnrollment", "Setting", "StoredNotification", "User", "page_assets", "user_roles"]
+__all__ = [
+    "APIKey",
+    "Asset",
+    "DismissedNotification",
+    "OAuth2Client",
+    "OAuthAccount",
+    "Page",
+    "PageRevision",
+    "PushSubscription",
+    "RevokedFamily",
+    "RevokedToken",
+    "Role",
+    "RolePermission",
+    "SecondFactorEnrollment",
+    "Setting",
+    "StoredNotification",
+    "User",
+    "WorkerArchiveEventRecord",
+    "WorkerArchiveSnapshotRecord",
+    "WorkerDeadLetterRecord",
+    "WorkerEventRecord",
+    "WorkerQueueRecord",
+    "WorkerStateRecord",
+    "page_assets",
+    "user_roles",
+]

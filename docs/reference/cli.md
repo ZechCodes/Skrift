@@ -128,6 +128,59 @@ skrift db revision -m "add user preferences" --autogenerate
 
 ---
 
+### skrift workers
+
+Manage worker processes, queue state, jobs, and dead-letter entries.
+
+```bash
+skrift workers [COMMAND] [OPTIONS]
+```
+
+| Command | Description |
+|---------|-------------|
+| `skrift workers run` | Run a standalone worker process |
+| `skrift workers persister` | Flush lifecycle events, snapshot state, and run retention pruning |
+| `skrift workers prune` | Run one worker retention/pruning pass |
+| `skrift workers queues list` | List queue depth and oldest-ready age |
+| `skrift workers jobs inspect JOB_ID` | Inspect one job and its lifecycle events |
+| `skrift workers dlq list` | List dead-letter entries |
+| `skrift workers dlq inspect ENTRY_ID` | Inspect one dead-letter entry |
+| `skrift workers dlq retry [ENTRY_ID...]` | Replay explicit or filtered dead-letter entries as new jobs |
+| `skrift workers dlq discard [ENTRY_ID...]` | Mark explicit or filtered dead-letter entries discarded |
+| `skrift workers dlq export` | Export dead-letter entries as JSON |
+
+Common examples:
+
+```bash
+# Drain configured queues in a standalone worker process
+skrift workers run --queue default --queue slow --concurrency 4
+
+# Run the persistence service
+skrift workers persister
+
+# Run one retention pass and emit machine-readable counts
+skrift workers prune --json
+
+# Inspect queue and job state
+skrift workers queues list
+skrift workers jobs inspect JOB_ID --json
+
+# Operate on DLQ entries
+skrift workers dlq list
+skrift workers dlq retry ENTRY_ID
+skrift workers dlq retry --queue webhooks --cause retries_exhausted --since 1h
+skrift workers dlq discard ENTRY_ID --reason "not actionable"
+skrift workers dlq discard --job-type media.resize_image --dry-run
+```
+
+DLQ list, export, retry, and discard support `--queue`, `--job-type`, `--cause`, `--state`, `--exception-type`, `--since`, and `--until`. `--since` and `--until` accept ISO datetimes or durations such as `15m`, `1h`, and `2d`. Filtered retry/discard defaults to `--state open`; permanent-failure and poison retries require `--force`.
+
+All process-oriented worker commands reject process-local memory backends by default. For local tests only, pass `--allow-memory-backends`.
+
+See [Workers Reference](workers.md) for configuration, backend choices, persistence, retention, and custom backend contracts.
+
+---
+
 ## Global Options
 
 All commands support these global options:

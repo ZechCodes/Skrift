@@ -81,6 +81,137 @@ class TestGetAdminContext:
         assert ctx["current_path"] == "/admin"
 
 
+class TestWorkersAdminController:
+    @pytest.mark.asyncio
+    async def test_workers_page_renders_snapshot(self):
+        from skrift.admin.workers import WorkersAdminController
+
+        request = MagicMock()
+        db_session = AsyncMock()
+        snapshot = {
+            "mode": "inline",
+            "concurrency": 1,
+            "queues": [],
+            "jobs": [],
+            "handlers": [],
+            "events": [],
+        }
+
+        controller = WorkersAdminController(owner=MagicMock())
+        with (
+            patch(
+                "skrift.admin.workers.get_admin_context",
+                new_callable=AsyncMock,
+                return_value={"admin_nav": [], "current_path": "/admin/workers"},
+            ),
+            patch("skrift.admin.workers.get_flash_messages", return_value=[]),
+            patch("skrift.admin.workers.get_runtime") as get_runtime,
+        ):
+            get_runtime.return_value.inspect = AsyncMock(return_value=snapshot)
+            result = await controller.workers.fn(controller, request, db_session)
+
+        assert result.template_name == "admin/workers.html"
+        assert result.context["snapshot"] == snapshot
+        assert result.context["current_path"] == "/admin/workers"
+
+    @pytest.mark.asyncio
+    async def test_workers_stream_returns_sse_response(self):
+        from litestar.response.sse import ServerSentEvent
+        from skrift.admin.workers import WorkersAdminController
+
+        controller = WorkersAdminController(owner=MagicMock())
+        request = MagicMock()
+
+        result = await controller.stream.fn(controller, request)
+
+        assert isinstance(result, ServerSentEvent)
+
+    def test_worker_snapshot_serialization(self):
+        from skrift.admin.workers import _serialize_snapshot
+        from skrift.workers import HandlerRegistry, Job, WorkerRuntime
+
+        class AdminObserved(Job):
+            name: str
+
+        local_registry = HandlerRegistry()
+        local_registry.register(
+            "admin_observed",
+            lambda job: job.name,
+            payload_model=AdminObserved,
+        )
+        runtime = WorkerRuntime(handler_registry=local_registry)
+
+        async def _inspect():
+            await runtime.submit(AdminObserved(name="Ada"))
+            return await runtime.inspect()
+
+        import asyncio
+
+        payload = _serialize_snapshot(asyncio.run(_inspect()))
+
+        assert payload["mode"] == "inline"
+        assert payload["queues"][0]["oldest_ready_age_seconds"] == 0
+        assert payload["queue_wait_bucket_seconds"] == 900
+        assert payload["queue_trend_history"][0]["queues"][0]["queue"] == "default"
+        assert payload["queue_wait_history"][0]["queues"][0]["queue"] == "default"
+        assert payload["jobs"][0]["type"] == "admin_observed"
+        assert payload["jobs_total"] == 1
+        assert payload["jobs_active_total"] == 0
+        assert payload["handlers"][0]["payload"] == "AdminObserved"
+        assert payload["events"][0]["type"] == "job_completed"
+
+    @pytest.mark.asyncio
+    async def test_dlq_page_renders_entries(self):
+        from skrift.admin.workers import WorkersAdminController
+        from skrift.workers import DeadLetterCause, DeadLetterState
+        from skrift.workers.models import DeadJobEntry, JobEnvelope
+
+        entry = DeadJobEntry(
+            job=JobEnvelope(type="admin_observed", payload={"name": "Ada"}),
+            queue="default",
+            job_type="admin_observed",
+            cause=DeadLetterCause.RETRIES_EXHAUSTED,
+            latest_error="boom",
+        )
+        controller = WorkersAdminController(owner=MagicMock())
+        request = MagicMock()
+        db_session = AsyncMock()
+
+        with (
+            patch(
+                "skrift.admin.workers.get_admin_context",
+                new_callable=AsyncMock,
+                return_value={"admin_nav": [], "current_path": "/admin/workers/dlq"},
+            ),
+            patch("skrift.admin.workers.get_flash_messages", return_value=[]),
+            patch("skrift.admin.workers.get_runtime") as get_runtime,
+        ):
+            get_runtime.return_value.inspect_dlq = AsyncMock(return_value=[entry])
+            result = await controller.dlq.fn(controller, request, db_session)
+
+        assert result.template_name == "admin/workers_dlq.html"
+        assert result.context["entries"][0]["cause"] == DeadLetterCause.RETRIES_EXHAUSTED
+        assert DeadLetterState.OPEN.value in result.context["states"]
+
+    @pytest.mark.asyncio
+    async def test_dlq_action_retries_selected_entries(self):
+        from skrift.admin.workers import WorkersAdminController
+
+        controller = WorkersAdminController(owner=MagicMock())
+        request = MagicMock()
+        data = {"entry_abc": "on", "action": "retry"}
+
+        with (
+            patch("skrift.admin.workers.flash_success"),
+            patch("skrift.admin.workers.get_runtime") as get_runtime,
+        ):
+            get_runtime.return_value.retry_dlq_entries = AsyncMock(return_value=[])
+            result = await controller.dlq_action.fn(controller, request, data)
+
+        assert result.status_code == 302
+        get_runtime.return_value.retry_dlq_entries.assert_awaited_once_with(["abc"])
+
+
 class TestExtractPageFormData:
     def test_complete_valid_data(self):
         from skrift.admin.helpers import extract_page_form_data

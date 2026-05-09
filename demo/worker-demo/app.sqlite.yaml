@@ -1,0 +1,28 @@
+controllers:
+  - workerdemo.controllers:WorkerDemoController
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+db:
+  url: sqlite+aiosqlite:///./app.db
+auth:
+  redirect_base_url: http://localhost:8082
+  methods:
+    dummy:
+      type: dummy
+      label: Demo Login
+rate_limit:
+  enabled: false
+workers:
+  enabled: true
+  execution: in_process
+  queues:
+    - demo-fast
+    - demo-slow
+    - demo-io
+  concurrency: 4
+  backends:
+    state_store: skrift.workers.sqlalchemy:SQLAlchemyStateStore
+    event_log: skrift.workers.sqlalchemy:SQLAlchemyEventLog
+    queue: skrift.workers.sqlalchemy:SQLAlchemyQueue
+    dead_letter_store: skrift.workers.sqlalchemy:SQLAlchemyDeadLetterStore
+    archive: skrift.workers.sqlalchemy:SQLAlchemyArchive

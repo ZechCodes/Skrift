@@ -1,0 +1,168 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Worker DLQ - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<div class="sk-admin-header">
+    <hgroup>
+        <h1>Worker DLQ</h1>
+        <p>Dead-lettered jobs for triage and replay</p>
+    </hgroup>
+    <a href="/admin/workers" role="button" class="sk-btn-outline">Workers</a>
+</div>
+
+<section class="sk-panel sk-worker-panel">
+    <div class="sk-panel-head">
+        <h2>Filters</h2>
+    </div>
+    <div class="sk-panel-body">
+        <form method="get" action="/admin/workers/dlq" class="sk-worker-dlq-filters">
+            <label>
+                Queue
+                <select name="queue">
+                    <option value="">All queues</option>
+                    {% for option in queues %}
+                    <option
+                        value="{{ option }}"
+                        {% if filters.queue == option %}selected{% endif %}
+                    >
+                        {{ option }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Type
+                <select name="job_type">
+                    <option value="">All types</option>
+                    {% for option in job_types %}
+                    <option
+                        value="{{ option }}"
+                        {% if filters.job_type == option %}selected{% endif %}
+                    >
+                        {{ option }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Cause
+                <select name="cause">
+                    <option value="">All causes</option>
+                    {% for option in causes %}
+                    <option
+                        value="{{ option }}"
+                        {% if filters.cause == option %}selected{% endif %}
+                    >
+                        {{ option }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                State
+                <select name="state">
+                    <option value="">All states</option>
+                    {% for option in states %}
+                    <option
+                        value="{{ option }}"
+                        {% if filters.state == option %}selected{% endif %}
+                    >
+                        {{ option }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Exception
+                <select name="exception_type">
+                    <option value="">All exceptions</option>
+                    {% for option in exception_types %}
+                    <option
+                        value="{{ option }}"
+                        {% if filters.exception_type == option %}selected{% endif %}
+                    >
+                        {{ option }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Created
+                <select name="hours">
+                    <option value="">Any time</option>
+                    <option value="1" {% if filters.hours == 1 %}selected{% endif %}>
+                        Last hour
+                    </option>
+                    <option value="24" {% if filters.hours == 24 %}selected{% endif %}>
+                        Last day
+                    </option>
+                    <option value="168" {% if filters.hours == 168 %}selected{% endif %}>
+                        Last week
+                    </option>
+                </select>
+            </label>
+            <button type="submit" class="sk-btn-primary">Apply</button>
+            <button
+                type="submit"
+                class="sk-btn-outline"
+                formaction="/admin/workers/dlq/export"
+            >Export JSON</button>
+        </form>
+    </div>
+</section>
+
+<form method="post" action="/admin/workers/dlq/action">
+    {{ csrf_field() }}
+    <input type="hidden" name="next" value="/admin/workers/dlq">
+    <section class="sk-worker-tabs">
+        <div class="sk-worker-dlq-actions">
+            <button type="submit" name="action" value="retry" class="sk-btn-outline">
+                Retry selected
+            </button>
+            <button type="submit" name="action" value="force_retry" class="sk-btn-outline">
+                Force retry selected
+            </button>
+            <button type="submit" name="action" value="discard" class="sk-btn-outline">
+                Discard selected
+            </button>
+            <input type="text" name="reason" placeholder="Discard reason">
+        </div>
+        <table class="sk-admin-table">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>Created</th>
+                    <th>Queue</th>
+                    <th>Type</th>
+                    <th>Cause</th>
+                    <th>State</th>
+                    <th>Attempts</th>
+                    <th>Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in entries %}
+                <tr>
+                    <td><input type="checkbox" name="entry_{{ entry.id }}"></td>
+                    <td>{{ entry.created_at }}</td>
+                    <td>{{ entry.queue }}</td>
+                    <td>{{ entry.job_type }}</td>
+                    <td><span class="sk-role-badge">{{ entry.cause }}</span></td>
+                    <td>{{ entry.state }}</td>
+                    <td>{{ entry.attempts }}</td>
+                    <td>
+                        <a href="/admin/workers/dlq/{{ entry.id }}">
+                            {{ entry.exception_type or entry.latest_error or entry.short_id }}
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if not entries %}
+        <p class="sk-no-items">No DLQ entries match these filters.</p>
+        {% endif %}
+    </section>
+</form>
+{% endblock %}

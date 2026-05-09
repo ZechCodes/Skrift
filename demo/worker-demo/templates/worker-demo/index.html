@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Worker Demo - {{ site_name() }}{% endblock %}
+
+{% block content %}
+<main class="sk-container" style="padding: 4rem 1rem;">
+    <h1>Worker Demo</h1>
+    <p>
+        This demo starts random worker jobs in the background. Open the
+        admin worker observer to watch jobs start, pause, retry, fail, and
+        complete in real time.
+    </p>
+    <p>
+        <a href="/admin/workers" role="button">Open Worker Observer</a>
+        <a href="/auth/login" role="button" class="sk-btn-outline">Demo Login</a>
+    </p>
+    <form method="post" action="/jobs">
+        <button type="submit">Queue Job Now</button>
+    </form>
+</main>
+{% endblock %}

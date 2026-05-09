@@ -163,7 +163,14 @@ def load_controllers() -> list:
 
         # Auto-expand AdminController to include split sub-controllers
         if class_name == "AdminController" and module_path == "skrift.admin.controller":
-            for sub_name in ("UserAdminController", "SettingsAdminController", "MediaAdminController", "OAuth2ClientAdminController", "APIKeyAdminController"):
+            for sub_name in (
+                "UserAdminController",
+                "SettingsAdminController",
+                "MediaAdminController",
+                "OAuth2ClientAdminController",
+                "APIKeyAdminController",
+                "WorkersAdminController",
+            ):
                 sub_class = getattr(module, sub_name, None)
                 if sub_class and sub_class not in controllers:
                     controllers.append(sub_class)
@@ -1047,8 +1054,8 @@ def create_app() -> ASGIApp:
 
         observability.instrument_sqlalchemy(db_config.get_engine())
 
-        from skrift.lib.hooks import hooks
-        await hooks.do_action("logfire_configured")
+        from skrift.lib.hooks import APP_STARTUP, LOGFIRE_CONFIGURED, hooks
+        await hooks.do_action(LOGFIRE_CONFIGURED)
 
         notification_service.set_backend(backend)
         await backend.start()
@@ -1078,8 +1085,40 @@ def create_app() -> ASGIApp:
             if store_cfg.backend == "local":
                 Path(store_cfg.local_path).mkdir(parents=True, exist_ok=True)
 
+        if settings.workers.enabled:
+            from skrift.agents.config import configure_agent_runtime
+            from skrift.workers import configure_workers
+            from skrift.config import validate_worker_runtime_config
+
+            validate_worker_runtime_config(settings.workers, context="web")
+            configure_agent_runtime(settings.agents)
+
+            worker_runtime = configure_workers(
+                mode=settings.workers.execution,
+                queues=tuple(settings.workers.queues),
+                concurrency=settings.workers.concurrency,
+                poll_interval=settings.workers.poll_interval,
+                visibility_timeout=settings.workers.visibility_timeout,
+                max_reclaims=settings.workers.max_reclaims,
+                backend_imports=settings.workers.backends,
+                settings=settings,
+                session_maker=db_config.get_session,
+            )
+            if settings.workers.execution != "out_of_process":
+                await worker_runtime.start()
+
+        await hooks.do_action(APP_STARTUP, _app)
+
     async def on_shutdown(_app: Litestar) -> None:
         """Stop notification backend and storage on shutdown."""
+        from skrift.lib.hooks import APP_SHUTDOWN, hooks
+        await hooks.do_action(APP_SHUTDOWN, _app)
+
+        if settings.workers.enabled:
+            from skrift.workers import get_runtime
+
+            await get_runtime().stop()
+
         await notification_service.disconnect_active_connections()
         await notification_service._get_backend().stop()
         await email_backend.stop()
