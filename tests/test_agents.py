@@ -16,7 +16,12 @@ from skrift.agents.blob import ArchiveBlobStore, BLOB_STREAM_PREFIX, InMemoryBlo
 from skrift.agents.config import configure_agent_runtime
 from skrift.agents.registry import registry as agent_registry
 from skrift.agents.runtime import register_agent_handlers
-from skrift.agents.state import drain_pending_outboxes, load_runstate, runstate_key
+from skrift.agents.state import (
+    drain_pending_outboxes,
+    load_runstate,
+    runstate_key,
+    update_runstate,
+)
 from skrift.config import AgentsConfig
 from skrift.workers.registry import registry as worker_registry
 
@@ -348,6 +353,43 @@ async def test_agent_constructor_output_type_is_preserved():
     session = await agent.run("return a number")
 
     assert await session.result() == 5
+
+
+async def test_agent_constructor_output_type_rehydrates_persisted_model_output():
+    agent = skrift.Agent(
+        TestModel(custom_output_args={"action": "answer", "message": "ok"}),
+        name="demo",
+        output_type=ChatAction,
+    )
+
+    session = await agent.run("classify")
+
+    result = await session.result()
+    assert result == ChatAction(action="answer", message="ok")
+    assert isinstance(result, ChatAction)
+
+
+async def test_turn_output_type_rehydrates_after_run_kwargs_change():
+    agent = skrift.Agent(
+        TestModel(custom_output_args={"action": "answer", "message": "ok"}),
+        name="demo",
+    )
+
+    session = await agent.run("classify", output_type=ChatAction)
+    state = await session.state()
+    turn_id = state.current_turn_id
+    assert turn_id is not None
+    assert state.turn_output_types[turn_id]["__skrift_type__"].endswith(":ChatAction")
+
+    async def clear_run_kwargs(runstate):
+        runstate.run_kwargs = {}
+        return runstate
+
+    await update_runstate(session.id, clear_run_kwargs)
+
+    result = await session.result(turn_id=turn_id)
+    assert result == ChatAction(action="answer", message="ok")
+    assert isinstance(result, ChatAction)
 
 
 async def test_agent_run_kwargs_are_forwarded_to_pydantic_ai():

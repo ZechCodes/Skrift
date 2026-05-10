@@ -6,12 +6,15 @@ import asyncio
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
+from pydantic import TypeAdapter
+from pydantic_ai import DeferredToolRequests
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from skrift.agents.blob import dereference_blob_refs
 from skrift.agents.context import resolve_actor
 from skrift.agents.models import Actor, RunState, Steer
-from skrift.agents.turns import normalize_turn_kwargs
+from skrift.agents.registry import registry
+from skrift.agents.turns import _decode_type_ref, normalize_turn_kwargs
 from skrift.agents.state import (
     actor_payload,
     append_event,
@@ -379,11 +382,14 @@ class Session:
             state = await self.state()
             if turn_id is not None:
                 if turn_id in state.turn_results:
-                    return state.turn_results[turn_id]
+                    return _rehydrate_result(
+                        state.turn_results[turn_id],
+                        _result_output_type(state, turn_id),
+                    )
                 if turn_id in state.turn_errors:
                     raise AgentSessionError(str(state.turn_errors[turn_id]))
             if state.status == "completed":
-                return state.output
+                return _rehydrate_result(state.output, _result_output_type(state, None))
             if state.status == "failed":
                 raise AgentSessionError(str(state.error or "Agent session failed"))
             if state.status == "cancelled":
@@ -398,6 +404,43 @@ def _jsonable_payload(payload: Any | None) -> Any | None:
         return to_jsonable_python(payload)
     except PydanticSerializationError as exc:
         raise AgentSessionError("Rejection payload must be JSON-serializable") from exc
+
+
+def _result_output_type(state: RunState, turn_id: str | None) -> Any | None:
+    stored_type = None
+    if turn_id is not None:
+        stored_type = state.turn_output_types.get(turn_id)
+    elif state.current_turn_id is not None:
+        stored_type = state.turn_output_types.get(state.current_turn_id)
+    if stored_type is None and (turn_id is None or turn_id == state.current_turn_id):
+        stored_type = state.run_kwargs.get("output_type")
+    if stored_type is not None:
+        try:
+            return _decode_type_ref(stored_type)
+        except Exception:
+            return None
+    try:
+        return getattr(registry.get(state.agent_name).agent, "_output_type", None)
+    except KeyError:
+        return None
+
+
+def _rehydrate_result(output: Any, output_type: Any | None) -> Any:
+    if output_type is None or output_type is Any:
+        return output
+    if isinstance(output_type, (list, tuple)):
+        last_error: Exception | None = None
+        for candidate in output_type:
+            if candidate is DeferredToolRequests:
+                continue
+            try:
+                return _rehydrate_result(output, candidate)
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        return output
+    return TypeAdapter(output_type).validate_python(output)
 
 
 async def session(session_id: str) -> Session:

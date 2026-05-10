@@ -274,6 +274,12 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
         runstate.output = output
         if runstate.current_turn_id:
             runstate.turn_results[runstate.current_turn_id] = output
+            if "output_type" in runstate.run_kwargs:
+                runstate.turn_output_types[runstate.current_turn_id] = runstate.run_kwargs[
+                    "output_type"
+                ]
+            else:
+                runstate.turn_output_types.pop(runstate.current_turn_id, None)
         runstate.deferred_tool_results = {}
         runstate.current_tool_execution = None
         if new_messages:

@@ -138,6 +138,7 @@ class RunState(BaseModel):
     output: Any = None
     error: dict[str, Any] | None = None
     turn_results: dict[str, Any] = Field(default_factory=dict)
+    turn_output_types: dict[str, Any] = Field(default_factory=dict)
     turn_errors: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
