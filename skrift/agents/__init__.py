@@ -2,6 +2,7 @@
 
 from skrift.agents.agent import Agent
 from skrift.agents.approval import ApprovalContext, require_approval
+from skrift.agents.artifacts import attach_artifact, record_artifact
 from skrift.agents.audit import AuditTrail, audit_export, replay
 from skrift.agents.blob import (
     ArchiveBlobStore,
@@ -26,6 +27,7 @@ __all__ = [
     "ApprovalRejection",
     "ArchiveBlobStore",
     "AuditTrail",
+    "attach_artifact",
     "BlobIntegrityError",
     "BlobRef",
     "Chat",
@@ -37,6 +39,7 @@ __all__ = [
     "audit_export",
     "registry",
     "replay",
+    "record_artifact",
     "require_approval",
     "session",
     "set_actor",

@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 from pydantic_ai import DeferredToolRequests
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
+from skrift.agents.audit import audit_export
 from skrift.agents.blob import dereference_blob_refs
 from skrift.agents.context import resolve_actor
 from skrift.agents.models import Actor, RunState, Steer
@@ -395,6 +396,27 @@ class Session:
             if state.status == "cancelled":
                 raise asyncio.CancelledError(f"Agent session {self.id} was cancelled")
             await asyncio.sleep(poll_interval)
+
+    async def artifacts(
+        self,
+        *,
+        kind: str | None = None,
+        model: Any | None = None,
+        include_lineage: bool = True,
+    ) -> list[Any]:
+        await drain_outbox(self.id)
+        trail = await audit_export(self.id, include_lineage=include_lineage)
+        adapter = TypeAdapter(model) if model is not None else None
+        values: list[Any] = []
+        for event in trail.events:
+            if event.get("type") != "ToolArtifact":
+                continue
+            payload = event.get("payload", {})
+            if kind is not None and payload.get("kind") != kind:
+                continue
+            value = payload.get("value")
+            values.append(adapter.validate_python(value) if adapter is not None else value)
+        return values
 
 
 def _jsonable_payload(payload: Any | None) -> Any | None:

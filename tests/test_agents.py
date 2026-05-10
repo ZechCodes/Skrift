@@ -31,6 +31,11 @@ class ChatAction(BaseModel):
     message: str
 
 
+class MemoryArtifact(BaseModel):
+    id: str
+    title: str
+
+
 @pytest.fixture(autouse=True)
 def clean_registries():
     worker_registry.clear()
@@ -489,6 +494,48 @@ async def test_tool_calls_emit_audit_events():
     assert completed["payload"]["result"] == 0
 
 
+async def test_tool_can_record_artifact_and_session_lists_it():
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    @agent.tool
+    async def create_memory(ctx: RunContext[None]) -> str:
+        await skrift.record_artifact(
+            ctx,
+            {"id": "mem_1", "title": "Remember this"},
+            kind="memory",
+        )
+        return "created"
+
+    session = await agent.run("use the tool", actor="ada")
+
+    assert await session.result() == '{"create_memory":"created"}'
+    assert await session.artifacts(kind="memory") == [
+        {"id": "mem_1", "title": "Remember this"}
+    ]
+    assert await session.artifacts(kind="memory", model=MemoryArtifact) == [
+        MemoryArtifact(id="mem_1", title="Remember this")
+    ]
+    trail = await skrift.audit_export(session.id)
+    artifact = next(event for event in trail.events if event["type"] == "ToolArtifact")
+    assert artifact["payload"]["kind"] == "memory"
+    assert artifact["payload"]["tool_name"] == "create_memory"
+    assert artifact["payload"]["tool_call_id"]
+
+
+async def test_attach_artifact_alias_records_artifact():
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    @agent.tool
+    async def create_note(ctx: RunContext[None]) -> str:
+        await skrift.attach_artifact(ctx, {"id": "note_1"}, kind="note")
+        return "created"
+
+    session = await agent.run("use the tool")
+
+    assert await session.artifacts(kind="note") == [{"id": "note_1"}]
+    assert await session.artifacts(kind="memory") == []
+
+
 async def test_hitl_approval_pauses_and_resumes_tool_call():
     runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
     agent = skrift.Agent(TestModel(), name="demo")
@@ -851,6 +898,27 @@ async def test_subagent_lineage_events_are_emitted_on_parent_stream():
         event["session_stream_id"] == child_session_id and event["type"] == "AgentCompleted"
         for event in audit.events
     )
+
+
+async def test_session_artifacts_include_lineage_by_default():
+    parent = skrift.Agent(TestModel(), name="parent")
+    child = skrift.Agent(TestModel(), name="child")
+
+    @child.tool
+    async def create_memory(ctx: RunContext[None]) -> str:
+        await skrift.record_artifact(ctx, {"id": "child_mem"}, kind="memory")
+        return "created"
+
+    @parent.tool_plain
+    async def run_child() -> str:
+        child_session = await child.run("use the tool", actor="ada")
+        return await child_session.result()
+
+    parent_session = await parent.run("use the tool", actor="ada")
+
+    await parent_session.result()
+    assert await parent_session.artifacts(kind="memory") == [{"id": "child_mem"}]
+    assert await parent_session.artifacts(kind="memory", include_lineage=False) == []
 
 
 def test_detached_context_tools_fail_at_registration():
