@@ -49,6 +49,16 @@ def clean_registries():
     skrift.set_blob_store(InMemoryBlobStore())
 
 
+async def test_agent_run_requires_configured_worker_runtime():
+    import skrift.workers.runtime as worker_runtime
+
+    worker_runtime._runtime = None
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+
+    with pytest.raises(RuntimeError, match="Worker runtime not configured"):
+        await agent.run("hi")
+
+
 async def test_agent_run_persists_events_and_returns_session_result():
     agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
 

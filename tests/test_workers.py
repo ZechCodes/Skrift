@@ -47,13 +47,32 @@ from skrift.workers.registry import registry
 
 @pytest.fixture(autouse=True)
 def clean_worker_registry():
+    import skrift.workers.runtime as worker_runtime
+
+    previous_runtime = worker_runtime._runtime
+    worker_runtime._runtime = None
     registry.clear()
     yield
     registry.clear()
+    worker_runtime._runtime = previous_runtime
 
 
 class Greeting(Job):
     name: str
+
+
+def test_get_runtime_requires_explicit_configuration():
+    with pytest.raises(RuntimeError, match="Worker runtime not configured"):
+        skrift.get_runtime()
+
+
+async def test_top_level_submit_requires_explicit_configuration():
+    @skrift.handler("greet")
+    async def greet(job: Greeting):
+        return job.name.upper()
+
+    with pytest.raises(RuntimeError, match="Worker runtime not configured"):
+        await skrift.submit("greet", {"name": "Ada"})
 
 
 @pytest.fixture

@@ -1383,9 +1383,11 @@ def _coerce_backend_config(
 
 
 def get_runtime() -> WorkerRuntime:
-    global _runtime
     if _runtime is None:
-        _runtime = WorkerRuntime()
+        raise RuntimeError(
+            "Worker runtime not configured. Call configure_workers() or use "
+            "local_executor() before submitting worker jobs or starting agent runs."
+        )
     return _runtime
 
 
