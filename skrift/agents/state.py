@@ -146,7 +146,15 @@ async def drain_outbox(session_id: str) -> None:
                     job_id=entry.job_id,
                 )
         elif entry.kind == "wake":
+            async def remove_wake(processed: RunState) -> RunState:
+                processed.outbox = [
+                    item for item in processed.outbox if item.entry_id != entry.entry_id
+                ]
+                return processed
+
+            await update_runstate(session_id, remove_wake)
             await runtime.wake(entry.job_id, resume_at=entry.resume_at)
+            continue
         else:
             raise ValueError(f"Unknown outbox entry kind {entry!r}")
 

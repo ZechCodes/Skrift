@@ -342,9 +342,12 @@ class Agent(PydanticAgent):
         root_session_id: str | None = None,
         **kwargs: Any,
     ) -> Session:
-        dispatch = dispatch or get_agents_config().default_subagent_dispatch
-        if dispatch not in {"queued", "same_worker"}:
-            raise ValueError("dispatch must be 'queued' or 'same_worker'")
+        config = get_agents_config()
+        dispatch = dispatch or config.default_subagent_dispatch
+        if dispatch not in {"queued", "inline", "inline_then_queued", "same_worker"}:
+            raise ValueError(
+                "dispatch must be 'queued', 'inline', 'inline_then_queued', or 'same_worker'"
+            )
         from skrift.agents.runtime import register_agent_handlers
 
         register_agent_handlers()
@@ -389,7 +392,9 @@ class Agent(PydanticAgent):
                 "turn_config": run_kwargs,
             },
         )
-        append_submit(state, job_id)
+        inline_dispatch = dispatch in {"inline", "inline_then_queued", "same_worker"}
+        if not inline_dispatch:
+            append_submit(state, job_id)
         await create_or_update_runstate(state)
         await drain_outbox(sid)
         if inherited_parent_session_id:
@@ -408,6 +413,24 @@ class Agent(PydanticAgent):
 
             await update_runstate(inherited_parent_session_id, emit_dispatch)
             await drain_outbox(inherited_parent_session_id)
+        if inline_dispatch:
+            from skrift.agents.models import AgentRunJob
+            from skrift.workers import get_runtime
+
+            await get_runtime().submit_inline(
+                AgentRunJob(session_id=sid, agent_name=self.skrift_name),
+                queue=(
+                    config.default_queue
+                    if dispatch == "inline_then_queued"
+                    else config.priority_queue
+                ),
+                job_id=job_id,
+                metadata={
+                    "skrift_dispatch": "inline_then_queued"
+                    if dispatch == "inline_then_queued"
+                    else "inline"
+                },
+            )
         return Session(sid)
 
     def chat(

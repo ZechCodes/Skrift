@@ -60,7 +60,7 @@ Starts a low-level durable run and returns `Session`.
 | Argument | Description |
 | --- | --- |
 | `user_prompt` | Initial prompt for the run. |
-| `dispatch` | `"queued"` or `"same_worker"`. |
+| `dispatch` | `"queued"`, `"inline"`, `"inline_then_queued"`, or `"same_worker"`. `"inline"` and `"same_worker"` start immediately in the caller process and resume inline on approval; `"inline_then_queued"` starts immediately but resumes through the normal queue; `"queued"` uses the normal agent queue from the start. |
 | `session_id` | Optional explicit durable session id. Raises `AgentSessionError` if it already exists. |
 | `actor` | Actor written to audit events. |
 | `deps_ref` | Serializable dependency reference. |

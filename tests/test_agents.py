@@ -100,6 +100,109 @@ async def test_runner_applies_pending_steers_and_records_cursor():
     assert "SteerApplied" in [event["type"] for _, event in events]
 
 
+async def test_agent_run_inline_dispatch_executes_without_worker_pool():
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        queues=("agents-priority", "agents"),
+    )
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+
+    session = await agent.run("hi", actor="ada", dispatch="inline")
+
+    assert await session.result() == "hello"
+    state = await session.state()
+    assert state.status == "completed"
+    lifecycle = await runtime.event_log.read("workers:lifecycle")
+    assert [event["type"] for _, event in lifecycle] == [
+        "job_submitted",
+        "job_claimed",
+        "job_started",
+        "job_completed",
+    ]
+
+
+async def test_agent_run_same_worker_dispatch_executes_inline():
+    skrift.configure_workers(mode="in_process", queues=("agents-priority", "agents"))
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+
+    session = await agent.run("hi", dispatch="same_worker")
+
+    assert await session.result() == "hello"
+
+
+async def test_agent_run_queued_dispatch_waits_for_worker_pool():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+
+    session = await agent.run("hi", actor="ada", dispatch="queued")
+
+    assert await session.status() == "queued"
+    queue_stats = await runtime.queue.stats("agents")
+    assert queue_stats.ready == 1
+
+
+async def test_agent_run_inline_dispatch_pauses_and_resumes_on_approval():
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        queues=("agents-priority", "agents"),
+    )
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    @agent.tool_plain(approval=True, policy_description="approval required")
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    session = await agent.run("use the tool", actor="ada", dispatch="inline")
+
+    assert await session.status() == "awaiting_approval"
+    state = await session.state()
+    assert state.current_run_job_id is not None
+    job_state = await runtime.get_job_state(state.current_run_job_id)
+    assert job_state is not None
+    assert job_state.job.queue == "agents-priority"
+    assert job_state.job.metadata["skrift_dispatch"] == "inline"
+    tool_call_id = state.pending_approvals[0]["tool_call_id"]
+
+    await session.approve(tool_call_id, actor="ada", note="ok")
+
+    assert await session.result() == '{"add":0}'
+
+
+async def test_agent_run_inline_then_queued_dispatch_queues_after_approval():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    @agent.tool_plain(approval=True, policy_description="approval required")
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    session = await agent.run(
+        "use the tool",
+        actor="ada",
+        dispatch="inline_then_queued",
+    )
+
+    assert await session.status() == "awaiting_approval"
+    state = await session.state()
+    assert state.current_run_job_id is not None
+    job_state = await runtime.get_job_state(state.current_run_job_id)
+    assert job_state is not None
+    assert job_state.job.queue == "agents"
+    assert job_state.job.metadata["skrift_dispatch"] == "inline_then_queued"
+    tool_call_id = state.pending_approvals[0]["tool_call_id"]
+
+    await session.approve(tool_call_id, actor="ada", note="ok")
+
+    assert await session.status() == "queued"
+    queue_stats = await runtime.queue.stats("agents")
+    assert queue_stats.ready == 1
+    await runtime.start()
+    try:
+        assert await session.result() == '{"add":0}'
+    finally:
+        await runtime.stop()
+
+
 async def test_cancel_queued_session_finalizes_without_running():
     skrift.configure_workers(mode="in_process", queues=("agents",))
     agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")

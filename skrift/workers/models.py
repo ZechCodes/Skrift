@@ -96,6 +96,7 @@ class JobEnvelope(BaseModel):
     replayed_from: str | None = None
     reclaim_count: int = 0
     max_reclaims: int = 3
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     def idempotency_payload(self) -> dict[str, Any]:
         """Return stable fields used to compare caller-supplied job id submissions."""

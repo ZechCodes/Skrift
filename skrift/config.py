@@ -598,9 +598,15 @@ class AgentsConfig(BaseModel):
     """Durable agent runtime configuration."""
 
     default_queue: str = "agents"
+    priority_queue: str = "agents-priority"
     tool_call_queue: str = "agents"
     state_snapshot_interval: float = Field(default=60.0, gt=0)
-    default_subagent_dispatch: Literal["queued", "same_worker"] = "queued"
+    default_subagent_dispatch: Literal[
+        "queued",
+        "inline",
+        "inline_then_queued",
+        "same_worker",
+    ] = "queued"
     steer_prefix: str = "[steer] "
     audit: AgentsAuditConfig = AgentsAuditConfig()
     blob_backend: str = "skrift.agents.blob:InMemoryBlobStore"

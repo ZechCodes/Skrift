@@ -309,6 +309,71 @@ class WorkerRuntime:
             raise NotImplementedError(f"Unsupported worker execution mode {self.config.mode!r}")
         return handle
 
+    async def submit_inline(
+        self,
+        job_or_type: BaseModel | str,
+        payload: BaseModel | dict[str, Any] | None = None,
+        *,
+        queue: str | None = None,
+        retry_policy: RetryPolicy | None = None,
+        scheduled_for: datetime | None = None,
+        correlation_id: str | None = None,
+        parent_job_id: str | None = None,
+        visibility_timeout: float | None = None,
+        job_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> JobHandle:
+        try:
+            job_type, descriptor, payload_model = self._resolve_submission(job_or_type, payload)
+        except ValidationError as exc:
+            job_type, descriptor, raw_payload = self._poison_submission(job_or_type, payload)
+            job = self._build_job(
+                job_type,
+                descriptor,
+                raw_payload,
+                queue=queue,
+                retry_policy=retry_policy,
+                scheduled_for=scheduled_for,
+                correlation_id=correlation_id,
+                parent_job_id=parent_job_id,
+                visibility_timeout=visibility_timeout,
+                job_id=job_id,
+                metadata=metadata,
+            )
+            attempt = self._attempt_from_exception(job, exc, started_at=utcnow())
+            await self._dead_letter(
+                job,
+                cause=DeadLetterCause.POISON,
+                attempts=[attempt],
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return JobHandle(self, job.id)
+
+        payload_data = payload_model.model_dump(mode="json")
+        job = self._build_job(
+            job_type,
+            descriptor,
+            payload_data,
+            queue=queue,
+            retry_policy=retry_policy,
+            scheduled_for=scheduled_for,
+            correlation_id=correlation_id,
+            parent_job_id=parent_job_id,
+            visibility_timeout=visibility_timeout,
+            job_id=job_id,
+            metadata=metadata,
+        )
+        existing_state = await self.get_job_state(job.id)
+        if existing_state is not None:
+            if self._same_idempotent_job(existing_state.job, job):
+                return JobHandle(self, job.id)
+            raise JobIdConflict(f"job id {job.id!r} already exists")
+        await self._set_state(JobState(job=job, status=JobStatus.SUBMITTED))
+        await self.emit_lifecycle(LifecycleEventType.JOB_SUBMITTED, job)
+        handle = JobHandle(self, job.id)
+        await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
+        return handle
+
     def _build_job(
         self,
         job_type: str,
@@ -323,6 +388,7 @@ class WorkerRuntime:
         visibility_timeout: float | None,
         replayed_from: str | None = None,
         job_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> JobEnvelope:
         policy = retry_policy or descriptor.retry_policy
         return JobEnvelope(
@@ -337,6 +403,7 @@ class WorkerRuntime:
             correlation_id=correlation_id,
             parent_job_id=parent_job_id,
             replayed_from=replayed_from,
+            metadata=metadata or {},
         )
 
     async def get_job_state(self, job_id: str) -> JobState | None:
@@ -376,6 +443,31 @@ class WorkerRuntime:
         state = await self.get_job_state(job_id)
         if state is None:
             return False
+        if (
+            state.status == JobStatus.PAUSED
+            and state.job.metadata.get("skrift_dispatch") == "inline"
+        ):
+            state.job.scheduled_for = resume_at
+            if resume_at is not None and resume_at > utcnow():
+                await self._set_state(state)
+                await asyncio.sleep((resume_at - utcnow()).total_seconds())
+            await self.execute_claim(ClaimedJob(job=state.job, token="inline"), inline=True)
+            return True
+        if (
+            state.status == JobStatus.PAUSED
+            and state.job.metadata.get("skrift_dispatch") == "inline_then_queued"
+        ):
+            state.job.scheduled_for = resume_at
+            await self._set_state(
+                JobState(
+                    job=state.job,
+                    status=JobStatus.SUBMITTED,
+                    attempt=state.attempt,
+                    paused_state=state.paused_state,
+                )
+            )
+            await self.queue.submit(state.job, job_id=job_id)
+            return True
         return await self.queue.wake(state.job.queue, job_id, resume_at=resume_at)
 
     async def inspect(
