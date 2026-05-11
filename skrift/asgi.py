@@ -42,7 +42,7 @@ from skrift.app_factory import (
     get_template_directories,
     update_template_directories,
 )
-from skrift.config import get_config_path, get_settings, is_config_valid
+from skrift.config import DatabaseConfig, get_config_path, get_settings, is_config_valid
 from skrift.lib.sliding_window import InMemorySlidingWindowCounter, SlidingWindowCounter
 from skrift.lib.trusted_proxy import TrustedProxyManager
 from skrift.middleware.client_ip import ClientIPMiddleware
@@ -688,6 +688,27 @@ def _validate_passkey_config_if_enabled(settings) -> None:
         ) from exc
 
 
+def _build_database_engine_config(db: DatabaseConfig) -> EngineConfig:
+    if "sqlite" in db.url:
+        return EngineConfig(echo=db.echo)
+
+    engine_kwargs: dict[str, Any] = dict(
+        pool_size=db.pool_size,
+        max_overflow=db.pool_overflow,
+        pool_timeout=db.pool_timeout,
+        pool_pre_ping=db.pool_pre_ping,
+        echo=db.echo,
+    )
+    if db.pool_recycle is not None:
+        engine_kwargs["pool_recycle"] = db.pool_recycle
+    if db.db_schema:
+        engine_kwargs["execution_options"] = {
+            "schema_translate_map": {None: db.db_schema},
+        }
+
+    return EngineConfig(**engine_kwargs)
+
+
 def create_app() -> ASGIApp:
     """Create and configure the main Litestar application.
 
@@ -731,22 +752,7 @@ def create_app() -> ASGIApp:
     user_middleware = load_middleware()
 
     # Database configuration
-    if "sqlite" in settings.db.url:
-        engine_config = EngineConfig(echo=settings.db.echo)
-    else:
-        engine_kwargs: dict[str, Any] = dict(
-            pool_size=settings.db.pool_size,
-            max_overflow=settings.db.pool_overflow,
-            pool_timeout=settings.db.pool_timeout,
-            pool_pre_ping=settings.db.pool_pre_ping,
-            echo=settings.db.echo,
-        )
-        if settings.db.db_schema:
-            engine_kwargs["execution_options"] = {
-                "schema_translate_map": {None: settings.db.db_schema},
-            }
-
-        engine_config = EngineConfig(**engine_kwargs)
+    engine_config = _build_database_engine_config(settings.db)
 
     db_config = SQLAlchemyAsyncConfig(
         connection_string=settings.db.url,

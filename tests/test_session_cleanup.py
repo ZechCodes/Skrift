@@ -27,6 +27,17 @@ class TestDatabaseConfig:
         config = DatabaseConfig(pool_pre_ping=True)
         assert config.pool_pre_ping is True
 
+    def test_pool_recycle_defaults_to_none(self):
+        """pool_recycle should default to SQLAlchemy's engine default."""
+        config = DatabaseConfig()
+        assert config.pool_recycle is None
+
+    def test_pool_recycle_can_be_configured(self):
+        """pool_recycle can be used as an alternative stale connection strategy."""
+        config = DatabaseConfig(pool_pre_ping=False, pool_recycle=1800)
+        assert config.pool_pre_ping is False
+        assert config.pool_recycle == 1800
+
 
 class TestSessionCleanupMiddleware:
     """Tests for SessionCleanupMiddleware."""
@@ -110,3 +121,29 @@ class TestPoolPrePingConfiguration:
         )
 
         assert config.pool_pre_ping is False
+
+    def test_engine_config_includes_pool_recycle_for_postgresql(self):
+        """Skrift should pass configured pool_recycle to non-SQLite engines."""
+        from skrift.asgi import _build_database_engine_config
+
+        config = _build_database_engine_config(
+            DatabaseConfig(
+                url="postgresql+asyncpg://user:pass@example.com/app",
+                pool_pre_ping=False,
+                pool_recycle=1800,
+            )
+        )
+
+        assert config.pool_pre_ping is False
+        assert config.pool_recycle == 1800
+
+    def test_engine_config_omits_pool_recycle_for_sqlite(self):
+        """SQLite keeps the minimal engine config."""
+        from advanced_alchemy.utils.dataclass import Empty
+        from skrift.asgi import _build_database_engine_config
+
+        config = _build_database_engine_config(
+            DatabaseConfig(url="sqlite+aiosqlite:///./app.db", pool_recycle=1800)
+        )
+
+        assert config.pool_recycle is Empty

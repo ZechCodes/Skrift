@@ -188,6 +188,7 @@ class DatabaseConfig(BaseModel):
     pool_overflow: int = 10
     pool_timeout: int = 30
     pool_pre_ping: bool = True  # Validate connections before use
+    pool_recycle: int | None = None  # Seconds before recycling pooled connections
     echo: bool = False
     db_schema: str | None = Field(default=None, validation_alias="schema")
 

@@ -97,6 +97,7 @@ db:
   echo: true                          # Log SQL (dev only)
   pool_size: 5                        # Connection pool
   pool_overflow: 10                   # Extra connections allowed
+  pool_recycle: 1800                  # Recycle pooled connections after 30 minutes
   schema: myschema                    # PostgreSQL schema (optional)
 ```
 
@@ -108,7 +109,12 @@ db:
 | `pool_overflow` | Extra connections beyond pool_size | `10` |
 | `pool_timeout` | Seconds to wait for a connection | `30` |
 | `pool_pre_ping` | Validate connections before use | `true` |
+| `pool_recycle` | Seconds before recycling pooled connections (`null` disables explicit recycle) | `null` |
 | `schema` | PostgreSQL schema for all tables | `null` (default schema) |
+
+For asyncio PostgreSQL deployments where request cancellation is common, consider
+`pool_pre_ping: false` with `pool_recycle: 1800` so stale connection handling is
+based on connection age instead of a pre-ping during checkout.
 
 #### Database Schemas
 
