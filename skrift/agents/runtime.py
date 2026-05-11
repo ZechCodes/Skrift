@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import traceback
 import inspect
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -41,6 +42,12 @@ class _RunnerStopped:
 
 
 RUNNER_STOPPED = _RunnerStopped()
+
+
+@dataclass(frozen=True)
+class AgentIterResult:
+    result: Any
+    streamed_message_count: int
 
 
 @handler("agents.run", queue="agents")
@@ -121,7 +128,7 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
         message_history = [*initial_message_history, *message_history]
     run_kwargs.pop("deferred_tool_results", None)
     try:
-        result = await _drive_agent_iter(
+        iter_result = await _drive_agent_iter(
             agent,
             payload.session_id,
             prompt,
@@ -130,10 +137,12 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
             deferred_tool_results=deferred_tool_results,
             run_kwargs=run_kwargs,
         )
+        if iter_result is RUNNER_STOPPED:
+            return None
+        result = iter_result.result
+        streamed_message_count = iter_result.streamed_message_count
         if isinstance(result, Pause):
             return result
-        if result is RUNNER_STOPPED:
-            return None
     except Exception as exc:
         async def fail(runstate):
             if runstate.terminal_at is not None:
@@ -170,13 +179,20 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
 
     output = getattr(result, "output", result)
     new_messages = []
+    unstreamed_messages = []
     try:
+        result_messages = result.new_messages()
         new_messages = ModelMessagesTypeAdapter.dump_python(
-            result.new_messages(),
+            result_messages,
+            mode="json",
+        )
+        unstreamed_messages = ModelMessagesTypeAdapter.dump_python(
+            result_messages[streamed_message_count:],
             mode="json",
         )
     except Exception:
         new_messages = []
+        unstreamed_messages = []
 
     if isinstance(output, DeferredToolRequests):
         if output.calls:
@@ -188,7 +204,7 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
                     runstate.messages.extend(
                         {"role": "model", "content": item} for item in new_messages
                     )
-                for event_type, event_payload in _tool_events_from_messages(new_messages):
+                for event_type, event_payload in _tool_events_from_messages(unstreamed_messages):
                     append_event(runstate, event_type, event_payload)
                 runstate.current_tool_execution = ToolExecutionState(
                     tool_call_id=call.tool_call_id,
@@ -236,7 +252,7 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
                 runstate.messages.extend(
                     {"role": "model", "content": item} for item in new_messages
                 )
-            for event_type, event_payload in _tool_events_from_messages(new_messages):
+            for event_type, event_payload in _tool_events_from_messages(unstreamed_messages):
                 append_event(runstate, event_type, event_payload)
             for call in output.approvals:
                 metadata = output.metadata.get(call.tool_call_id, {})
@@ -284,7 +300,7 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
         runstate.current_tool_execution = None
         if new_messages:
             runstate.messages.extend({"role": "model", "content": item} for item in new_messages)
-        for event_type, payload in _tool_events_from_messages(new_messages):
+        for event_type, payload in _tool_events_from_messages(unstreamed_messages):
             append_event(runstate, event_type, payload)
         append_event(
             runstate,
@@ -504,23 +520,36 @@ async def _drive_agent_iter(
             **run_kwargs,
         ) as run:
             node_index = 0
+            streamed_message_count = 0
             async for node in run:
                 pause = await _runner_check_pass(session_id, node)
                 if pause is not None:
-                    return pause
+                    return AgentIterResult(
+                        result=pause,
+                        streamed_message_count=streamed_message_count,
+                    )
                 node_kind = type(node).__name__
+                message_delta, streamed_message_count = _new_message_delta(
+                    run,
+                    streamed_message_count,
+                )
 
                 async def record_cursor(runstate):
                     runstate.cursor = {
                         "node_index": node_index,
                         "node_kind": node_kind,
                     }
+                    for event_type, event_payload in _tool_events_from_messages(message_delta):
+                        append_event(runstate, event_type, event_payload)
                     return runstate
 
                 await update_runstate(session_id, record_cursor)
                 await drain_outbox(session_id)
                 node_index += 1
-            return run.result
+            return AgentIterResult(
+                result=run.result,
+                streamed_message_count=streamed_message_count,
+            )
     finally:
         reset_current_session_id(token)
 
@@ -586,6 +615,20 @@ def _durable_output_type(output_type: Any) -> Any:
     if not any(item is DeferredToolRequests for item in output_types):
         output_types.append(DeferredToolRequests)
     return output_types
+
+
+def _new_message_delta(run: Any, emitted_count: int) -> tuple[list[dict[str, Any]], int]:
+    try:
+        messages = run.new_messages()
+        if len(messages) <= emitted_count:
+            return [], emitted_count
+        delta = ModelMessagesTypeAdapter.dump_python(
+            messages[emitted_count:],
+            mode="json",
+        )
+        return delta, len(messages)
+    except Exception:
+        return [], emitted_count
 
 
 async def _apply_pending_steers(session_id: str) -> None:

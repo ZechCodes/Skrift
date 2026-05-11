@@ -607,6 +607,47 @@ async def test_tool_calls_emit_audit_events():
     assert completed["payload"]["result"] == 0
 
 
+async def test_tool_call_started_streams_before_tool_returns():
+    skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent = skrift.Agent(TestModel(), name="demo")
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+
+    @agent.tool_plain
+    async def add(x: int, y: int) -> int:
+        tool_started.set()
+        await release_tool.wait()
+        return x + y
+
+    session = await agent.run("use the tool", actor="ada")
+    runtime = skrift.get_runtime()
+    await runtime.start()
+    try:
+        await asyncio.wait_for(tool_started.wait(), timeout=1)
+        events: list[str] = []
+
+        async def wait_for_started() -> None:
+            async for _, event in session:
+                events.append(event["type"])
+                if event["type"] == "ToolCallStarted":
+                    return
+
+        await asyncio.wait_for(wait_for_started(), timeout=1)
+        assert "ToolCallCompleted" not in events
+
+        release_tool.set()
+        assert await session.result() == '{"add":0}'
+    finally:
+        await runtime.stop()
+
+    audit = await skrift.audit_export(session.id)
+    event_types = [event["type"] for event in audit.events]
+    assert event_types.count("ToolCallStarted") == 1
+    assert event_types.count("ToolCallExecuting") == 1
+    assert event_types.count("ToolCallCompleted") == 1
+    assert event_types.index("ToolCallStarted") < event_types.index("ToolCallCompleted")
+
+
 async def test_tool_can_record_artifact_and_session_lists_it():
     agent = skrift.Agent(TestModel(), name="demo")
 
