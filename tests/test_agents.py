@@ -15,7 +15,7 @@ from skrift.agents.session import AgentSessionError
 from skrift.agents.blob import ArchiveBlobStore, BLOB_STREAM_PREFIX, InMemoryBlobStore, get_blob_store
 from skrift.agents.config import configure_agent_runtime
 from skrift.agents.registry import registry as agent_registry
-from skrift.agents.runtime import register_agent_handlers
+from skrift.agents.runtime import _tool_events_from_messages, register_agent_handlers
 from skrift.agents.state import (
     drain_pending_outboxes,
     load_runstate,
@@ -605,6 +605,50 @@ async def test_tool_calls_emit_audit_events():
     assert "ToolCallCompleted" in event_types
     completed = next(event for _, event in events if event["type"] == "ToolCallCompleted")
     assert completed["payload"]["result"] == 0
+
+
+def test_tool_call_started_args_are_always_dicts():
+    events = _tool_events_from_messages(
+        [
+            {
+                "parts": [
+                    {
+                        "part_kind": "tool-call",
+                        "tool_call_id": "parsed",
+                        "tool_name": "send_message",
+                        "args": {"message": "hello"},
+                    },
+                    {
+                        "part_kind": "tool-call",
+                        "tool_call_id": "json",
+                        "tool_name": "get_weather",
+                        "args": '{"location":"NYC"}',
+                    },
+                    {
+                        "part_kind": "tool-call",
+                        "tool_call_id": "array",
+                        "tool_name": "bad_shape",
+                        "args": '["not", "an", "object"]',
+                    },
+                    {
+                        "part_kind": "tool-call",
+                        "tool_call_id": "invalid",
+                        "tool_name": "bad_json",
+                        "args": '{"message":',
+                    },
+                ]
+            }
+        ]
+    )
+
+    started = [payload for event_type, payload in events if event_type == "ToolCallStarted"]
+    assert [payload["args"] for payload in started] == [
+        {"message": "hello"},
+        {"location": "NYC"},
+        {"INVALID_JSON": '["not", "an", "object"]'},
+        {"INVALID_JSON": '{"message":'},
+    ]
+    assert all(isinstance(payload["args"], dict) for payload in started)
 
 
 async def test_tool_call_started_streams_before_tool_returns():

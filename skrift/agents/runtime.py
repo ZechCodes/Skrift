@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import traceback
 import inspect
+import json
+import traceback
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -702,7 +703,7 @@ def _tool_events_from_messages(messages: list[dict[str, Any]]) -> list[tuple[str
                         {
                             "tool_call_id": part.get("tool_call_id") or "",
                             "tool_name": part.get("tool_name") or "",
-                            "args": part.get("args") or {},
+                            "args": _coerce_tool_args(part.get("args")),
                         },
                     )
                 )
@@ -738,6 +739,22 @@ def _tool_events_from_messages(messages: list[dict[str, Any]]) -> list[tuple[str
                         )
                     )
     return events
+
+
+def _coerce_tool_args(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {"INVALID_JSON": raw}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"INVALID_JSON": raw}
+    return {}
 
 
 def register_agent_handlers() -> None:
