@@ -20,6 +20,7 @@ class EventFlusher:
         archive: Archive,
         state_store: StateStore,
         streams: Iterable[str],
+        stream_prefixes: Iterable[str] = (),
         batch_size: int = 100,
         interval: float = 1.0,
         cursor_prefix: str = "workers:persister:event_cursors",
@@ -28,6 +29,7 @@ class EventFlusher:
         self.archive = archive
         self.state_store = state_store
         self.streams = tuple(streams)
+        self.stream_prefixes = tuple(stream_prefixes)
         self.batch_size = batch_size
         self.interval = interval
         self.cursor_prefix = cursor_prefix.rstrip(":")
@@ -36,7 +38,7 @@ class EventFlusher:
     async def flush_once(self, stream: str | None = None) -> int:
         """Flush one batch for one stream, or one batch for every configured stream."""
         if stream is None:
-            counts = [await self.flush_once(item) for item in self.streams]
+            counts = [await self.flush_once(item) for item in await self._expand_streams()]
             return sum(counts)
 
         cursor_key = self._cursor_key(stream)
@@ -77,6 +79,9 @@ class EventFlusher:
         while True:
             await self.flush_once()
             await asyncio.sleep(self.interval)
+
+    async def _expand_streams(self) -> list[str]:
+        return await _expand_event_streams(self.event_log, self.streams, self.stream_prefixes)
 
     def _cursor_key(self, stream: str) -> str:
         return f"{self.cursor_prefix}:{stream}"
@@ -152,6 +157,7 @@ class WorkerPruner:
         archive: Archive,
         streams: Iterable[str],
         retention: Any,
+        stream_prefixes: Iterable[str] = (),
         cursor_prefix: str = "workers:persister:event_cursors",
     ) -> None:
         self.state_store = state_store
@@ -160,6 +166,7 @@ class WorkerPruner:
         self.dead_letter_store = dead_letter_store
         self.archive = archive
         self.streams = tuple(streams)
+        self.stream_prefixes = tuple(stream_prefixes)
         self.retention = retention
         self.cursor_prefix = cursor_prefix.rstrip(":")
         self._task: asyncio.Task | None = None
@@ -177,7 +184,7 @@ class WorkerPruner:
 
         prune_events = getattr(self.event_log, "prune_archived_events", None)
         if callable(prune_events):
-            for stream in self.streams:
+            for stream in await self._expand_streams():
                 cursor = await self.state_store.get(self._cursor_key(stream))
                 counts["redis_events"] += await prune_events(
                     stream,
@@ -237,5 +244,35 @@ class WorkerPruner:
             await self.prune_once()
             await asyncio.sleep(self.retention.prune_interval)
 
+    async def _expand_streams(self) -> list[str]:
+        return await _expand_event_streams(self.event_log, self.streams, self.stream_prefixes)
+
     def _cursor_key(self, stream: str) -> str:
         return f"{self.cursor_prefix}:{stream}"
+
+
+async def _expand_event_streams(
+    event_log: EventLog,
+    streams: Iterable[str],
+    stream_prefixes: Iterable[str],
+) -> list[str]:
+    expanded = list(streams)
+    prefixes = tuple(stream_prefixes)
+    if prefixes:
+        list_streams = getattr(event_log, "list_streams", None)
+        if not callable(list_streams):
+            raise TypeError("Event log backend does not support stream prefix discovery")
+        for prefix in prefixes:
+            expanded.extend(await list_streams(prefix=prefix))
+    return _dedupe_streams(expanded)
+
+
+def _dedupe_streams(streams: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for stream in streams:
+        if stream in seen:
+            continue
+        seen.add(stream)
+        unique.append(stream)
+    return unique

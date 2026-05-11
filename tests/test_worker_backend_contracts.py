@@ -111,6 +111,16 @@ async def _assert_event_log_contract(log) -> None:
     assert await asyncio.wait_for(next_event, timeout=1) == (4, {"n": 4})
     await subscription.aclose()
 
+    await log.append("contract:one", {"n": 1})
+    await log.append("contract:two", {"n": 2})
+    await log.append("other", {"n": 3})
+    assert await log.list_streams(prefix="contract") == [
+        "contract",
+        "contract:one",
+        "contract:two",
+    ]
+    assert await log.list_streams(prefix="contract:") == ["contract:one", "contract:two"]
+
     await log.delete("contract")
     assert await log.read("contract") == []
 
@@ -259,7 +269,10 @@ async def test_worker_pruner_runs_backend_retention_hooks(
     await event_log.append("workers:lifecycle", {"n": 1, "job_id": "job-1"})
     await event_log.append("workers:lifecycle", {"n": 2, "job_id": "job-2"})
     await event_log.append("workers:lifecycle", {"n": 3, "job_id": "job-3"})
+    await event_log.append("agents:run:session-1", {"n": 1, "job_id": "agent-1"})
+    await event_log.append("agents:run:session-1", {"n": 2, "job_id": "agent-2"})
     await state_store.set("workers:persister:event_cursors:workers:lifecycle", 3)
+    await state_store.set("workers:persister:event_cursors:agents:run:session-1", 2)
 
     terminal_state = JobState(
         job=JobEnvelope(type="done"),
@@ -309,6 +322,7 @@ async def test_worker_pruner_runs_backend_retention_hooks(
         dead_letter_store=dead_letters,
         archive=archive,
         streams=("workers:lifecycle",),
+        stream_prefixes=("agents:run",),
         retention=SimpleNamespace(
             redis_event_ttl=60,
             redis_event_max_entries=1,
@@ -323,12 +337,13 @@ async def test_worker_pruner_runs_backend_retention_hooks(
 
     counts = await pruner.prune_once()
 
-    assert counts["redis_events"] == 2
+    assert counts["redis_events"] == 3
     assert counts["terminal_job_states"] == 1
     assert counts["dead_queue_markers"] == 1
     assert counts["archive_events"] == 1
     assert counts["archive_snapshots"] == 1
     assert counts["dlq_resolved"] == 1
     assert await event_log.read("workers:lifecycle") == [(2, {"n": 3, "job_id": "job-3"})]
+    assert await event_log.read("agents:run:session-1") == [(1, {"n": 2, "job_id": "agent-2"})]
     assert await state_store.get("workers:jobs:done") is None
     assert (await queue.stats("default")).dead_lettered == 0

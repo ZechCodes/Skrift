@@ -154,6 +154,10 @@ class InMemoryEventLog:
             self._streams.pop(stream, None)
             self._condition.notify_all()
 
+    async def list_streams(self, prefix: str = "") -> list[str]:
+        async with self._condition:
+            return sorted(stream for stream in self._streams if stream.startswith(prefix))
+
 
 @dataclass
 class _QueueEntry:

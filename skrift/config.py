@@ -515,6 +515,7 @@ class WorkerPersistenceConfig(BaseModel):
     """Worker cold-storage persistence service configuration."""
 
     streams: list[str] = ["workers:lifecycle"]
+    stream_prefixes: list[str] = []
     batch_size: int = Field(default=100, ge=1)
     flush_interval: float = Field(default=1.0, gt=0)
     snapshot_keys: list[str] = ["workers:queue_wait_history"]

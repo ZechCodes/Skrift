@@ -372,6 +372,15 @@ class SQLAlchemyEventLog(_SQLAlchemyBackend):
             )
             await session.commit()
 
+    async def list_streams(self, prefix: str = "") -> list[str]:
+        async with self._session_maker() as session:
+            stmt = select(WorkerEventRecord.stream).distinct()
+            if prefix:
+                stmt = stmt.where(WorkerEventRecord.stream.like(f"{prefix}%"))
+            stmt = stmt.order_by(WorkerEventRecord.stream)
+            result = await session.execute(stmt)
+            return [stream for stream in result.scalars().all()]
+
     async def completed_job_history(
         self,
         *,

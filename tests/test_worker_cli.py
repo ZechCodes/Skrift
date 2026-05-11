@@ -335,6 +335,7 @@ def test_worker_config_accepts_out_of_process_and_persistence(tmp_path):
                     "imports": ["example.handlers"],
                     "persistence": {
                         "streams": ["workers:lifecycle", "demo"],
+                        "stream_prefixes": ["agents:run"],
                         "batch_size": 25,
                         "snapshot_keys": ["workers:queue_wait_history"],
                     },
@@ -349,6 +350,7 @@ def test_worker_config_accepts_out_of_process_and_persistence(tmp_path):
     assert settings.workers.execution == "out_of_process"
     assert settings.workers.imports == ["example.handlers"]
     assert settings.workers.persistence.streams == ["workers:lifecycle", "demo"]
+    assert settings.workers.persistence.stream_prefixes == ["agents:run"]
     assert settings.workers.persistence.batch_size == 25
 
 

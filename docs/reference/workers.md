@@ -24,6 +24,7 @@ workers:
   persistence:
     streams:
       - workers:lifecycle
+    stream_prefixes: []
     batch_size: 100
     flush_interval: 1.0
     snapshot_keys:
@@ -116,9 +117,14 @@ Redis backends read `redis.url` and `redis.prefix` from settings unless a custom
 
 The persister copies hot-path worker data into cold storage.
 
+Use `stream_prefixes` for dynamic stream families. For example,
+`stream_prefixes: ["agents:run"]` archives per-session agent audit streams such
+as `agents:run:<session_id>` without needing to know session IDs ahead of time.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `streams` | `["workers:lifecycle"]` | Event streams copied into the archive |
+| `stream_prefixes` | `[]` | Event stream prefixes discovered and copied into the archive |
 | `batch_size` | `100` | Maximum events flushed per stream per pass |
 | `flush_interval` | `1.0` | Seconds between event flush passes |
 | `snapshot_keys` | `["workers:queue_wait_history"]` | Exact state keys snapshotted into the archive |

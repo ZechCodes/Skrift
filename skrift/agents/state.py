@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
@@ -18,8 +19,11 @@ from skrift.agents.models import (
     OutboxWake,
     RunState,
 )
+from skrift.lib.hooks import AGENT_EVENT_APPENDED, hooks
 from skrift.workers import get_runtime
 from skrift.workers.models import utcnow
+
+logger = logging.getLogger(__name__)
 
 UpdateRunState = Callable[[RunState], RunState | Awaitable[RunState]]
 
@@ -133,9 +137,10 @@ async def drain_outbox(session_id: str) -> None:
             return
         entry = state.outbox[0]
         if entry.kind == "event":
+            event = await offload_large_payload_fields(entry.event)
             await runtime.event_log.append(
                 entry.stream,
-                await offload_large_payload_fields(entry.event),
+                event,
             )
         elif entry.kind == "submit":
             if await runtime.get_job_state(entry.job_id) is None:
@@ -164,7 +169,27 @@ async def drain_outbox(session_id: str) -> None:
             ]
             return processed
 
-        await update_runstate(session_id, remove)
+        updated = await update_runstate(session_id, remove)
+        if entry.kind == "event":
+            await _fire_agent_event_appended(event, updated)
+
+
+async def _fire_agent_event_appended(event: dict[str, Any], runstate: RunState) -> None:
+    if not hooks.has_action(AGENT_EVENT_APPENDED):
+        return
+    try:
+        await hooks.do_action(
+            AGENT_EVENT_APPENDED,
+            event.get("type") or "",
+            dict(event.get("payload") or {}),
+            runstate,
+        )
+    except Exception:
+        logger.exception(
+            "Agent event hook failed for session %s event %s",
+            runstate.session_id,
+            event.get("type"),
+        )
 
 
 async def drain_pending_outboxes() -> list[str]:

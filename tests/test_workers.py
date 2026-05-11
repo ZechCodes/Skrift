@@ -303,6 +303,37 @@ async def test_event_flusher_archives_events_and_tracks_cursor():
     assert await flusher.flush_once() == 0
 
 
+async def test_event_flusher_discovers_stream_prefixes():
+    event_log = InMemoryEventLog()
+    archive = InMemoryArchive()
+    state_store = InMemoryStateStore()
+    await event_log.append("workers:lifecycle", {"type": "job_submitted"})
+    await event_log.append("agents:run:one", {"type": "AgentStarted"})
+    await event_log.append("agents:run:two", {"type": "AgentCompleted"})
+    await event_log.append("other", {"type": "ignored"})
+
+    flusher = EventFlusher(
+        event_log=event_log,
+        archive=archive,
+        state_store=state_store,
+        streams=("workers:lifecycle",),
+        stream_prefixes=("agents:run",),
+    )
+
+    assert await flusher.flush_once() == 3
+    assert await archive.query_events("workers:lifecycle") == [
+        (0, {"type": "job_submitted"})
+    ]
+    assert await archive.query_events("agents:run:one") == [
+        (0, {"type": "AgentStarted"})
+    ]
+    assert await archive.query_events("agents:run:two") == [
+        (0, {"type": "AgentCompleted"})
+    ]
+    assert await archive.query_events("other") == []
+    assert await state_store.get("workers:persister:event_cursors:agents:run:one") == 1
+
+
 async def test_state_snapshotter_archives_configured_keys_and_prefixes():
     state_store = InMemoryStateStore()
     archive = InMemoryArchive()

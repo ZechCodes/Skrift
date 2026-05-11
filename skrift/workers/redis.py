@@ -345,6 +345,18 @@ class RedisEventLog(_RedisBackend):
         async for key in self._client.scan_iter(f"{prefix}*"):
             await self._client.delete(key)
 
+    async def list_streams(self, prefix: str = "") -> list[str]:
+        base = f"{self._key('events')}:"
+        suffix = ":stream"
+        pattern = f"{base}{prefix}*{suffix}"
+        streams: set[str] = set()
+        async for key in self._client.scan_iter(pattern):
+            if isinstance(key, bytes):
+                key = key.decode()
+            if key.startswith(base) and key.endswith(suffix):
+                streams.add(key[len(base):-len(suffix)])
+        return sorted(streams)
+
     async def prune_archived_events(
         self,
         stream: str,

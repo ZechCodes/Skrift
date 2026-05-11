@@ -314,6 +314,12 @@ def workers_run(
 
 @workers_group.command("persister")
 @click.option("--stream", "streams", multiple=True, help="Event stream to flush.")
+@click.option(
+    "--stream-prefix",
+    "stream_prefixes",
+    multiple=True,
+    help="Event stream prefix to discover and flush.",
+)
 @click.option("--batch-size", type=int, default=None, help="Flush batch size override.")
 @click.option("--flush-interval", type=float, default=None, help="Flush interval override.")
 @click.option("--snapshot-key", "snapshot_keys", multiple=True, help="State key to snapshot.")
@@ -323,6 +329,7 @@ def workers_run(
 @click.option("--allow-memory-backends", is_flag=True, help="Allow process-local backends.")
 def persister(
     streams,
+    stream_prefixes,
     batch_size,
     flush_interval,
     snapshot_keys,
@@ -359,6 +366,9 @@ def persister(
             archive=archive,
             state_store=state_store,
             streams=streams or tuple(persistence.streams),
+            stream_prefixes=(
+                stream_prefixes or tuple(persistence.stream_prefixes)
+            ),
             batch_size=batch_size or persistence.batch_size,
             interval=flush_interval or persistence.flush_interval,
         )
@@ -384,6 +394,9 @@ def persister(
                 dead_letter_store=dead_letter_store,
                 archive=archive,
                 streams=streams or tuple(persistence.streams),
+                stream_prefixes=(
+                    stream_prefixes or tuple(persistence.stream_prefixes)
+                ),
                 retention=settings.workers.retention,
             )
         if once:
@@ -423,9 +436,15 @@ def persister(
 
 @workers_group.command("prune")
 @click.option("--stream", "streams", multiple=True, help="Event stream to prune.")
+@click.option(
+    "--stream-prefix",
+    "stream_prefixes",
+    multiple=True,
+    help="Event stream prefix to discover and prune.",
+)
 @click.option("--allow-memory-backends", is_flag=True, help="Allow process-local backends.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
-def workers_prune(streams, allow_memory_backends, as_json):
+def workers_prune(streams, stream_prefixes, allow_memory_backends, as_json):
     """Run one worker retention/pruning pass."""
     import asyncio
 
@@ -455,6 +474,9 @@ def workers_prune(streams, allow_memory_backends, as_json):
             ),
             archive=_instantiate_backend(backends.archive, kind="archive", **kwargs),
             streams=streams or tuple(settings.workers.persistence.streams),
+            stream_prefixes=(
+                stream_prefixes or tuple(settings.workers.persistence.stream_prefixes)
+            ),
             retention=settings.workers.retention,
         )
         try:

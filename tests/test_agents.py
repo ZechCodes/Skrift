@@ -20,9 +20,11 @@ from skrift.agents.state import (
     drain_pending_outboxes,
     load_runstate,
     runstate_key,
+    stream_name,
     update_runstate,
 )
 from skrift.config import AgentsConfig
+from skrift.lib.hooks import AGENT_EVENT_APPENDED, hooks
 from skrift.workers.registry import registry as worker_registry
 
 
@@ -77,6 +79,44 @@ async def test_agent_run_persists_events_and_returns_session_result():
     state = await session.state()
     assert state.current_run_job_id is None
     assert state.outbox == []
+
+
+async def test_agent_event_appended_hook_fires_after_event_is_durable(clean_hooks):
+    calls: list[tuple[str, dict, str, int]] = []
+
+    async def on_event(event_type, payload, runstate):
+        events = await skrift.get_runtime().event_log.read(stream_name(runstate.session_id))
+        calls.append((event_type, payload, runstate.session_id, len(events)))
+        assert runstate.outbox == []
+
+    hooks.add_action(AGENT_EVENT_APPENDED, on_event)
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+
+    session = await agent.run("hi", actor="ada")
+
+    assert await session.result() == "hello"
+    event_types = [event_type for event_type, _, _, _ in calls]
+    assert event_types == [
+        "UserMessageReceived",
+        "AgentStarted",
+        "AssistantMessageCompleted",
+        "AgentCompleted",
+    ]
+    assert all(session_id == session.id for _, _, session_id, _ in calls)
+    assert [event_count for _, _, _, event_count in calls] == [1, 2, 3, 4]
+
+
+async def test_agent_event_appended_hook_errors_do_not_break_run(clean_hooks, caplog):
+    async def broken_handler(*_args):
+        raise RuntimeError("broadcast failed")
+
+    hooks.add_action(AGENT_EVENT_APPENDED, broken_handler)
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+
+    session = await agent.run("hi", actor="ada")
+
+    assert await session.result() == "hello"
+    assert "Agent event hook failed" in caplog.text
 
 
 async def test_session_steer_records_audit_event():

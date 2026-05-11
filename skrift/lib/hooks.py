@@ -303,6 +303,9 @@ NOTIFICATION_DISMISSED = "notification_dismissed"
 NOTIFICATION_PRE_SEND = "notification_pre_send"
 WEBHOOK_NOTIFICATION_RECEIVED = "webhook_notification_received"
 
+# Agent hooks
+AGENT_EVENT_APPENDED = "agent_event_appended"
+
 # Storage hooks
 BEFORE_ASSET_UPLOAD = "before_asset_upload"
 AFTER_ASSET_UPLOAD = "after_asset_upload"
