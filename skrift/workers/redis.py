@@ -6,6 +6,7 @@ import asyncio
 import importlib
 import inspect
 import json
+import os
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -90,20 +91,23 @@ class _RedisBackend:
         self._client = client
         self._owns_client = False
         self._prefix = prefix
+        redis_url = os.environ.get("SKRIFT_WORKERS_REDIS_URL")
         if settings is not None:
             redis_config = getattr(settings, "redis", None)
             if self._prefix is None and redis_config is not None:
                 self._prefix = redis_config.make_key("skrift", "workers")
-            if self._client is None and redis_config is not None and redis_config.url:
-                try:
-                    import redis.asyncio as aioredis
-                except ImportError as exc:  # pragma: no cover - dependency guidance
-                    raise RuntimeError(
-                        "Redis worker backends require the redis package. "
-                        "Install with: pip install 'skrift[redis]'"
-                    ) from exc
-                self._client = aioredis.Redis.from_url(redis_config.url)
-                self._owns_client = True
+            if redis_url is None and redis_config is not None:
+                redis_url = redis_config.url
+        if self._client is None and redis_url:
+            try:
+                import redis.asyncio as aioredis
+            except ImportError as exc:  # pragma: no cover - dependency guidance
+                raise RuntimeError(
+                    "Redis worker backends require the redis package. "
+                    "Install with: pip install 'skrift[redis]'"
+                ) from exc
+            self._client = aioredis.Redis.from_url(redis_url)
+            self._owns_client = True
         self._prefix = self._prefix or "skrift:workers"
         if self._client is None:
             raise ValueError(
@@ -281,10 +285,18 @@ class RedisEventLog(_RedisBackend):
     async def read(
         self, stream: str, *, from_position: int = 0, limit: int | None = None
     ) -> list[tuple[int, dict[str, Any]]]:
-        rows = await self._client.xrange(self._stream_key(stream), "-", "+")
-        events = [self._decode_event(row) for row in rows]
-        events = [(position, event) for position, event in events if position >= from_position]
-        return events if limit is None else events[:limit]
+        min_id = "-"
+        if from_position > 0:
+            min_id = await self._entry_id_for_position(stream, from_position)
+            if min_id is None:
+                return []
+        kwargs = {} if limit is None else {"count": limit}
+        rows = await self._client.xrange(self._stream_key(stream), min_id, "+", **kwargs)
+        return [
+            (position, event)
+            for position, event in (self._decode_event(row) for row in rows)
+            if position >= from_position
+        ]
 
     async def read_filtered(
         self,
@@ -365,35 +377,62 @@ class RedisEventLog(_RedisBackend):
         max_age_seconds: float | None = None,
         max_entries: int | None = None,
     ) -> int:
-        rows = await self._client.xrange(self._stream_key(stream), "-", "+")
-        if not rows:
+        if archived_position <= 0:
+            return 0
+        max_id = await self._entry_id_for_position(stream, archived_position - 1)
+        if max_id is None:
             return 0
         cutoff_ms = None
         if max_age_seconds is not None:
             cutoff_ms = int((_now() - timedelta(seconds=max_age_seconds)).timestamp() * 1000)
-        length_cutoff = max(0, len(rows) - max_entries) if max_entries is not None else 0
+        stream_length = int(await self._client.xlen(self._stream_key(stream)))
+        length_cutoff = max(0, stream_length - max_entries) if max_entries is not None else 0
 
-        delete_ids: list[Any] = []
-        for index, row in enumerate(rows):
-            entry_id, _ = row
-            position, event = self._decode_event(row)
-            if position >= archived_position:
-                continue
-            old_enough = cutoff_ms is not None and self._entry_timestamp_ms(entry_id) <= cutoff_ms
-            over_length = index < length_cutoff
-            if not old_enough and not over_length:
-                continue
-            delete_ids.append(entry_id)
-            await self._client.hdel(self._id_key(stream), position)
-            job_id = event.get("job_id")
-            if job_id is not None:
-                await self._client.zrem(
-                    self._filter_key(stream, "job_id", str(job_id)),
-                    entry_id,
+        deleted = 0
+        min_id = "-"
+        page_size = 1000
+        scanned_index = 0
+        while True:
+            rows = await self._client.xrange(
+                self._stream_key(stream),
+                min_id,
+                max_id,
+                count=page_size,
+            )
+            if not rows:
+                break
+            delete_ids: list[Any] = []
+            last_entry_id: Any | None = None
+            for row in rows:
+                entry_id, _ = row
+                last_entry_id = entry_id
+                position, event = self._decode_event(row)
+                stream_index = scanned_index
+                scanned_index += 1
+                if position >= archived_position:
+                    continue
+                old_enough = (
+                    cutoff_ms is not None
+                    and self._entry_timestamp_ms(entry_id) <= cutoff_ms
                 )
-        if delete_ids:
-            await self._client.xdel(self._stream_key(stream), *delete_ids)
-        return len(delete_ids)
+                over_length = stream_index < length_cutoff
+                if not old_enough and not over_length:
+                    continue
+                delete_ids.append(entry_id)
+                await self._client.hdel(self._id_key(stream), str(position))
+                job_id = event.get("job_id")
+                if job_id is not None:
+                    await self._client.zrem(
+                        self._filter_key(stream, "job_id", str(job_id)),
+                        entry_id,
+                    )
+            if delete_ids:
+                await self._client.xdel(self._stream_key(stream), *delete_ids)
+                deleted += len(delete_ids)
+            if len(rows) < page_size or last_entry_id == max_id:
+                break
+            min_id = self._next_stream_id(last_entry_id)
+        return deleted
 
     def _stream_key(self, stream: str) -> str:
         return self._key("events", stream, "stream")
@@ -409,6 +448,12 @@ class RedisEventLog(_RedisBackend):
 
     def _filter_key(self, stream: str, field: str, value: str) -> str:
         return self._key("events", stream, "filters", field, value)
+
+    async def _entry_id_for_position(self, stream: str, position: int) -> str | None:
+        entry_id = await self._client.hget(self._id_key(stream), str(position))
+        if isinstance(entry_id, bytes):
+            return entry_id.decode()
+        return entry_id
 
     @staticmethod
     def _decode_event(row: tuple[Any, dict[Any, Any]]) -> tuple[int, dict[str, Any]]:
@@ -428,6 +473,13 @@ class RedisEventLog(_RedisBackend):
         if isinstance(entry_id, bytes):
             entry_id = entry_id.decode()
         return int(str(entry_id).split("-", 1)[0])
+
+    @staticmethod
+    def _next_stream_id(entry_id: Any) -> str:
+        if isinstance(entry_id, bytes):
+            entry_id = entry_id.decode()
+        timestamp, sequence = str(entry_id).split("-", 1)
+        return f"{timestamp}-{int(sequence) + 1}"
 
 
 class RedisQueue(_RedisBackend):

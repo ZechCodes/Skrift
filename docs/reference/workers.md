@@ -111,7 +111,7 @@ Built-in backend import paths:
 | Dead-letter store | `skrift.workers.memory:InMemoryDeadLetterStore` | `skrift.workers.sqlalchemy:SQLAlchemyDeadLetterStore` | none |
 | Archive | `skrift.workers.memory:InMemoryArchive` | `skrift.workers.sqlalchemy:SQLAlchemyArchive` | none |
 
-Redis backends read `redis.url` and `redis.prefix` from settings unless a custom client is injected by tests or application code. SQLAlchemy backends use the configured database session maker.
+Redis backends read `redis.url` and `redis.prefix` from settings unless a custom client is injected by tests or application code. Set `SKRIFT_WORKERS_REDIS_URL` to route worker Redis backends to a dedicated Redis instance while leaving the rest of the app on `redis.url`. SQLAlchemy backends use the configured database session maker.
 
 ## Persistence
 

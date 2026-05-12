@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Iterable
 from typing import Any
 
 from skrift.workers.interfaces import Archive, EventLog, StateStore
+
+logger = logging.getLogger(__name__)
 
 
 class EventFlusher:
@@ -77,7 +80,12 @@ class EventFlusher:
 
     async def _run_loop(self) -> None:
         while True:
-            await self.flush_once()
+            try:
+                await self.flush_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Worker event flusher iteration failed; retrying")
             await asyncio.sleep(self.interval)
 
     async def _expand_streams(self) -> list[str]:
@@ -140,7 +148,12 @@ class StateSnapshotter:
 
     async def _run_loop(self) -> None:
         while True:
-            await self.snapshot_once()
+            try:
+                await self.snapshot_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Worker state snapshotter iteration failed; retrying")
             await asyncio.sleep(self.interval)
 
 
@@ -241,7 +254,12 @@ class WorkerPruner:
 
     async def _run_loop(self) -> None:
         while True:
-            await self.prune_once()
+            try:
+                await self.prune_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Worker pruner iteration failed; retrying")
             await asyncio.sleep(self.retention.prune_interval)
 
     async def _expand_streams(self) -> list[str]:

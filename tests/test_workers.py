@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -262,6 +264,128 @@ async def test_redis_queue_cancel_and_wake(fake_redis_client):
     assert (await queue.stats("default")).ready == 1
 
 
+class _FakeRedisEventClient:
+    def __init__(self) -> None:
+        self.xrange_calls: list[tuple[str, str, str, dict]] = []
+        self.xdel_calls: list[tuple[str, tuple[str, ...]]] = []
+        self.hdel_calls: list[tuple[str, str]] = []
+        self.zrem_calls: list[tuple[str, str]] = []
+        self.rows = [
+            self._row("0-0", 0, {"n": 0, "job_id": "job-0"}),
+            self._row("1-0", 1, {"n": 1, "job_id": "job-1"}),
+            self._row("2-0", 2, {"n": 2, "job_id": "job-2"}),
+            self._row("3-0", 3, {"n": 3, "job_id": "job-3"}),
+        ]
+        self.ids = {"0": "0-0", "1": "1-0", "2": "2-0", "3": "3-0"}
+
+    @staticmethod
+    def _row(entry_id: str, position: int, event: dict) -> tuple[str, dict[str, str]]:
+        return (
+            entry_id,
+            {
+                "position": str(position),
+                "event": json.dumps(event),
+            },
+        )
+
+    async def hget(self, _key, field):
+        return self.ids.get(str(field))
+
+    async def xrange(self, key, min_id, max_id, **kwargs):
+        self.xrange_calls.append((key, min_id, max_id, kwargs))
+        rows = [row for row in self.rows if self._between(row[0], min_id, max_id)]
+        count = kwargs.get("count")
+        return rows if count is None else rows[:count]
+
+    async def xlen(self, _key):
+        return len(self.rows)
+
+    async def hdel(self, key, field):
+        self.hdel_calls.append((key, str(field)))
+
+    async def zrem(self, key, entry_id):
+        self.zrem_calls.append((key, entry_id))
+
+    async def xdel(self, key, *entry_ids):
+        self.xdel_calls.append((key, tuple(entry_ids)))
+
+    @staticmethod
+    def _between(entry_id: str, min_id: str, max_id: str) -> bool:
+        def value(item: str) -> tuple[int, int]:
+            if item == "-":
+                return (-1, -1)
+            if item == "+":
+                return (10**30, 10**30)
+            left, right = item.split("-", 1)
+            return (int(left), int(right))
+
+        return value(min_id) <= value(entry_id) <= value(max_id)
+
+
+async def test_redis_event_log_read_uses_bounded_xrange():
+    client = _FakeRedisEventClient()
+    log = RedisEventLog(client=client, prefix="test:workers")
+
+    events = await log.read("demo", from_position=2, limit=2)
+
+    assert events == [
+        (2, {"n": 2, "job_id": "job-2"}),
+        (3, {"n": 3, "job_id": "job-3"}),
+    ]
+    assert client.xrange_calls == [
+        ("test:workers:events:demo:stream", "2-0", "+", {"count": 2})
+    ]
+
+
+async def test_redis_event_log_prune_archived_events_bounds_xrange():
+    client = _FakeRedisEventClient()
+    log = RedisEventLog(client=client, prefix="test:workers")
+
+    pruned = await log.prune_archived_events(
+        "demo",
+        archived_position=2,
+        max_entries=2,
+    )
+
+    assert pruned == 2
+    assert client.xrange_calls == [
+        ("test:workers:events:demo:stream", "-", "1-0", {"count": 1000})
+    ]
+    assert client.xdel_calls == [
+        ("test:workers:events:demo:stream", ("0-0", "1-0"))
+    ]
+    assert client.hdel_calls == [
+        ("test:workers:events:demo:ids", "0"),
+        ("test:workers:events:demo:ids", "1"),
+    ]
+
+
+def test_redis_backends_prefer_worker_redis_url_env(monkeypatch):
+    import redis.asyncio as aioredis
+
+    calls: list[str] = []
+    fake_client = object()
+
+    def fake_from_url(url):
+        calls.append(url)
+        return fake_client
+
+    class RedisConfig:
+        url = "redis://default"
+
+        @staticmethod
+        def make_key(*parts):
+            return ":".join(parts)
+
+    monkeypatch.setenv("SKRIFT_WORKERS_REDIS_URL", "redis://workers")
+    monkeypatch.setattr(aioredis.Redis, "from_url", fake_from_url)
+
+    store = RedisStateStore(settings=SimpleNamespace(redis=RedisConfig()))
+
+    assert store._client is fake_client
+    assert calls == ["redis://workers"]
+
+
 async def test_archive_stores_events_and_state_history():
     archive = InMemoryArchive()
     await archive.bulk_insert_events([("s", 0, {"a": 1}), ("s", 1, {"a": 2})])
@@ -332,6 +456,38 @@ async def test_event_flusher_discovers_stream_prefixes():
     ]
     assert await archive.query_events("other") == []
     assert await state_store.get("workers:persister:event_cursors:agents:run:one") == 1
+
+
+async def test_event_flusher_loop_logs_and_continues_after_failure(caplog):
+    class FlakyFlusher(EventFlusher):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.calls = 0
+            self.recovered = asyncio.Event()
+
+        async def flush_once(self, stream=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("archive unavailable")
+            self.recovered.set()
+            return 0
+
+    flusher = FlakyFlusher(
+        event_log=InMemoryEventLog(),
+        archive=InMemoryArchive(),
+        state_store=InMemoryStateStore(),
+        streams=("demo",),
+        interval=0.01,
+    )
+
+    await flusher.start()
+    try:
+        await asyncio.wait_for(flusher.recovered.wait(), timeout=1)
+    finally:
+        await flusher.stop()
+
+    assert flusher.calls >= 2
+    assert "Worker event flusher iteration failed; retrying" in caplog.text
 
 
 async def test_state_snapshotter_archives_configured_keys_and_prefixes():
@@ -451,10 +607,14 @@ async def test_sqlalchemy_queue_concurrent_claims_are_atomic(worker_session_make
 async def test_sqlalchemy_archive_stores_events_and_state_history(worker_session_maker):
     archive = SQLAlchemyArchive(session_maker=worker_session_maker)
     await archive.bulk_insert_events([("s", 0, {"a": 1}), ("s", 1, {"a": 2})])
+    await archive.bulk_insert_events([("s", 1, {"a": 2}), ("s", 2, {"a": 3})])
     await archive.upsert_state_snapshot("job:1", {"state": "one"})
     await archive.upsert_state_snapshot("job:1", {"state": "two"})
 
-    assert await archive.query_events("s", from_position=1) == [(1, {"a": 2})]
+    assert await archive.query_events("s", from_position=1) == [
+        (1, {"a": 2}),
+        (2, {"a": 3}),
+    ]
     assert await archive.latest_state_snapshot("job:1") == {"state": "two"}
     assert len(await archive.historical_state_snapshots("job:1")) == 2
 

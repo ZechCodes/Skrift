@@ -801,15 +801,40 @@ class SQLAlchemyArchive(_SQLAlchemyBackend):
     async def bulk_insert_events(
         self, events: list[tuple[str, int, dict[str, Any]]]
     ) -> None:
+        if not events:
+            return
         async with self._session_maker() as session:
-            for stream, position, event in events:
-                session.add(
-                    WorkerArchiveEventRecord(
-                        stream=stream,
-                        position=position,
-                        event=dict(event),
-                    )
+            rows = [
+                {"stream": stream, "position": position, "event": dict(event)}
+                for stream, position, event in events
+            ]
+            dialect_name = session.bind.dialect.name if session.bind is not None else ""
+            if dialect_name == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert
+
+                stmt = insert(WorkerArchiveEventRecord).values(rows)
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=["stream", "position"]
                 )
+                await session.execute(stmt)
+            elif dialect_name == "sqlite":
+                from sqlalchemy.dialects.sqlite import insert
+
+                stmt = insert(WorkerArchiveEventRecord).values(rows)
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=["stream", "position"]
+                )
+                await session.execute(stmt)
+            else:
+                for row in rows:
+                    existing = await session.execute(
+                        select(WorkerArchiveEventRecord).where(
+                            WorkerArchiveEventRecord.stream == row["stream"],
+                            WorkerArchiveEventRecord.position == row["position"],
+                        )
+                    )
+                    if existing.scalar_one_or_none() is None:
+                        session.add(WorkerArchiveEventRecord(**row))
             await session.commit()
 
     async def upsert_state_snapshot(
