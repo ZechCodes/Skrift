@@ -355,6 +355,11 @@ class Agent(PydanticAgent):
         sid = session_id or new_session_id()
         job_id = uuid4().hex
         turn_id = uuid4().hex
+        if self.deps_factory is not None and "deps" in kwargs:
+            raise AgentSessionError(
+                f"Agent {self.skrift_name!r} uses deps_factory; pass durable "
+                "dependencies through deps_ref=..., not deps=."
+            )
         run_kwargs = normalize_turn_kwargs(kwargs)
         inherited_parent_session_id = parent_session_id or current_session_id()
         inherited_root_session_id = root_session_id

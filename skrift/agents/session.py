@@ -73,6 +73,15 @@ class Session:
         resolved = resolve_actor(actor)
         job_id = uuid4().hex
         turn_id = uuid4().hex
+        state = await load_runstate(self.id)
+        if state is None:
+            raise KeyError(f"Unknown agent session {self.id!r}")
+        definition = registry.get(state.agent_name)
+        if definition.deps_factory is not None and "deps" in kwargs:
+            raise AgentSessionError(
+                f"Agent {state.agent_name!r} uses deps_factory; pass durable "
+                "dependencies through deps_ref=..., not deps=."
+            )
         run_kwargs = normalize_turn_kwargs(kwargs)
 
         async def mutate(state: RunState) -> RunState:

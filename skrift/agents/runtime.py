@@ -33,7 +33,7 @@ from skrift.agents.state import (
     update_runstate,
 )
 from skrift.agents.turns import decode_turn_kwargs
-from skrift.workers import PermanentFailure, WorkerContext, handler
+from skrift.workers import DeadLetterCause, PermanentFailure, WorkerContext, handler
 from skrift.workers.registry import registry as worker_registry
 from skrift.workers.models import DeadJobEntry, Pause, utcnow
 
@@ -338,6 +338,13 @@ async def agents_run_dead(entry: DeadJobEntry) -> None:
             return runstate
         if runstate.terminal_at is not None:
             return runstate
+        discard_pending = entry.cause in {
+            DeadLetterCause.PERMANENT_FAILURE,
+            DeadLetterCause.POISON,
+        }
+        dropped_pending_messages = (
+            len(runstate.pending_user_messages) if discard_pending else 0
+        )
         runstate.status = "failed"
         runstate.terminal_at = utcnow()
         runstate.current_run_job_id = None
@@ -358,9 +365,13 @@ async def agents_run_dead(entry: DeadJobEntry) -> None:
                 "exception_message": runstate.error["exception_message"],
                 "traceback": runstate.error["traceback"],
                 "failed_at": runstate.terminal_at.isoformat(),
+                "dropped_pending_messages": dropped_pending_messages,
             },
         )
-        _activate_next_pending_turn(runstate)
+        if discard_pending:
+            runstate.pending_user_messages = []
+        else:
+            _activate_next_pending_turn(runstate)
         return runstate
 
     failed_state = await update_runstate(session_id, finalize)

@@ -15,7 +15,11 @@ from skrift.agents.session import AgentSessionError
 from skrift.agents.blob import ArchiveBlobStore, BLOB_STREAM_PREFIX, InMemoryBlobStore, get_blob_store
 from skrift.agents.config import configure_agent_runtime
 from skrift.agents.registry import registry as agent_registry
-from skrift.agents.runtime import _tool_events_from_messages, register_agent_handlers
+from skrift.agents.runtime import (
+    _tool_events_from_messages,
+    agents_run_dead,
+    register_agent_handlers,
+)
 from skrift.agents.state import (
     drain_pending_outboxes,
     load_runstate,
@@ -25,6 +29,7 @@ from skrift.agents.state import (
 )
 from skrift.config import AgentsConfig
 from skrift.lib.hooks import AGENT_EVENT_APPENDED, hooks
+from skrift.workers.models import DeadJobEntry, DeadLetterCause, JobEnvelope
 from skrift.workers.registry import registry as worker_registry
 
 
@@ -444,6 +449,74 @@ async def test_session_send_during_queued_run_processes_pending_turn():
     assert "UserMessageActivated" in [event["type"] for _, event in events]
 
 
+async def test_permanent_agent_dead_letter_drops_pending_turns():
+    skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+    session = await agent.run("hi", actor="ada", dispatch="queued")
+    state = await session.state()
+    current_job_id = state.current_run_job_id
+    assert current_job_id is not None
+
+    await session.send("again", actor="ada")
+
+    await agents_run_dead(
+        DeadJobEntry(
+            job=JobEnvelope(
+                id=current_job_id,
+                type="agents.run",
+                queue="agents",
+                payload={"session_id": session.id},
+            ),
+            queue="agents",
+            job_type="agents.run",
+            cause=DeadLetterCause.PERMANENT_FAILURE,
+        )
+    )
+
+    state = await session.state()
+    assert state.status == "failed"
+    assert state.current_run_job_id is None
+    assert state.pending_user_messages == []
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    event_types = [event["type"] for _, event in events]
+    assert "UserMessageActivated" not in event_types
+    failed_event = next(event for _, event in events if event["type"] == "AgentFailed")
+    assert failed_event["payload"]["dropped_pending_messages"] == 1
+
+
+async def test_transient_agent_dead_letter_activates_pending_turn():
+    skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+    session = await agent.run("hi", actor="ada", dispatch="queued")
+    state = await session.state()
+    current_job_id = state.current_run_job_id
+    assert current_job_id is not None
+
+    await session.send("again", actor="ada")
+
+    await agents_run_dead(
+        DeadJobEntry(
+            job=JobEnvelope(
+                id=current_job_id,
+                type="agents.run",
+                queue="agents",
+                payload={"session_id": session.id},
+            ),
+            queue="agents",
+            job_type="agents.run",
+            cause=DeadLetterCause.RETRIES_EXHAUSTED,
+        )
+    )
+
+    state = await session.state()
+    assert state.status == "queued"
+    assert state.current_run_job_id is not None
+    assert state.current_run_job_id != current_job_id
+    assert state.pending_user_messages == []
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    assert "UserMessageActivated" in [event["type"] for _, event in events]
+
+
 @pytest.mark.parametrize("terminal_status", ["failed", "cancelled"])
 async def test_session_send_revives_failed_or_cancelled_session(terminal_status):
     from skrift.agents.state import update_runstate
@@ -499,6 +572,32 @@ async def test_duplicate_agent_run_session_id_raises():
 
     with pytest.raises(AgentSessionError, match="already exists"):
         await agent.run("again", session_id="fixed")
+
+
+async def test_agent_run_rejects_deps_kwarg_when_deps_factory_set():
+    agent = skrift.Agent(
+        TestModel(custom_output_text="hello"),
+        name="demo",
+        deps_type=str,
+        deps_factory=lambda ctx: f"deps:{ctx.session_id}",
+    )
+
+    with pytest.raises(AgentSessionError, match="deps_ref"):
+        await agent.run("hi", deps="not durable")
+
+
+async def test_session_send_rejects_deps_kwarg_when_deps_factory_set():
+    agent = skrift.Agent(
+        TestModel(custom_output_text="hello"),
+        name="demo",
+        deps_type=str,
+        deps_factory=lambda ctx: f"deps:{ctx.session_id}",
+    )
+    session = await agent.run("hi")
+    assert await session.result() == "hello"
+
+    with pytest.raises(AgentSessionError, match="deps_ref"):
+        await session.send("again", deps="not durable")
 
 
 async def test_agent_constructor_output_type_is_preserved():
