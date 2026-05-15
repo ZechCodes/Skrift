@@ -72,6 +72,35 @@ class ChatState(BaseModel):
     last_active_at: datetime = Field(default_factory=utcnow)
 
 
+class AgentUsageTotals(BaseModel):
+    requests: int = 0
+    tool_calls: int = 0
+    input_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
+    output_tokens: int = 0
+    input_audio_tokens: int = 0
+    cache_audio_read_tokens: int = 0
+    output_audio_tokens: int = 0
+    details: dict[str, int] = Field(default_factory=dict)
+
+
+class AgentUsageRecord(AgentUsageTotals):
+    session_id: str
+    turn_id: str
+    run_job_id: str | None = None
+    agent_name: str
+    actor: Actor = Field(default_factory=Actor)
+    root_session_id: str | None = None
+    parent_session_id: str | None = None
+    model_name: str | None = None
+    configured_model: str | None = None
+    provider_name: str | None = None
+    provider_url: str | None = None
+    recorded_at: datetime = Field(default_factory=utcnow)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class OutboxEvent(BaseModel):
     kind: Literal["event"] = "event"
     entry_id: str = Field(default_factory=lambda: uuid4().hex)
@@ -140,6 +169,8 @@ class RunState(BaseModel):
     turn_results: dict[str, Any] = Field(default_factory=dict)
     turn_output_types: dict[str, Any] = Field(default_factory=dict)
     turn_errors: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    turn_usage: dict[str, AgentUsageRecord] = Field(default_factory=dict)
+    usage_totals: AgentUsageTotals = Field(default_factory=AgentUsageTotals)
 
 
 class AgentRunJob(Job):

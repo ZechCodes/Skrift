@@ -78,6 +78,7 @@ async def test_agent_run_persists_events_and_returns_session_result():
     assert [event["type"] for _, event in events] == [
         "UserMessageReceived",
         "AgentStarted",
+        "AgentUsageRecorded",
         "AssistantMessageCompleted",
         "AgentCompleted",
     ]
@@ -104,11 +105,12 @@ async def test_agent_event_appended_hook_fires_after_event_is_durable(clean_hook
     assert event_types == [
         "UserMessageReceived",
         "AgentStarted",
+        "AgentUsageRecorded",
         "AssistantMessageCompleted",
         "AgentCompleted",
     ]
     assert all(session_id == session.id for _, _, session_id, _ in calls)
-    assert [event_count for _, _, _, event_count in calls] == [1, 2, 3, 4]
+    assert [event_count for _, _, _, event_count in calls] == [1, 2, 3, 4, 5]
 
 
 async def test_agent_event_appended_hook_errors_do_not_break_run(clean_hooks, caplog):
@@ -122,6 +124,36 @@ async def test_agent_event_appended_hook_errors_do_not_break_run(clean_hooks, ca
 
     assert await session.result() == "hello"
     assert "Agent event hook failed" in caplog.text
+
+
+async def test_agent_run_records_turn_usage_and_model_identity():
+    agent = skrift.Agent(
+        TestModel(custom_output_text="hello", model_name="usage-model"),
+        name="demo",
+    )
+
+    session = await agent.run("hi", actor="ada")
+
+    state = await session.state()
+    turn_id = state.current_turn_id
+    assert turn_id is not None
+    usage = state.turn_usage[turn_id]
+    assert usage.session_id == session.id
+    assert usage.turn_id == turn_id
+    assert usage.agent_name == "demo"
+    assert usage.actor.id == "ada"
+    assert usage.model_name == "usage-model"
+    assert usage.configured_model is not None
+    assert usage.requests == 1
+    assert usage.input_tokens > 0
+    assert usage.output_tokens > 0
+    assert state.usage_totals.requests == usage.requests
+    assert state.usage_totals.input_tokens == usage.input_tokens
+
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    usage_event = next(event for _, event in events if event["type"] == "AgentUsageRecorded")
+    assert usage_event["payload"]["turn_id"] == turn_id
+    assert usage_event["payload"]["model_name"] == "usage-model"
 
 
 async def test_session_steer_records_audit_event():
@@ -223,6 +255,29 @@ async def test_agent_run_inline_dispatch_pauses_and_resumes_on_approval():
     assert await session.result() == '{"add":0}'
 
 
+async def test_agent_run_records_usage_before_approval_pause():
+    agent = skrift.Agent(TestModel(model_name="approval-model"), name="demo")
+
+    @agent.tool_plain(approval=True)
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    session = await agent.run("use the tool", actor="ada")
+
+    state = await session.state()
+    assert state.status == "awaiting_approval"
+    turn_id = state.current_turn_id
+    assert turn_id is not None
+    usage = state.turn_usage[turn_id]
+    assert usage.model_name == "approval-model"
+    assert usage.requests == 1
+    assert usage.input_tokens > 0
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    event_types = [event["type"] for _, event in events]
+    assert "AgentUsageRecorded" in event_types
+    assert event_types.index("AgentUsageRecorded") < event_types.index("ToolCallAwaitingApproval")
+
+
 async def test_agent_run_inline_then_queued_dispatch_queues_after_approval():
     runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
     agent = skrift.Agent(TestModel(), name="demo")
@@ -298,7 +353,7 @@ async def test_pause_and_resume_queued_session():
 
 
 async def test_audit_export_returns_agent_events():
-    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+    agent = skrift.Agent(TestModel(custom_output_text="hello", model_name="audit-model"), name="demo")
     session = await agent.run("hi", actor="ada")
 
     audit = await skrift.audit_export(session.id)
@@ -307,6 +362,9 @@ async def test_audit_export_returns_agent_events():
     assert audit.agent_name == "demo"
     assert audit.terminal_status == "completed"
     assert [event["type"] for event in audit.events][-1] == "AgentCompleted"
+    assert len(audit.usage_records) == 1
+    assert audit.usage_records[0].model_name == "audit-model"
+    assert audit.usage_totals.requests == audit.usage_records[0].requests
 
 
 async def test_audit_export_dereferences_large_offloaded_fields():
@@ -406,6 +464,7 @@ async def test_replay_falls_back_to_archived_events_after_hot_log_prune():
     assert [event["type"] for event in replayed] == [
         "UserMessageReceived",
         "AgentStarted",
+        "AgentUsageRecorded",
         "AssistantMessageCompleted",
         "AgentCompleted",
     ]
@@ -678,6 +737,34 @@ async def test_chat_send_returns_string_and_reuses_session_by_key():
         "hi",
         "again",
     ]
+
+
+async def test_chat_records_usage_per_turn_with_model_override():
+    agent = skrift.Agent(
+        TestModel(custom_output_text="hello", model_name="default-model"),
+        name="demo",
+    )
+
+    chat = agent.chat("usage-user", actor="ada")
+    first = await chat.send("hi")
+    second = await chat.send(
+        "again",
+        model=TestModel(custom_output_text="override", model_name="override-model"),
+    )
+
+    assert first == "hello"
+    assert second == "override"
+    session = await chat.session()
+    assert session is not None
+    state = await session.state()
+    assert len(state.turn_usage) == 2
+    records = list(state.turn_usage.values())
+    assert [record.model_name for record in records] == [
+        "default-model",
+        "override-model",
+    ]
+    assert state.usage_totals.requests == sum(record.requests for record in records)
+    assert state.usage_totals.input_tokens == sum(record.input_tokens for record in records)
 
 
 async def test_chat_send_typed_supports_output_type():

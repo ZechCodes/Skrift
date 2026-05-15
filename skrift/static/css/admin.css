@@ -490,6 +490,38 @@
     background-color: transparent;
 }
 
+.sk-table-scroll {
+    overflow-x: auto;
+}
+
+/* ========================================
+   Agent Usage
+   ======================================== */
+
+.sk-agent-usage-panel {
+    margin-bottom: 1.25rem;
+}
+
+.sk-agent-usage-grid {
+    display: grid;
+    gap: 1.25rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sk-agent-usage-table {
+    min-width: 720px;
+}
+
+.sk-agent-usage-table code {
+    font-size: 0.875rem;
+}
+
+@media (max-width: 1200px) {
+    .sk-agent-usage-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* ========================================
    Worker Observer
    ======================================== */

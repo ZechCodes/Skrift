@@ -170,6 +170,7 @@ def load_controllers() -> list:
                 "OAuth2ClientAdminController",
                 "APIKeyAdminController",
                 "WorkersAdminController",
+                "AgentUsageAdminController",
             ):
                 sub_class = getattr(module, sub_name, None)
                 if sub_class and sub_class not in controllers:

@@ -1,0 +1,134 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Agent Usage - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<div class="sk-admin-header">
+    <hgroup>
+        <h1>Agent Usage</h1>
+        <p>Durable agent LLM usage</p>
+    </hgroup>
+    <a href="/admin/agent-usage" role="button" class="sk-btn-outline">Refresh</a>
+</div>
+
+<section class="sk-stats">
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Runs</div>
+        <div class="sk-stat-value">{{ dashboard.run_count }}</div>
+        <div class="sk-stat-sub">{{ dashboard.turn_count }} turns</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Requests</div>
+        <div class="sk-stat-value">{{ dashboard.overall.requests_display }}</div>
+        <div class="sk-stat-sub">{{ dashboard.overall.tool_calls_display }} tool calls</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Input</div>
+        <div class="sk-stat-value">{{ dashboard.overall.input_tokens_display }}</div>
+        <div class="sk-stat-sub">tokens</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Output</div>
+        <div class="sk-stat-value">{{ dashboard.overall.output_tokens_display }}</div>
+        <div class="sk-stat-sub">{{ dashboard.overall.total_tokens_display }} total tokens</div>
+    </article>
+</section>
+
+<section class="sk-panel sk-agent-usage-panel">
+    <div class="sk-panel-head">
+        <h2>Per Run</h2>
+    </div>
+    <div class="sk-table-scroll">
+        <table class="sk-admin-table sk-agent-usage-table">
+            <thead>
+                <tr>
+                    <th>Run</th>
+                    <th>Agent</th>
+                    <th>Actor</th>
+                    <th>Model</th>
+                    <th>Turns</th>
+                    <th>Requests</th>
+                    <th>Input</th>
+                    <th>Cache Read</th>
+                    <th>Cache Write</th>
+                    <th>Output</th>
+                    <th>Total</th>
+                    <th>Status</th>
+                    <th>Recorded</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in dashboard.runs %}
+                <tr>
+                    <td><code>{{ row.short_session_id }}</code></td>
+                    <td>{{ row.agent_name }}</td>
+                    <td>{{ row.actor }}</td>
+                    <td>{{ row.models }}</td>
+                    <td>{{ row.turns }}</td>
+                    <td>{{ row.requests_display }}</td>
+                    <td>{{ row.input_tokens_display }}</td>
+                    <td>{{ row.cache_read_tokens_display }}</td>
+                    <td>{{ row.cache_write_tokens_display }}</td>
+                    <td>{{ row.output_tokens_display }}</td>
+                    <td>{{ row.total_tokens_display }}</td>
+                    <td>{{ row.status }}</td>
+                    <td>{{ row.last_recorded_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if not dashboard.runs %}
+    <p class="sk-no-items">No agent usage has been recorded yet.</p>
+    {% endif %}
+</section>
+
+{% macro usage_group_table(title, rows, label) %}
+<section class="sk-panel sk-agent-usage-panel">
+    <div class="sk-panel-head">
+        <h2>{{ title }}</h2>
+    </div>
+    <div class="sk-table-scroll">
+        <table class="sk-admin-table sk-agent-usage-table">
+            <thead>
+                <tr>
+                    <th>{{ label }}</th>
+                    <th>Runs</th>
+                    <th>Turns</th>
+                    <th>Requests</th>
+                    <th>Input</th>
+                    <th>Cache Read</th>
+                    <th>Cache Write</th>
+                    <th>Output</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>{{ row.label }}</td>
+                    <td>{{ row.runs }}</td>
+                    <td>{{ row.turns }}</td>
+                    <td>{{ row.requests_display }}</td>
+                    <td>{{ row.input_tokens_display }}</td>
+                    <td>{{ row.cache_read_tokens_display }}</td>
+                    <td>{{ row.cache_write_tokens_display }}</td>
+                    <td>{{ row.output_tokens_display }}</td>
+                    <td>{{ row.total_tokens_display }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if not rows %}
+    <p class="sk-no-items">No usage records match this grouping.</p>
+    {% endif %}
+</section>
+{% endmacro %}
+
+<div class="sk-agent-usage-grid">
+    {{ usage_group_table("Per Agent", dashboard.agents, "Agent") }}
+    {{ usage_group_table("Per Actor", dashboard.actors, "Actor") }}
+    {{ usage_group_table("Per Model", dashboard.models, "Model") }}
+</div>
+{% endblock %}

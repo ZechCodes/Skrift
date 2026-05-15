@@ -122,7 +122,9 @@ class TestWorkersAdminController:
         controller = WorkersAdminController(owner=MagicMock())
         request = MagicMock()
 
-        result = await controller.stream.fn(controller, request)
+        with patch("skrift.admin.workers.get_runtime") as get_runtime:
+            get_runtime.return_value.event_log.subscribe = MagicMock()
+            result = await controller.stream.fn(controller, request)
 
         assert isinstance(result, ServerSentEvent)
 
@@ -210,6 +212,105 @@ class TestWorkersAdminController:
 
         assert result.status_code == 302
         get_runtime.return_value.retry_dlq_entries.assert_awaited_once_with(["abc"])
+
+
+class TestAgentUsageAdminController:
+    @pytest.mark.asyncio
+    async def test_agent_usage_page_renders_dashboard(self):
+        from skrift.admin.agent_usage import AgentUsageAdminController
+
+        controller = AgentUsageAdminController(owner=MagicMock())
+        request = MagicMock()
+        db_session = AsyncMock()
+        dashboard = {
+            "overall": {"requests_display": "1"},
+            "runs": [],
+            "agents": [],
+            "actors": [],
+            "models": [],
+            "run_count": 0,
+            "turn_count": 0,
+        }
+
+        with (
+            patch(
+                "skrift.admin.agent_usage.get_admin_context",
+                new_callable=AsyncMock,
+                return_value={"admin_nav": [], "current_path": "/admin/agent-usage"},
+            ),
+            patch("skrift.admin.agent_usage.get_flash_messages", return_value=[]),
+            patch(
+                "skrift.admin.agent_usage.build_agent_usage_dashboard",
+                new_callable=AsyncMock,
+                return_value=dashboard,
+            ),
+            patch("skrift.admin.agent_usage.get_runtime", return_value=MagicMock()),
+        ):
+            result = await controller.agent_usage.fn(controller, request, db_session)
+
+        assert result.template_name == "admin/agent_usage.html"
+        assert result.context["dashboard"] == dashboard
+        assert result.context["current_path"] == "/admin/agent-usage"
+
+    @pytest.mark.asyncio
+    async def test_build_agent_usage_dashboard_groups_records(self):
+        from skrift.admin.agent_usage import build_agent_usage_dashboard
+        from skrift.agents.models import Actor, AgentUsageRecord, RunState
+
+        state = RunState(
+            session_id="session-123456",
+            agent_name="support",
+            created_by=Actor(kind="user", id="ada"),
+        )
+        state.turn_usage = {
+            "turn-1": AgentUsageRecord(
+                session_id=state.session_id,
+                turn_id="turn-1",
+                agent_name="support",
+                actor=Actor(kind="user", id="ada"),
+                model_name="gpt-test",
+                requests=1,
+                input_tokens=10,
+                cache_read_tokens=3,
+                cache_write_tokens=2,
+                output_tokens=5,
+            ),
+            "turn-2": AgentUsageRecord(
+                session_id=state.session_id,
+                turn_id="turn-2",
+                agent_name="support",
+                actor=Actor(kind="user", id="ada"),
+                model_name="gpt-test",
+                requests=2,
+                input_tokens=7,
+                output_tokens=6,
+            ),
+        }
+
+        class StateStore:
+            async def keys(self, prefix=""):
+                return ["runstate:session-123456"]
+
+            async def get(self, key):
+                return state
+
+        runtime = MagicMock()
+        runtime.state_store = StateStore()
+
+        dashboard = await build_agent_usage_dashboard(runtime)
+
+        assert dashboard["run_count"] == 1
+        assert dashboard["turn_count"] == 2
+        assert dashboard["overall"]["requests"] == 3
+        assert dashboard["overall"]["input_tokens"] == 17
+        assert dashboard["overall"]["cache_read_tokens"] == 3
+        assert dashboard["overall"]["cache_write_tokens"] == 2
+        assert dashboard["overall"]["output_tokens"] == 11
+        assert dashboard["runs"][0]["models"] == "gpt-test"
+        assert dashboard["runs"][0]["actor"] == "user:ada"
+        assert dashboard["agents"][0]["label"] == "support"
+        assert dashboard["actors"][0]["label"] == "user:ada"
+        assert dashboard["models"][0]["label"] == "gpt-test"
 
 
 class TestExtractPageFormData:

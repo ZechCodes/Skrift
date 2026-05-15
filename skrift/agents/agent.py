@@ -7,7 +7,7 @@ import inspect
 from typing import Any, Callable
 from uuid import uuid4
 
-from pydantic_ai import Agent as PydanticAgent, RunContext
+from pydantic_ai import Agent as PydanticAgent, DeferredToolRequests, RunContext
 from pydantic_ai.exceptions import ApprovalRequired, CallDeferred
 
 from skrift.agents.approval import ApprovalContext, _record_tool_approval_decision
@@ -47,6 +47,9 @@ class Agent(PydanticAgent):
         deps_type = kwargs.get("deps_type")
         if deps_type not in (None, type(None)) and deps_factory is None:
             raise TypeError("Skrift Agent requires deps_factory when deps_type is set")
+        kwargs["output_type"] = _durable_registration_output_type(
+            kwargs.get("output_type", str)
+        )
         super().__init__(*args, name=name, **kwargs)
         self.skrift_name = name
         self.deps_factory = deps_factory
@@ -540,3 +543,17 @@ def _output_schema_snapshot(schema: Any) -> dict[str, Any]:
         else None,
         "tools": tools,
     }
+
+
+def _durable_registration_output_type(output_type: Any) -> Any:
+    if output_type is None:
+        output_types = []
+    elif isinstance(output_type, list):
+        output_types = list(output_type)
+    elif isinstance(output_type, tuple):
+        output_types = list(output_type)
+    else:
+        output_types = [output_type]
+    if not any(item is DeferredToolRequests for item in output_types):
+        output_types.append(DeferredToolRequests)
+    return output_types

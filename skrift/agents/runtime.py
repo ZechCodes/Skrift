@@ -15,6 +15,8 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 from skrift.agents.config import get_agents_config
 from skrift.agents.context import reset_current_session_id, set_current_session_id
 from skrift.agents.models import (
+    AgentUsageRecord,
+    AgentUsageTotals,
     AgentRunJob,
     AgentToolCallJob,
     ApprovalRejection,
@@ -49,6 +51,8 @@ RUNNER_STOPPED = _RunnerStopped()
 class AgentIterResult:
     result: Any
     streamed_message_count: int
+    usage: Any = None
+    response: Any = None
 
 
 @handler("agents.run", queue="agents")
@@ -201,6 +205,13 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
             tool_job_id = uuid4().hex
 
             async def await_detached_tool(runstate):
+                _record_turn_usage(
+                    runstate,
+                    agent=agent,
+                    context=context,
+                    usage=iter_result.usage,
+                    response=iter_result.response,
+                )
                 if new_messages:
                     runstate.messages.extend(
                         {"role": "model", "content": item} for item in new_messages
@@ -249,6 +260,13 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
 
         async def await_approval(runstate):
             runstate.status = "awaiting_approval"
+            _record_turn_usage(
+                runstate,
+                agent=agent,
+                context=context,
+                usage=iter_result.usage,
+                response=iter_result.response,
+            )
             if new_messages:
                 runstate.messages.extend(
                     {"role": "model", "content": item} for item in new_messages
@@ -299,6 +317,13 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
                 runstate.turn_output_types.pop(runstate.current_turn_id, None)
         runstate.deferred_tool_results = {}
         runstate.current_tool_execution = None
+        _record_turn_usage(
+            runstate,
+            agent=agent,
+            context=context,
+            usage=iter_result.usage,
+            response=iter_result.response,
+        )
         if new_messages:
             runstate.messages.extend({"role": "model", "content": item} for item in new_messages)
         for event_type, payload in _tool_events_from_messages(unstreamed_messages):
@@ -539,6 +564,8 @@ async def _drive_agent_iter(
                     return AgentIterResult(
                         result=pause,
                         streamed_message_count=streamed_message_count,
+                        usage=run.usage(),
+                        response=_latest_response(run),
                     )
                 node_kind = type(node).__name__
                 message_delta, streamed_message_count = _new_message_delta(
@@ -561,9 +588,147 @@ async def _drive_agent_iter(
             return AgentIterResult(
                 result=run.result,
                 streamed_message_count=streamed_message_count,
+                usage=run.usage(),
+                response=_latest_response(run),
             )
     finally:
         reset_current_session_id(token)
+
+
+def _record_turn_usage(
+    runstate: Any,
+    *,
+    agent: Any,
+    context: WorkerContext,
+    usage: Any,
+    response: Any,
+) -> None:
+    if usage is None or runstate.current_turn_id is None:
+        return
+    segment = _usage_totals_from_pydantic(usage)
+    if not _usage_has_values(segment):
+        return
+    previous = runstate.turn_usage.get(runstate.current_turn_id)
+    totals = _usage_totals_add(previous or AgentUsageTotals(), segment)
+    record = AgentUsageRecord(
+        **totals.model_dump(mode="json"),
+        session_id=runstate.session_id,
+        turn_id=runstate.current_turn_id,
+        run_job_id=context.job.id,
+        agent_name=runstate.agent_name,
+        actor=runstate.created_by,
+        root_session_id=runstate.root_session_id,
+        parent_session_id=runstate.parent_session_id,
+        model_name=_response_attr(response, "model_name"),
+        configured_model=_configured_model(agent, runstate),
+        provider_name=_response_attr(response, "provider_name"),
+        provider_url=_response_attr(response, "provider_url"),
+        metadata=_usage_metadata(response),
+    )
+    runstate.turn_usage[runstate.current_turn_id] = record
+    runstate.usage_totals = _sum_usage_records(runstate.turn_usage.values())
+    append_event(runstate, "AgentUsageRecorded", record.model_dump(mode="json"))
+
+
+def _latest_response(run: Any) -> Any:
+    try:
+        return run.result.response if run.result is not None else None
+    except Exception:
+        try:
+            messages = run.new_messages()
+            for message in reversed(messages):
+                if getattr(message, "kind", None) == "response":
+                    return message
+        except Exception:
+            return None
+    return None
+
+
+def _usage_totals_from_pydantic(usage: Any) -> AgentUsageTotals:
+    details = getattr(usage, "details", {}) or {}
+    return AgentUsageTotals(
+        requests=int(getattr(usage, "requests", 0) or 0),
+        tool_calls=int(getattr(usage, "tool_calls", 0) or 0),
+        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+        cache_write_tokens=int(getattr(usage, "cache_write_tokens", 0) or 0),
+        cache_read_tokens=int(getattr(usage, "cache_read_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+        input_audio_tokens=int(getattr(usage, "input_audio_tokens", 0) or 0),
+        cache_audio_read_tokens=int(getattr(usage, "cache_audio_read_tokens", 0) or 0),
+        output_audio_tokens=int(getattr(usage, "output_audio_tokens", 0) or 0),
+        details={str(key): int(value) for key, value in details.items()},
+    )
+
+
+def _usage_totals_add(left: AgentUsageTotals, right: AgentUsageTotals) -> AgentUsageTotals:
+    details = dict(left.details)
+    for key, value in right.details.items():
+        details[key] = details.get(key, 0) + value
+    return AgentUsageTotals(
+        requests=left.requests + right.requests,
+        tool_calls=left.tool_calls + right.tool_calls,
+        input_tokens=left.input_tokens + right.input_tokens,
+        cache_write_tokens=left.cache_write_tokens + right.cache_write_tokens,
+        cache_read_tokens=left.cache_read_tokens + right.cache_read_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+        input_audio_tokens=left.input_audio_tokens + right.input_audio_tokens,
+        cache_audio_read_tokens=left.cache_audio_read_tokens + right.cache_audio_read_tokens,
+        output_audio_tokens=left.output_audio_tokens + right.output_audio_tokens,
+        details=details,
+    )
+
+
+def _sum_usage_records(records: Any) -> AgentUsageTotals:
+    total = AgentUsageTotals()
+    for record in records:
+        total = _usage_totals_add(total, record)
+    return total
+
+
+def _usage_has_values(usage: AgentUsageTotals) -> bool:
+    return any(
+        (
+            usage.requests,
+            usage.tool_calls,
+            usage.input_tokens,
+            usage.cache_write_tokens,
+            usage.cache_read_tokens,
+            usage.output_tokens,
+            usage.input_audio_tokens,
+            usage.cache_audio_read_tokens,
+            usage.output_audio_tokens,
+            usage.details,
+        )
+    )
+
+
+def _response_attr(response: Any, name: str) -> str | None:
+    value = getattr(response, name, None) if response is not None else None
+    return str(value) if value is not None else None
+
+
+def _configured_model(agent: Any, runstate: Any) -> str | None:
+    configured = runstate.run_kwargs.get("model")
+    if configured is None:
+        configured = getattr(agent, "model", None)
+    return str(configured) if configured is not None else None
+
+
+def _usage_metadata(response: Any) -> dict[str, Any]:
+    if response is None:
+        return {}
+    metadata: dict[str, Any] = {}
+    for key in ("provider_response_id", "finish_reason", "run_id", "conversation_id"):
+        value = getattr(response, key, None)
+        if value is not None:
+            metadata[key] = str(value)
+    provider_details = getattr(response, "provider_details", None)
+    if provider_details:
+        metadata["provider_details"] = provider_details
+    response_metadata = getattr(response, "metadata", None)
+    if response_metadata:
+        metadata["response_metadata"] = response_metadata
+    return metadata
 
 
 async def _runner_check_pass(session_id: str, node: Any) -> Pause | _RunnerStopped | None:
