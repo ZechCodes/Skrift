@@ -19,6 +19,8 @@ from skrift.agents.models import (
     BlobRef,
     ResumeContext,
     Steer,
+    ToolDisplayContext,
+    ToolDisplayMessage,
 )
 from skrift.agents.registry import registry
 from skrift.agents.session import AgentSessionError, Session, session
@@ -45,6 +47,8 @@ __all__ = [
     "ReasoningLevel",
     "Session",
     "Steer",
+    "ToolDisplayContext",
+    "ToolDisplayMessage",
     "audit_export",
     "registry",
     "replay",

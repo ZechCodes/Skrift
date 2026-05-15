@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import traceback
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,7 @@ from uuid import uuid4
 
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
 from pydantic_ai.messages import ModelMessagesTypeAdapter
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from skrift.agents.config import get_agents_config
 from skrift.agents.context import reset_current_session_id, set_current_session_id
@@ -22,6 +24,8 @@ from skrift.agents.models import (
     ApprovalRejection,
     OutboxSubmit,
     ResumeContext,
+    ToolDisplayContext,
+    ToolDisplayMessage,
     ToolExecutionState,
 )
 from skrift.agents.registry import registry
@@ -38,6 +42,8 @@ from skrift.agents.turns import decode_turn_kwargs
 from skrift.workers import DeadLetterCause, PermanentFailure, WorkerContext, handler
 from skrift.workers.registry import registry as worker_registry
 from skrift.workers.models import DeadJobEntry, Pause, utcnow
+
+logger = logging.getLogger(__name__)
 
 
 class _RunnerStopped:
@@ -203,6 +209,25 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
         if output.calls:
             call = output.calls[0]
             tool_job_id = uuid4().hex
+            formatted_events = await _formatted_tool_events_from_messages(
+                agent,
+                payload.session_id,
+                unstreamed_messages,
+            )
+            dispatch_payload = {
+                "tool_call_id": call.tool_call_id,
+                "tool_name": call.tool_name,
+                "args": call.args_as_dict(),
+                "tool_job_id": tool_job_id,
+            }
+            display = await _tool_display_for_payload(
+                agent,
+                payload.session_id,
+                "ToolCallStarted",
+                dispatch_payload,
+            )
+            if display is not None:
+                dispatch_payload["display"] = display
 
             async def await_detached_tool(runstate):
                 _record_turn_usage(
@@ -216,7 +241,7 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
                     runstate.messages.extend(
                         {"role": "model", "content": item} for item in new_messages
                     )
-                for event_type, event_payload in _tool_events_from_messages(unstreamed_messages):
+                for event_type, event_payload in formatted_events:
                     append_event(runstate, event_type, event_payload)
                 runstate.current_tool_execution = ToolExecutionState(
                     tool_call_id=call.tool_call_id,
@@ -231,16 +256,7 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
                     else False,
                     detached_tool_job_id=tool_job_id,
                 )
-                append_event(
-                    runstate,
-                    "ToolCallDispatched",
-                    {
-                        "tool_call_id": call.tool_call_id,
-                        "tool_name": call.tool_name,
-                        "args": call.args_as_dict(),
-                        "tool_job_id": tool_job_id,
-                    },
-                )
+                append_event(runstate, "ToolCallDispatched", dispatch_payload)
                 runstate.outbox.append(
                     OutboxSubmit(
                         job_type="agents.tool_call",
@@ -258,6 +274,12 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
             await drain_outbox(payload.session_id)
             return Pause(state={"detached_tool_job_id": tool_job_id})
 
+        formatted_events = await _formatted_tool_events_from_messages(
+            agent,
+            payload.session_id,
+            unstreamed_messages,
+        )
+
         async def await_approval(runstate):
             runstate.status = "awaiting_approval"
             _record_turn_usage(
@@ -271,7 +293,7 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
                 runstate.messages.extend(
                     {"role": "model", "content": item} for item in new_messages
                 )
-            for event_type, event_payload in _tool_events_from_messages(unstreamed_messages):
+            for event_type, event_payload in formatted_events:
                 append_event(runstate, event_type, event_payload)
             for call in output.approvals:
                 metadata = output.metadata.get(call.tool_call_id, {})
@@ -302,6 +324,12 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
             }
         )
 
+    formatted_events = await _formatted_tool_events_from_messages(
+        agent,
+        payload.session_id,
+        unstreamed_messages,
+    )
+
     async def complete(runstate):
         if runstate.terminal_at is not None:
             return runstate
@@ -326,7 +354,7 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
         )
         if new_messages:
             runstate.messages.extend({"role": "model", "content": item} for item in new_messages)
-        for event_type, payload in _tool_events_from_messages(unstreamed_messages):
+        for event_type, payload in formatted_events:
             append_event(runstate, event_type, payload)
         append_event(
             runstate,
@@ -572,13 +600,18 @@ async def _drive_agent_iter(
                     run,
                     streamed_message_count,
                 )
+                formatted_events = await _formatted_tool_events_from_messages(
+                    agent,
+                    session_id,
+                    message_delta,
+                )
 
                 async def record_cursor(runstate):
                     runstate.cursor = {
                         "node_index": node_index,
                         "node_kind": node_kind,
                     }
-                    for event_type, event_payload in _tool_events_from_messages(message_delta):
+                    for event_type, event_payload in formatted_events:
                         append_event(runstate, event_type, event_payload)
                     return runstate
 
@@ -896,6 +929,7 @@ def _tool_events_from_messages(messages: list[dict[str, Any]]) -> list[tuple[str
                             "ToolCallCompleted",
                             {
                                 "tool_call_id": part.get("tool_call_id") or "",
+                                "tool_name": part.get("tool_name") or "",
                                 "result": part.get("content"),
                                 "duration_ms": 0,
                             },
@@ -907,6 +941,7 @@ def _tool_events_from_messages(messages: list[dict[str, Any]]) -> list[tuple[str
                             "ToolCallErrored",
                             {
                                 "tool_call_id": part.get("tool_call_id") or "",
+                                "tool_name": part.get("tool_name") or "",
                                 "exception_type": "ToolError",
                                 "exception_message": str(part.get("content")),
                                 "traceback": "",
@@ -915,6 +950,123 @@ def _tool_events_from_messages(messages: list[dict[str, Any]]) -> list[tuple[str
                         )
                     )
     return events
+
+
+async def _formatted_tool_events_from_messages(
+    agent: Any,
+    session_id: str,
+    messages: list[dict[str, Any]],
+) -> list[tuple[str, dict[str, Any]]]:
+    events = _tool_events_from_messages(messages)
+    args_by_call: dict[str, dict[str, Any]] = {}
+    tool_by_call: dict[str, str] = {}
+    formatted: list[tuple[str, dict[str, Any]]] = []
+    for event_type, event_payload in events:
+        tool_call_id = str(event_payload.get("tool_call_id") or "")
+        if event_type == "ToolCallStarted":
+            args_by_call[tool_call_id] = dict(event_payload.get("args") or {})
+            tool_by_call[tool_call_id] = str(event_payload.get("tool_name") or "")
+        elif tool_call_id:
+            if not event_payload.get("tool_name") and tool_call_id in tool_by_call:
+                event_payload["tool_name"] = tool_by_call[tool_call_id]
+            if tool_call_id in args_by_call:
+                event_payload.setdefault("args", args_by_call[tool_call_id])
+        display = await _tool_display_for_payload(
+            agent,
+            session_id,
+            event_type,
+            event_payload,
+        )
+        if display is not None:
+            event_payload["display"] = display
+        formatted.append((event_type, event_payload))
+    return formatted
+
+
+async def _tool_display_for_payload(
+    agent: Any,
+    session_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    formatter_kind = {
+        "ToolCallStarted": "called",
+        "ToolCallDispatched": "called",
+        "ToolCallCompleted": "returned",
+        "ToolCallErrored": "errored",
+    }.get(event_type)
+    if formatter_kind is None:
+        return None
+    tool_name = str(payload.get("tool_name") or "")
+    formatters = getattr(agent, "_tool_formatters", {}).get(tool_name)
+    formatter = getattr(formatters, formatter_kind, None) if formatters else None
+    if formatter is None:
+        return None
+    context = ToolDisplayContext(
+        session_id=session_id,
+        tool_call_id=str(payload.get("tool_call_id") or ""),
+        tool_name=tool_name,
+        args=dict(payload.get("args") or {}),
+        result=payload.get("result"),
+        error=_error_payload(payload) if formatter_kind == "errored" else None,
+    )
+    try:
+        value = formatter(context)
+        if inspect.isawaitable(value):
+            value = await value
+        return _coerce_tool_display(value, event_type)
+    except Exception:
+        logger.exception("Tool display formatter failed for %s", tool_name)
+        return _fallback_tool_display(tool_name, event_type)
+
+
+def _error_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "exception_type": payload.get("exception_type") or "",
+        "exception_message": payload.get("exception_message") or "",
+        "traceback": payload.get("traceback") or "",
+    }
+
+
+def _coerce_tool_display(value: Any, event_type: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, ToolDisplayMessage):
+        message = value
+    elif isinstance(value, str):
+        message = ToolDisplayMessage(message=value, level=_display_level(event_type))
+    elif isinstance(value, dict):
+        message = ToolDisplayMessage.model_validate(value)
+    else:
+        message = ToolDisplayMessage(message=str(value), level=_display_level(event_type))
+    try:
+        return to_jsonable_python(message.model_dump(mode="json"))
+    except PydanticSerializationError:
+        return ToolDisplayMessage(
+            message=message.message,
+            level=message.level,
+        ).model_dump(mode="json")
+
+
+def _fallback_tool_display(tool_name: str, event_type: str) -> dict[str, Any]:
+    action = {
+        "ToolCallStarted": "Called",
+        "ToolCallDispatched": "Called",
+        "ToolCallCompleted": "Completed",
+        "ToolCallErrored": "Failed",
+    }.get(event_type, "Updated")
+    return ToolDisplayMessage(
+        message=f"{action} {tool_name or 'tool'}",
+        level=_display_level(event_type),
+    ).model_dump(mode="json")
+
+
+def _display_level(event_type: str) -> str:
+    if event_type == "ToolCallCompleted":
+        return "success"
+    if event_type == "ToolCallErrored":
+        return "error"
+    return "info"
 
 
 def _coerce_tool_args(raw: Any) -> dict[str, Any]:

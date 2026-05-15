@@ -43,6 +43,22 @@ def calculate(
 
 `@tool_plain` tools are the simplest durable tools because the tool receives only serializable arguments. Context tools are supported for normal in-run execution, but detached context tools are not supported yet.
 
+Tools can define deterministic display formatters for UI progress messages. These messages are added to tool audit events as `payload.display` without removing the raw structured fields.
+
+```python
+@assistant.tool_plain(
+    format_called=lambda ctx: "Calculating the result.",
+    format_returned=lambda ctx: f"Result: {ctx.result}.",
+    format_errored=lambda ctx: f"Calculation failed: {ctx.error['exception_message']}",
+)
+def safe_calculate(
+    left: float,
+    operator: Literal["+", "-", "*", "/"],
+    right: float,
+) -> float:
+    return calculate(left, operator, right)
+```
+
 ## Send chat messages
 
 Create a chat handle with a stable key. Skrift maps the key to a durable session, so app code does not need to store a session id.
@@ -102,3 +118,5 @@ session = await chat.session()
 ```python
 audit = await skrift.audit_export(session.id)
 ```
+
+`audit_export()` includes per-turn usage records and usage totals when model usage is available. Administrators can inspect aggregate usage by run, agent, actor, model, and overall at `/admin/agent-usage`.

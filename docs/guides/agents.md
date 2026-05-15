@@ -95,6 +95,28 @@ def slow_lookup(record_id: str) -> dict:
 
 Detached tool results are stored as deferred tool results and wake the parent run when available.
 
+## Tool display messages
+
+Tool events are durable audit records. They keep structured fields such as `tool_name`, `args`, `result`, and error data, and can also carry a `display` object for user-facing UI text.
+
+```python
+@assistant.tool_plain(
+    format_called=lambda ctx: f"Checking inventory for {ctx.args['sku']}.",
+    format_returned=lambda ctx: {
+        "title": "Inventory checked",
+        "message": f"{ctx.result['available']} units available.",
+        "level": "success",
+    },
+    format_errored=lambda ctx: f"Inventory check failed: {ctx.error['exception_message']}",
+)
+def check_inventory(sku: str) -> dict:
+    ...
+```
+
+`format_called`, `format_returned`, and `format_errored` can be sync or async. They receive `ToolDisplayContext` with `session_id`, `tool_call_id`, `tool_name`, `args`, and either `result` or `error` depending on the event. Return a string for simple messages or a `ToolDisplayMessage`-compatible dict with `title`, `message`, `level`, and `metadata`.
+
+Formatter errors are logged and replaced with a generic fallback message. Use formatters for deterministic, redacted UI copy; do not rely on them to preserve audit data, because the raw structured event payload is already stored separately.
+
 ## Runtime kwargs
 
 Skrift forwards Pydantic AI run kwargs through the durable runtime where possible:
@@ -122,6 +144,14 @@ reply = await chat.send(
 ```
 
 `reasoning` accepts either a string or `ReasoningLevel`. Skrift stores it in turn metadata and maps it to Pydantic AI `model_settings["thinking"]`.
+
+## Usage tracking
+
+When Pydantic AI returns usage, Skrift records it per durable turn. Usage is stored on `RunState.turn_usage`, summarized in `RunState.usage_totals`, emitted as `AgentUsageRecorded`, and included in `audit_export()`.
+
+Each usage record includes the actor, session lineage, model/provider identity, request count, tool call count, input tokens, cache read/write tokens, output tokens, audio token counters, and provider details. The admin dashboard at `/admin/agent-usage` aggregates those records per run, per agent, per actor, per model, and overall.
+
+Skrift records usage data for later cost calculation, but it does not calculate money yet.
 
 ## Typed outputs
 

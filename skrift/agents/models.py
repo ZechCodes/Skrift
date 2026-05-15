@@ -43,6 +43,26 @@ class ToolPolicy(BaseModel):
     detached: bool = False
     approval_on_retry: bool = False
     policy_description: str | None = None
+    format_called_name: str | None = None
+    format_returned_name: str | None = None
+    format_errored_name: str | None = None
+
+
+class ToolDisplayMessage(BaseModel):
+    title: str | None = None
+    message: str
+    level: Literal["info", "success", "error"] = "info"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolDisplayContext(BaseModel):
+    session_id: str
+    tool_call_id: str
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    result: Any = None
+    error: dict[str, Any] | None = None
+    attempt: int | None = None
 
 
 class ApprovalRejection(BaseModel):

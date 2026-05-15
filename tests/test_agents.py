@@ -16,6 +16,7 @@ from skrift.agents.blob import ArchiveBlobStore, BLOB_STREAM_PREFIX, InMemoryBlo
 from skrift.agents.config import configure_agent_runtime
 from skrift.agents.registry import registry as agent_registry
 from skrift.agents.runtime import (
+    _formatted_tool_events_from_messages,
     _tool_events_from_messages,
     agents_run_dead,
     register_agent_handlers,
@@ -831,6 +832,82 @@ async def test_tool_calls_emit_audit_events():
     assert "ToolCallCompleted" in event_types
     completed = next(event for _, event in events if event["type"] == "ToolCallCompleted")
     assert completed["payload"]["result"] == 0
+
+
+async def test_tool_display_formatters_emit_display_payloads():
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    @agent.tool_plain(
+        format_called=lambda ctx: f"Adding {ctx.args['x']} and {ctx.args['y']}.",
+        format_returned=lambda ctx: {
+            "title": "Sum ready",
+            "message": f"The answer is {ctx.result}.",
+            "level": "success",
+        },
+    )
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    session = await agent.run("use the tool", actor="ada")
+
+    assert await session.result() == '{"add":0}'
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    started = next(event for _, event in events if event["type"] == "ToolCallStarted")
+    completed = next(event for _, event in events if event["type"] == "ToolCallCompleted")
+    assert started["payload"]["display"] == {
+        "title": None,
+        "message": "Adding 0 and 0.",
+        "level": "info",
+        "metadata": {},
+    }
+    assert completed["payload"]["display"] == {
+        "title": "Sum ready",
+        "message": "The answer is 0.",
+        "level": "success",
+        "metadata": {},
+    }
+
+
+async def test_tool_display_formatter_handles_error_events():
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    @agent.tool_plain(
+        format_errored=lambda ctx: f"{ctx.tool_name} failed: {ctx.error['exception_message']}"
+    )
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    events = await _formatted_tool_events_from_messages(
+        agent,
+        "session-1",
+        [
+            {
+                "parts": [
+                    {
+                        "part_kind": "tool-call",
+                        "tool_call_id": "call-1",
+                        "tool_name": "add",
+                        "args": {"x": 1, "y": 2},
+                    },
+                    {
+                        "part_kind": "tool-return",
+                        "tool_call_id": "call-1",
+                        "tool_name": "add",
+                        "outcome": "error",
+                        "content": "boom",
+                    },
+                ]
+            }
+        ],
+    )
+
+    errored = next(payload for event_type, payload in events if event_type == "ToolCallErrored")
+    assert errored["display"] == {
+        "title": None,
+        "message": "add failed: boom",
+        "level": "error",
+        "metadata": {},
+    }
 
 
 def test_tool_call_started_args_are_always_dicts():

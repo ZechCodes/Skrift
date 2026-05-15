@@ -165,6 +165,20 @@ def slow_lookup(record_id: str) -> dict:
     ...
 ```
 
+Skrift tools also accept deterministic display formatters:
+
+```python
+@assistant.tool_plain(
+    format_called=lambda ctx: f"Looking up {ctx.args['record_id']}.",
+    format_returned=lambda ctx: "Lookup complete.",
+    format_errored=lambda ctx: f"Lookup failed: {ctx.error['exception_message']}",
+)
+def lookup(record_id: str) -> dict:
+    ...
+```
+
+Formatter output is stored as `payload.display` on tool audit events. Raw tool arguments, results, and errors remain available in the structured event payload.
+
 ## Limitations
 
 Skrift preview support intentionally avoids a few unsafe or unresolved areas:
@@ -184,3 +198,5 @@ Skrift preview support intentionally avoids a few unsafe or unresolved areas:
 | `Agent.run()` | You need a low-level durable session handle. |
 | `Session.send()` | You already have a session id and need lower-level control. |
 | `audit_export()` | You need full audit and lineage data. |
+
+`audit_export()` also includes per-turn usage records and aggregate usage totals when the model provider reports usage.

@@ -197,8 +197,54 @@ def write_record(record_id: str) -> str:
 | `detached` | Run a plain tool in a separate worker job. |
 | `approval_on_retry` | Request approval again when retrying. |
 | `policy_description` | Human-readable explanation stored in snapshots and audit data. |
+| `format_called` | Optional sync or async formatter for `ToolCallStarted` and detached `ToolCallDispatched` display text. |
+| `format_returned` | Optional sync or async formatter for `ToolCallCompleted` display text. |
+| `format_errored` | Optional sync or async formatter for `ToolCallErrored` display text. |
 
 Detached context tools registered with `@agent.tool(detached=True)` are not supported in preview.
+
+## Tool Display Formatters
+
+Tool events keep their structured audit payloads and may also include a user-facing `display` object. Use display formatters when an application UI should show concise tool progress without exposing raw arguments or results.
+
+```python
+@agent.tool_plain(
+    format_called=lambda ctx: f"Looking up account {ctx.args['account_id']}.",
+    format_returned=lambda ctx: {
+        "title": "Account loaded",
+        "message": f"Found {ctx.result['name']}.",
+        "level": "success",
+    },
+    format_errored=lambda ctx: f"Account lookup failed: {ctx.error['exception_message']}",
+)
+def lookup_account(account_id: str) -> dict:
+    ...
+```
+
+Formatters receive `ToolDisplayContext`:
+
+| Field | Description |
+| --- | --- |
+| `session_id` | Durable session id. |
+| `tool_call_id` | Tool call id for the event. |
+| `tool_name` | Registered tool name. |
+| `args` | Tool arguments as a dict when available. |
+| `result` | Tool result for returned events. |
+| `error` | Error dict for errored events. |
+| `attempt` | Reserved for retry-aware display metadata. |
+
+Formatters may return either a string or a `ToolDisplayMessage`-compatible dict:
+
+```python
+{
+    "title": "Optional heading",
+    "message": "Human-readable message",
+    "level": "info",  # info | success | error
+    "metadata": {},
+}
+```
+
+The runtime catches formatter errors, logs them, and falls back to a generic display message. Formatter callable names are stored in tool policy snapshots, but formatter callables themselves stay in the live agent registry and are not serialized into durable state.
 
 ## `ReasoningLevel`
 
@@ -231,4 +277,21 @@ events = await skrift.replay(session_id)
 audit = await skrift.audit_export(session_id, include_lineage=True)
 ```
 
-`audit_export()` dereferences large offloaded payloads and includes lineage sessions by default.
+`audit_export()` dereferences large offloaded payloads and includes lineage sessions by default. It also includes:
+
+- `usage_records`: per-turn `AgentUsageRecord` values with model/provider identity and token counters.
+- `usage_totals`: aggregate usage across exported records.
+
+Tool events may include `payload.display` when a tool display formatter is configured. The raw audit fields remain present.
+
+## Usage Tracking
+
+Skrift records Pydantic AI usage on durable agent turns when model usage is available. Usage is stored in `RunState.turn_usage`, summarized in `RunState.usage_totals`, emitted as `AgentUsageRecorded`, and surfaced through `audit_export()`.
+
+Usage records include:
+
+- `session_id`, `turn_id`, `run_job_id`, `agent_name`, actor, and lineage ids.
+- Effective model metadata: `model_name`, `configured_model`, `provider_name`, and `provider_url`.
+- Token counters: input, output, cache read, cache write, audio input/output, audio cache read, request count, tool call count, and provider details.
+
+The admin dashboard at `/admin/agent-usage` shows usage aggregated per run, per agent, per actor, per model, and overall. Skrift does not calculate money yet; the saved model/provider and token fields are intended for a later pricing layer.

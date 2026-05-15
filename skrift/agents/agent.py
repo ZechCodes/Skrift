@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+from dataclasses import dataclass
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ from pydantic_ai.exceptions import ApprovalRequired, CallDeferred
 from skrift.agents.approval import ApprovalContext, _record_tool_approval_decision
 from skrift.agents.config import get_agents_config
 from skrift.agents.context import current_session_id, resolve_actor
-from skrift.agents.models import ResumeContext, RunState, ToolPolicy
+from skrift.agents.models import ResumeContext, RunState, ToolDisplayContext, ToolPolicy
 from skrift.agents.registry import AgentDefinition, registry
 from skrift.agents.session import AgentSessionError, Session
 from skrift.agents.state import (
@@ -28,6 +29,15 @@ from skrift.agents.state import (
 )
 from skrift.agents.turns import normalize_turn_kwargs
 from skrift.workers.models import utcnow
+
+ToolDisplayFormatter = Callable[[ToolDisplayContext], Any]
+
+
+@dataclass(frozen=True)
+class ToolFormatters:
+    called: ToolDisplayFormatter | None = None
+    returned: ToolDisplayFormatter | None = None
+    errored: ToolDisplayFormatter | None = None
 
 
 class Agent(PydanticAgent):
@@ -56,6 +66,7 @@ class Agent(PydanticAgent):
         self._tool_policies: dict[str, ToolPolicy] = {}
         self._approval_gates: dict[str, Callable[..., Any]] = {}
         self._detached_tools: dict[str, Callable[..., Any]] = {}
+        self._tool_formatters: dict[str, ToolFormatters] = {}
         registry.register(
             AgentDefinition(
                 name=name,
@@ -75,6 +86,9 @@ class Agent(PydanticAgent):
         detached: bool = False,
         approval_on_retry: bool = False,
         policy_description: str | None = None,
+        format_called: ToolDisplayFormatter | None = None,
+        format_returned: ToolDisplayFormatter | None = None,
+        format_errored: ToolDisplayFormatter | None = None,
         **kwargs: Any,
     ) -> Any:
         if detached:
@@ -96,7 +110,15 @@ class Agent(PydanticAgent):
             detached=detached,
             approval_on_retry=approval_on_retry,
             policy_description=policy_description,
+            format_called_name=_callable_name(format_called) if format_called else None,
+            format_returned_name=_callable_name(format_returned) if format_returned else None,
+            format_errored_name=_callable_name(format_errored) if format_errored else None,
         ).model_dump(mode="json")
+        formatters = ToolFormatters(
+            called=format_called,
+            returned=format_returned,
+            errored=format_errored,
+        )
         original_func = func
         if func is not None:
             if approval_gate is not None:
@@ -108,6 +130,10 @@ class Agent(PydanticAgent):
             self._record_tool_policy(
                 kwargs.get("name") or getattr(original_func, "__name__", ""),
                 metadata["skrift_policy"],
+            )
+            self._record_tool_formatters(
+                kwargs.get("name") or getattr(original_func, "__name__", ""),
+                formatters,
             )
             if approval_gate is not None:
                 self._record_approval_gate(
@@ -124,6 +150,7 @@ class Agent(PydanticAgent):
             decorator,
             kwargs.get("name"),
             metadata["skrift_policy"],
+            formatters,
             approval_gate=approval_gate,
             detached=detached,
             plain=False,
@@ -139,6 +166,9 @@ class Agent(PydanticAgent):
         detached: bool = False,
         approval_on_retry: bool = False,
         policy_description: str | None = None,
+        format_called: ToolDisplayFormatter | None = None,
+        format_returned: ToolDisplayFormatter | None = None,
+        format_errored: ToolDisplayFormatter | None = None,
         **kwargs: Any,
     ) -> Any:
         metadata = dict(kwargs.pop("metadata", {}) or {})
@@ -153,7 +183,15 @@ class Agent(PydanticAgent):
             detached=detached,
             approval_on_retry=approval_on_retry,
             policy_description=policy_description,
+            format_called_name=_callable_name(format_called) if format_called else None,
+            format_returned_name=_callable_name(format_returned) if format_returned else None,
+            format_errored_name=_callable_name(format_errored) if format_errored else None,
         ).model_dump(mode="json")
+        formatters = ToolFormatters(
+            called=format_called,
+            returned=format_returned,
+            errored=format_errored,
+        )
         original_func = func
         if func is not None:
             if approval_gate is not None:
@@ -172,6 +210,10 @@ class Agent(PydanticAgent):
                 kwargs.get("name") or getattr(original_func, "__name__", ""),
                 metadata["skrift_policy"],
             )
+            self._record_tool_formatters(
+                kwargs.get("name") or getattr(original_func, "__name__", ""),
+                formatters,
+            )
             if approval_gate is not None:
                 self._record_approval_gate(
                     kwargs.get("name") or getattr(original_func, "__name__", ""),
@@ -187,6 +229,7 @@ class Agent(PydanticAgent):
             decorator,
             kwargs.get("name"),
             metadata["skrift_policy"],
+            formatters,
             approval_gate=approval_gate,
             detached=detached,
             plain=True,
@@ -210,6 +253,7 @@ class Agent(PydanticAgent):
         decorator: Any,
         explicit_name: str | None,
         policy: dict[str, Any],
+        formatters: ToolFormatters,
         *,
         approval_gate: Callable[..., Any] | None = None,
         detached: bool = False,
@@ -221,6 +265,7 @@ class Agent(PydanticAgent):
         def wrapped(func: Any) -> Any:
             name = explicit_name or getattr(func, "__name__", "")
             self._record_tool_policy(name, policy)
+            self._record_tool_formatters(name, formatters)
             if approval_gate is not None:
                 self._record_approval_gate(name, approval_gate)
                 return decorator(
@@ -241,6 +286,10 @@ class Agent(PydanticAgent):
     def _record_tool_policy(self, name: str, policy: dict[str, Any]) -> None:
         if name:
             self._tool_policies[name] = ToolPolicy.model_validate(policy)
+
+    def _record_tool_formatters(self, name: str, formatters: ToolFormatters) -> None:
+        if name and any((formatters.called, formatters.returned, formatters.errored)):
+            self._tool_formatters[name] = formatters
 
     def _record_detached_tool(self, name: str, func: Callable[..., Any]) -> None:
         if name:
