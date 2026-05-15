@@ -484,6 +484,49 @@ class NotificationsConfig(BaseModel):
     webhook_secret: str = ""  # empty = webhook disabled
 
 
+class WebhookBackoffConfig(BaseModel):
+    """Exponential retry timing for outbound webhooks."""
+
+    initial_seconds: float = Field(default=5.0, gt=0)
+    factor: float = Field(default=2.0, gt=1)
+    max_seconds: float = Field(default=900.0, gt=0)
+    jitter_seconds: float = Field(default=0.0, ge=0)
+
+
+class WebhookRetentionConfig(BaseModel):
+    """Retention policy for outbound webhook delivery rows."""
+
+    succeeded_seconds: float = Field(default=30 * 24 * 60 * 60, gt=0)
+    dead_seconds: float = Field(default=90 * 24 * 60 * 60, gt=0)
+
+
+class WebhookProfileConfig(BaseModel):
+    """Configuration for one outbound webhook caller profile."""
+
+    url: str
+    enabled: bool = True
+    method: Literal["POST", "PUT", "PATCH"] = "POST"
+    queue: str = "webhooks"
+    headers: dict[str, str] = {}
+    signing_secret: str = ""
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    visibility_timeout: float = Field(default=30.0, gt=0)
+    max_attempts: int = Field(default=12, ge=1)
+    dead_letter_after_seconds: float | None = Field(default=None, gt=0)
+    retry_statuses: list[int] = [408, 409, 425, 429, 500, 502, 503, 504]
+    permanent_failure_statuses: list[int] = [400, 401, 403, 404, 410]
+    backoff: WebhookBackoffConfig = WebhookBackoffConfig()
+    retention: WebhookRetentionConfig = WebhookRetentionConfig()
+
+
+class WebhooksConfig(BaseModel):
+    """Durable outbound webhook framework configuration."""
+
+    enabled: bool = False
+    reconcile_interval_seconds: float = Field(default=60.0, gt=0)
+    profiles: dict[str, WebhookProfileConfig] = {}
+
+
 class WorkerBackendConfig(BaseModel):
     """Import paths for worker backend implementations."""
 
@@ -870,6 +913,9 @@ class Settings(BaseSettings):
     # Notifications config (loaded from app.yaml)
     notifications: NotificationsConfig = NotificationsConfig()
 
+    # Outbound webhooks config (loaded from app.yaml)
+    webhooks: WebhooksConfig = WebhooksConfig()
+
     # Worker runtime config (loaded from app.yaml)
     workers: WorkersConfig = WorkersConfig()
 
@@ -981,6 +1027,9 @@ def get_settings() -> Settings:
     if "notifications" in app_config:
         kwargs["notifications"] = NotificationsConfig(**app_config["notifications"])
 
+    if "webhooks" in app_config:
+        kwargs["webhooks"] = WebhooksConfig(**app_config["webhooks"])
+
     if "workers" in app_config:
         kwargs["workers"] = WorkersConfig(**app_config["workers"])
 
@@ -1026,6 +1075,9 @@ def get_settings() -> Settings:
         kwargs["sites"] = {
             name: SiteConfig(**cfg) for name, cfg in app_config["sites"].items()
         }
+
+    if "debug" in app_config:
+        kwargs["debug"] = app_config["debug"]
 
     if "controllers" in app_config:
         kwargs["controllers"] = list(app_config["controllers"])

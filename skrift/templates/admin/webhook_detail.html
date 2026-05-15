@@ -1,0 +1,125 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Delivery {{ delivery.short_id }} - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<div class="sk-admin-header">
+    <hgroup>
+        <h1>Delivery <code>{{ delivery.short_id }}</code></h1>
+        <p class="sk-admin-context">{{ delivery.profile }} · {{ delivery.event_type }} · {{ delivery.status }}</p>
+    </hgroup>
+    <a href="/admin/webhooks" role="button" class="sk-btn-outline">Back to Webhooks</a>
+</div>
+
+<section class="sk-stats sk-webhook-stats">
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Delivery Status</div>
+        <div class="sk-stat-value">{{ delivery.status }}</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">HTTP Attempts</div>
+        <div class="sk-stat-value">{{ delivery.attempt_count }}</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Last HTTP</div>
+        <div class="sk-stat-value">{{ delivery.last_status_code or "none" }}</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Receiver</div>
+        <div class="sk-stat-value sk-webhook-stat-domain">{{ delivery.domain }}</div>
+    </article>
+</section>
+
+{% if delivery.status in ["dead", "cancelled"] %}
+<form method="post" action="/admin/webhooks/{{ delivery.id }}/retry" class="sk-worker-dlq-actions">
+    {{ csrf_field() }}
+    <button type="submit" class="sk-btn-primary">Retry delivery</button>
+</form>
+{% endif %}
+
+<section class="sk-panel sk-webhook-panel">
+    <div class="sk-panel-head">
+        <div>
+            <h2>Delivery</h2>
+            <p class="sk-panel-subtitle">One outbound webhook call and its retry state.</p>
+        </div>
+    </div>
+    <div class="sk-panel-body">
+        <dl class="sk-detail-list sk-webhook-detail-list">
+            <dt>Delivery ID</dt>
+            <dd><code>{{ delivery.id }}</code></dd>
+            <dt>Idempotency key</dt>
+            <dd><code>{{ delivery.idempotency_key }}</code></dd>
+            <dt>Profile</dt>
+            <dd>{{ delivery.profile }}</dd>
+            <dt>Event type</dt>
+            <dd>{{ delivery.event_type }}</dd>
+            <dt>Endpoint</dt>
+            <dd><code>{{ delivery.endpoint }}</code></dd>
+            <dt>Created</dt>
+            <dd>{{ delivery.created_at }}</dd>
+            <dt>Updated</dt>
+            <dd>{{ delivery.updated_at }}</dd>
+            <dt>Next attempt</dt>
+            <dd>{{ delivery.next_attempt_at or "none" }}</dd>
+            <dt>Delivered</dt>
+            <dd>{{ delivery.delivered_at or "none" }}</dd>
+            <dt>Dead</dt>
+            <dd>{{ delivery.dead_at or "none" }}</dd>
+            <dt>Last result</dt>
+            <dd>{{ delivery.last_result or "none" }}</dd>
+        </dl>
+    </div>
+</section>
+
+<section class="sk-panel sk-webhook-panel">
+    <div class="sk-panel-head">
+        <div>
+            <h2>HTTP Attempts</h2>
+            <p class="sk-panel-subtitle">Each row is one request made for this delivery.</p>
+        </div>
+    </div>
+    <div class="sk-table-scroll">
+        <table class="sk-admin-table sk-webhook-attempt-table">
+            <thead>
+                <tr>
+                    <th>Attempt ID</th>
+                    <th>#</th>
+                    <th>Started</th>
+                    <th>Finished</th>
+                    <th>Duration</th>
+                    <th>HTTP</th>
+                    <th>Outcome</th>
+                    <th>Error / Preview</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for attempt in attempts %}
+                <tr>
+                    <td><code>{{ attempt.short_id }}</code></td>
+                    <td>{{ attempt.attempt_number }}</td>
+                    <td>{{ attempt.started_at }}</td>
+                    <td>{{ attempt.finished_at }}</td>
+                    <td>{{ "%.3f"|format(attempt.duration_seconds or 0) }}s</td>
+                    <td>{{ attempt.status_code or "none" }}</td>
+                    <td><span class="sk-role-badge sk-webhook-status sk-webhook-status-{{ attempt.outcome }}">{{ attempt.outcome }}</span></td>
+                    <td class="sk-webhook-result">{{ attempt.error or attempt.response_body_preview or "none" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if not attempts %}
+    <p class="sk-no-items">No attempts recorded yet.</p>
+    {% endif %}
+</section>
+
+<section class="sk-panel sk-webhook-panel">
+    <div class="sk-panel-head">
+        <h2>Payload</h2>
+    </div>
+    <div class="sk-panel-body">
+        <pre class="sk-worker-dlq-pre"><code>{{ payload_json }}</code></pre>
+    </div>
+</section>
+{% endblock %}

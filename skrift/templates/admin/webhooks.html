@@ -1,0 +1,499 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Webhooks - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<div class="sk-admin-header">
+    <hgroup>
+        <h1>Webhooks</h1>
+        <p class="sk-admin-context">
+            Deliveries are outbound webhook calls. Attempts are individual HTTP tries for a delivery.
+            <span class="sk-webhook-live" data-webhook-live>Live</span>
+            <span class="sk-webhook-muted" data-webhook-updated>Updated {{ updated_at }}</span>
+        </p>
+    </hgroup>
+</div>
+
+<section class="sk-stats sk-webhook-stats">
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Deliveries In Window</div>
+        <div class="sk-stat-value" data-webhook-stat="total_recent">{{ total_recent }}</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Succeeded</div>
+        <div class="sk-stat-value" data-webhook-stat="succeeded">{{ status_counts.get("succeeded", 0) }}</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Retrying</div>
+        <div class="sk-stat-value" data-webhook-stat="retrying">{{ status_counts.get("retrying", 0) }}</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">Dead</div>
+        <div class="sk-stat-value" data-webhook-stat="dead">{{ status_counts.get("dead", 0) }}</div>
+    </article>
+    <article class="sk-stat-card">
+        <div class="sk-stat-label">HTTP Attempts</div>
+        <div class="sk-stat-value" data-webhook-stat="attempts_total">{{ attempts_total }}</div>
+    </article>
+</section>
+
+<section class="sk-panel sk-webhook-panel">
+    <div class="sk-panel-head">
+        <div>
+            <h2>Delivery Filters</h2>
+            <p class="sk-panel-subtitle">Window is based on delivery creation time.</p>
+        </div>
+        {% if filters.status or filters.profile %}
+        <a href="/admin/webhooks?hours={{ filters.hours }}" class="sk-btn-outline">Clear status/profile</a>
+        {% endif %}
+    </div>
+    <div class="sk-panel-body">
+        <form method="get" action="/admin/webhooks" class="sk-worker-dlq-filters sk-webhook-filters">
+            <label>
+                Delivery status
+                <select name="status">
+                    <option value="">All statuses</option>
+                    {% for option in ["queued", "sending", "retrying", "succeeded", "dead", "cancelled"] %}
+                    <option value="{{ option }}" {% if filters.status == option %}selected{% endif %}>
+                        {{ option }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Profile
+                <select name="profile">
+                    <option value="">All profiles</option>
+                    {% for option in profiles %}
+                    <option value="{{ option }}" {% if filters.profile == option %}selected{% endif %}>
+                        {{ option }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Created in
+                <select name="hours">
+                    <option value="1" {% if filters.hours == 1 %}selected{% endif %}>Last hour</option>
+                    <option value="24" {% if filters.hours == 24 %}selected{% endif %}>Last day</option>
+                    <option value="168" {% if filters.hours == 168 %}selected{% endif %}>Last week</option>
+                    <option value="720" {% if filters.hours == 720 %}selected{% endif %}>Last month</option>
+                </select>
+            </label>
+            <button type="submit" class="sk-btn-primary">Apply filters</button>
+        </form>
+    </div>
+</section>
+
+<section class="sk-webhook-summary-grid">
+    <article class="sk-panel sk-webhook-panel">
+        <div class="sk-panel-head">
+            <div>
+                <h2>Open Failures</h2>
+                <p class="sk-panel-subtitle">Retrying or dead deliveries grouped by receiver domain.</p>
+            </div>
+        </div>
+        <div class="sk-table-scroll">
+            <table class="sk-admin-table sk-webhook-compact-table">
+                <thead>
+                    <tr>
+                        <th>Domain</th>
+                        <th>Deliveries</th>
+                    </tr>
+                </thead>
+                <tbody data-webhook-domain-counts>
+                    {% for domain, count in domain_counts.items() %}
+                    <tr>
+                        <td><code>{{ domain }}</code></td>
+                        <td>{{ count }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="sk-no-items" data-webhook-empty="domain_counts" {% if domain_counts %}hidden{% endif %}>No retrying or dead deliveries in this window.</p>
+    </article>
+
+    <article class="sk-panel sk-webhook-panel">
+        <div class="sk-panel-head">
+            <div>
+                <h2>Failure Timeline</h2>
+                <p class="sk-panel-subtitle">Hourly/daily buckets for retrying and dead deliveries.</p>
+            </div>
+        </div>
+        <div class="sk-table-scroll">
+            <table class="sk-admin-table sk-webhook-compact-table">
+                <thead>
+                    <tr>
+                        <th>Bucket</th>
+                        <th>Domain</th>
+                        <th>Deliveries</th>
+                    </tr>
+                </thead>
+                <tbody data-webhook-domain-series>
+                    {% for row in domain_series %}
+                    <tr>
+                        <td>{{ row.bucket }}</td>
+                        <td><code>{{ row.domain }}</code></td>
+                        <td>{{ row.failures }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="sk-no-items" data-webhook-empty="domain_series" {% if domain_series %}hidden{% endif %}>No failure buckets in this window.</p>
+    </article>
+</section>
+
+<form method="post" action="/admin/webhooks/action">
+    {{ csrf_field() }}
+    <section class="sk-panel sk-webhook-panel">
+        <div class="sk-panel-head">
+            <div>
+                <h2>Deliveries</h2>
+                <p class="sk-panel-subtitle">One row per outbound webhook call. Open a delivery to see its attempts.</p>
+            </div>
+            <button type="submit" name="action" value="retry" class="sk-btn-outline">
+                Retry selected
+            </button>
+        </div>
+        <div class="sk-table-scroll">
+            <table class="sk-admin-table sk-webhook-delivery-table">
+                <thead>
+                    <tr>
+                        <th class="sk-webhook-check"></th>
+                        <th>Delivery</th>
+                        <th>Created</th>
+                        <th>Profile</th>
+                        <th>Event</th>
+                        <th>Status</th>
+                        <th>Attempts</th>
+                        <th>Last HTTP</th>
+                        <th>Next / Finished</th>
+                        <th>Last result</th>
+                    </tr>
+                </thead>
+                <tbody data-webhook-deliveries>
+                    {% for delivery in deliveries %}
+                    <tr
+                        data-webhook-delivery-id="{{ delivery.id }}"
+                        data-webhook-signature="{{ delivery.status }}|{{ delivery.attempt_count }}|{{ delivery.last_status_code }}|{{ delivery.last_result }}|{{ delivery.next_attempt_at }}|{{ delivery.terminal_at }}|{{ 'true' if delivery.retryable else 'false' }}|{{ delivery.updated_at }}"
+                    >
+                        <td class="sk-webhook-check">
+                            {% if delivery.retryable %}
+                            <input type="checkbox" name="delivery_{{ delivery.id }}" aria-label="Select delivery {{ delivery.short_id }}">
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/admin/webhooks/{{ delivery.id }}" class="sk-webhook-id">
+                                <code>{{ delivery.short_id }}</code>
+                            </a>
+                            <div class="sk-webhook-muted"><code>{{ delivery.idempotency_key }}</code></div>
+                        </td>
+                        <td>{{ delivery.created_at }}</td>
+                        <td>
+                            <strong>{{ delivery.profile }}</strong>
+                            <div class="sk-webhook-muted">{{ delivery.domain }}</div>
+                        </td>
+                        <td>{{ delivery.event_type }}</td>
+                        <td><span class="sk-role-badge sk-webhook-status sk-webhook-status-{{ delivery.status }}">{{ delivery.status }}</span></td>
+                        <td><a href="/admin/webhooks/{{ delivery.id }}">{{ delivery.attempt_count }}</a></td>
+                        <td>{{ delivery.last_status_code or "none" }}</td>
+                        <td>{{ delivery.next_attempt_at or delivery.terminal_at or "none" }}</td>
+                        <td class="sk-webhook-result">{{ delivery.last_result or "none" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="sk-no-items" data-webhook-empty="deliveries" {% if deliveries %}hidden{% endif %}>No webhook deliveries match these filters.</p>
+    </section>
+</form>
+
+<section class="sk-panel sk-webhook-panel">
+    <div class="sk-panel-head">
+        <div>
+            <h2>Recent Attempts</h2>
+            <p class="sk-panel-subtitle">One row per HTTP try. Multiple attempts can belong to the same delivery.</p>
+        </div>
+    </div>
+    <div class="sk-table-scroll">
+        <table class="sk-admin-table sk-webhook-attempt-table">
+            <thead>
+                <tr>
+                    <th>Attempt</th>
+                    <th>Delivery</th>
+                    <th>Finished</th>
+                    <th>Profile</th>
+                    <th>Event</th>
+                    <th>HTTP</th>
+                    <th>Outcome</th>
+                    <th>Duration</th>
+                    <th>Error / Preview</th>
+                </tr>
+            </thead>
+            <tbody data-webhook-attempts>
+                {% for attempt in recent_attempts %}
+                <tr data-webhook-attempt-id="{{ attempt.id }}">
+                    <td><code>{{ attempt.short_id }}</code> #{{ attempt.attempt_number }}</td>
+                    <td>
+                        <a href="/admin/webhooks/{{ attempt.delivery_id }}">
+                            <code>{{ attempt.delivery_short_id }}</code>
+                        </a>
+                    </td>
+                    <td>{{ attempt.finished_at }}</td>
+                    <td>{{ attempt.profile }}</td>
+                    <td>{{ attempt.event_type }}</td>
+                    <td>{{ attempt.status_code or "none" }}</td>
+                    <td><span class="sk-role-badge sk-webhook-status sk-webhook-status-{{ attempt.outcome }}">{{ attempt.outcome }}</span></td>
+                    <td>{{ "%.3f"|format(attempt.duration_seconds or 0) }}s</td>
+                    <td class="sk-webhook-result">{{ attempt.error or attempt.response_body_preview or "none" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <p class="sk-no-items" data-webhook-empty="recent_attempts" {% if recent_attempts %}hidden{% endif %}>No attempts recorded in this window.</p>
+</section>
+<script nonce="{{ csp_nonce() }}">
+(function () {
+    const ids = {
+        live: document.querySelector("[data-webhook-live]"),
+        updated: document.querySelector("[data-webhook-updated]"),
+        domainCounts: document.querySelector("[data-webhook-domain-counts]"),
+        domainSeries: document.querySelector("[data-webhook-domain-series]"),
+        deliveries: document.querySelector("[data-webhook-deliveries]"),
+        attempts: document.querySelector("[data-webhook-attempts]"),
+    };
+    const empty = {
+        domain_counts: document.querySelector("[data-webhook-empty='domain_counts']"),
+        domain_series: document.querySelector("[data-webhook-empty='domain_series']"),
+        deliveries: document.querySelector("[data-webhook-empty='deliveries']"),
+        recent_attempts: document.querySelector("[data-webhook-empty='recent_attempts']"),
+    };
+
+    function esc(value) {
+        return String(value ?? "").replace(/[&<>"']/g, function (ch) {
+            return {
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                "\"": "&quot;",
+                "'": "&#39;",
+            }[ch];
+        });
+    }
+
+    function statusClass(value) {
+        return String(value || "").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+    }
+
+    function setEmpty(key, isEmpty) {
+        if (empty[key]) empty[key].hidden = !isEmpty;
+    }
+
+    function updateStats(snapshot) {
+        const counts = snapshot.status_counts || {};
+        const values = {
+            total_recent: snapshot.total_recent || 0,
+            succeeded: counts.succeeded || 0,
+            retrying: counts.retrying || 0,
+            dead: counts.dead || 0,
+            attempts_total: snapshot.attempts_total || 0,
+        };
+        Object.entries(values).forEach(function ([key, value]) {
+            const node = document.querySelector("[data-webhook-stat='" + key + "']");
+            if (node) node.textContent = value;
+        });
+        if (ids.updated) ids.updated.textContent = "Updated " + (snapshot.updated_at || "");
+    }
+
+    function renderDomainCounts(counts) {
+        const rows = Object.entries(counts || {});
+        ids.domainCounts.innerHTML = rows.map(function ([domain, count]) {
+            return "<tr><td><code>" + esc(domain) + "</code></td><td>" + esc(count) + "</td></tr>";
+        }).join("");
+        setEmpty("domain_counts", rows.length === 0);
+    }
+
+    function renderDomainSeries(rows) {
+        rows = rows || [];
+        ids.domainSeries.innerHTML = rows.map(function (row) {
+            return "<tr><td>" + esc(row.bucket) + "</td><td><code>" +
+                esc(row.domain) + "</code></td><td>" + esc(row.failures) + "</td></tr>";
+        }).join("");
+        setEmpty("domain_series", rows.length === 0);
+    }
+
+    function deliverySignature(delivery) {
+        return [
+            delivery.status || "",
+            delivery.attempt_count || 0,
+            delivery.last_status_code || "",
+            delivery.last_result || "",
+            delivery.next_attempt_at || "",
+            delivery.terminal_at || "",
+            delivery.retryable ? "true" : "false",
+            delivery.updated_at || "",
+        ].join("|");
+    }
+
+    function attemptSignature(attempt) {
+        return JSON.stringify({
+            id: attempt.id,
+            attempt_number: attempt.attempt_number,
+            finished_at: attempt.finished_at || "",
+            status_code: attempt.status_code || "",
+            outcome: attempt.outcome || "",
+            duration_seconds: attempt.duration_seconds || 0,
+            error: attempt.error || "",
+            response_body_preview: attempt.response_body_preview || "",
+        });
+    }
+
+    function rowFromHTML(html) {
+        const template = document.createElement("template");
+        template.innerHTML = html.trim();
+        return template.content.firstElementChild;
+    }
+
+    function checkedDeliveryIds() {
+        return new Set(
+            Array.from(ids.deliveries.querySelectorAll("input[type='checkbox']:checked"))
+                .map((input) => input.name.replace(/^delivery_/, ""))
+        );
+    }
+
+    function reconcileRows(tbody, items, options) {
+        const existing = new Map();
+        tbody.querySelectorAll("tr[" + options.keyAttribute + "]").forEach((row) => {
+            existing.set(row.getAttribute(options.keyAttribute), row);
+        });
+
+        const desiredKeys = new Set();
+        const desiredRows = items.map((item) => {
+            const key = options.key(item);
+            const signature = options.signature(item);
+            desiredKeys.add(key);
+
+            let row = existing.get(key);
+            if (row && !row.dataset.webhookSignature) {
+                row.dataset.webhookSignature = signature;
+            } else if (!row || row.dataset.webhookSignature !== signature) {
+                const nextRow = rowFromHTML(options.render(item));
+                nextRow.dataset.webhookSignature = signature;
+                if (row) row.replaceWith(nextRow);
+                row = nextRow;
+            }
+
+            if (options.restoreSelection) options.restoreSelection(row, item);
+            return row;
+        });
+
+        let cursor = tbody.firstElementChild;
+        desiredRows.forEach((row) => {
+            if (row === cursor) {
+                cursor = cursor.nextElementSibling;
+                return;
+            }
+            tbody.insertBefore(row, cursor);
+        });
+
+        existing.forEach((row, key) => {
+            if (!desiredKeys.has(key)) row.remove();
+        });
+    }
+
+    function renderDelivery(delivery) {
+        const checkbox = delivery.retryable
+            ? "<input type=\"checkbox\" name=\"delivery_" + esc(delivery.id) +
+                "\" aria-label=\"Select delivery " + esc(delivery.short_id) + "\">"
+            : "";
+        return "<tr data-webhook-delivery-id=\"" + esc(delivery.id) + "\">" +
+            "<td class=\"sk-webhook-check\">" + checkbox + "</td>" +
+            "<td><a href=\"/admin/webhooks/" + esc(delivery.id) +
+                "\" class=\"sk-webhook-id\"><code>" + esc(delivery.short_id) +
+                "</code></a><div class=\"sk-webhook-muted\"><code>" +
+                esc(delivery.idempotency_key) + "</code></div></td>" +
+            "<td>" + esc(delivery.created_at) + "</td>" +
+            "<td><strong>" + esc(delivery.profile) + "</strong><div class=\"sk-webhook-muted\">" +
+                esc(delivery.domain) + "</div></td>" +
+            "<td>" + esc(delivery.event_type) + "</td>" +
+            "<td><span class=\"sk-role-badge sk-webhook-status sk-webhook-status-" +
+                statusClass(delivery.status) + "\">" + esc(delivery.status) + "</span></td>" +
+            "<td><a href=\"/admin/webhooks/" + esc(delivery.id) + "\">" +
+                esc(delivery.attempt_count) + "</a></td>" +
+            "<td>" + esc(delivery.last_status_code || "none") + "</td>" +
+            "<td>" + esc(delivery.next_attempt_at || delivery.terminal_at || "none") + "</td>" +
+            "<td class=\"sk-webhook-result\">" + esc(delivery.last_result || "none") + "</td>" +
+            "</tr>";
+    }
+
+    function renderAttempt(attempt) {
+        return "<tr data-webhook-attempt-id=\"" + esc(attempt.id) + "\">" +
+            "<td><code>" + esc(attempt.short_id) + "</code> #" + esc(attempt.attempt_number) + "</td>" +
+            "<td><a href=\"/admin/webhooks/" + esc(attempt.delivery_id) + "\"><code>" +
+                esc(attempt.delivery_short_id) + "</code></a></td>" +
+            "<td>" + esc(attempt.finished_at) + "</td>" +
+            "<td>" + esc(attempt.profile) + "</td>" +
+            "<td>" + esc(attempt.event_type) + "</td>" +
+            "<td>" + esc(attempt.status_code || "none") + "</td>" +
+            "<td><span class=\"sk-role-badge sk-webhook-status sk-webhook-status-" +
+                statusClass(attempt.outcome) + "\">" + esc(attempt.outcome) + "</span></td>" +
+            "<td>" + Number(attempt.duration_seconds || 0).toFixed(3) + "s</td>" +
+            "<td class=\"sk-webhook-result\">" +
+                esc(attempt.error || attempt.response_body_preview || "none") + "</td>" +
+            "</tr>";
+    }
+
+    function renderSnapshot(snapshot) {
+        updateStats(snapshot);
+        renderDomainCounts(snapshot.domain_counts);
+        renderDomainSeries(snapshot.domain_series);
+        const deliveries = snapshot.deliveries || [];
+        const attempts = snapshot.recent_attempts || [];
+        const selectedDeliveries = checkedDeliveryIds();
+        reconcileRows(ids.deliveries, deliveries, {
+            keyAttribute: "data-webhook-delivery-id",
+            key: (delivery) => delivery.id,
+            signature: deliverySignature,
+            render: renderDelivery,
+            restoreSelection: function (row, delivery) {
+                const checkbox = row.querySelector("input[type='checkbox']");
+                if (checkbox) checkbox.checked = selectedDeliveries.has(delivery.id);
+            },
+        });
+        reconcileRows(ids.attempts, attempts, {
+            keyAttribute: "data-webhook-attempt-id",
+            key: (attempt) => attempt.id,
+            signature: attemptSignature,
+            render: renderAttempt,
+        });
+        setEmpty("deliveries", deliveries.length === 0);
+        setEmpty("recent_attempts", attempts.length === 0);
+    }
+
+    if (!window.EventSource) {
+        if (ids.live) ids.live.textContent = "Static";
+        return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const streamUrl = "/admin/webhooks/stream" + (params.toString() ? "?" + params.toString() : "");
+    const stream = new EventSource(streamUrl);
+    stream.addEventListener("webhooks_snapshot", function (event) {
+        if (ids.live) {
+            ids.live.textContent = "Live";
+            ids.live.classList.remove("sk-webhook-live-stale");
+        }
+        renderSnapshot(JSON.parse(event.data));
+    });
+    stream.onerror = function () {
+        if (ids.live) {
+            ids.live.textContent = "Reconnecting";
+            ids.live.classList.add("sk-webhook-live-stale");
+        }
+    };
+})();
+</script>
+{% endblock %}

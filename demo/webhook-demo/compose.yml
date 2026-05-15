@@ -1,0 +1,90 @@
+x-skrift-app: &skrift_app
+  image: ghcr.io/astral-sh/uv:python3.13-bookworm
+  working_dir: /workspace/demo/webhook-demo
+  volumes:
+    - ../..:/workspace
+  environment:
+    SKRIFT_ENV: compose
+    DEBUG: "true"
+    SECRET_KEY: compose-development-secret-key-change-me
+    DATABASE_URL: postgresql+asyncpg://skrift_test:skrift_test@postgres:5432/skrift_test
+    PYTHONUNBUFFERED: "1"
+    UV_CACHE_DIR: /tmp/uv-cache
+    UV_LINK_MODE: copy
+    UV_PROJECT_ENVIRONMENT: /tmp/skrift-compose-venv
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: skrift_test
+      POSTGRES_PASSWORD: skrift_test
+      POSTGRES_DB: skrift_test
+    ports:
+      - "15434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skrift_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "16381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  receiver:
+    <<: *skrift_app
+    command: uv run python -m webhookreceiver
+    ports:
+      - "8085:8090"
+
+  migrate:
+    <<: *skrift_app
+    command: uv run skrift -f compose.app.yaml db upgrade heads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  seed:
+    <<: *skrift_app
+    command: uv run python -m webhookdemo.bootstrap
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  sender:
+    <<: *skrift_app
+    command: uv run skrift -f compose.app.yaml serve --host 0.0.0.0 --port 8080
+    ports:
+      - "8084:8080"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      receiver:
+        condition: service_started
+
+  worker:
+    <<: *skrift_app
+    command: uv run skrift -f compose.app.yaml workers run --concurrency 4
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      receiver:
+        condition: service_started
+
+  persister:
+    <<: *skrift_app
+    command: uv run skrift -f compose.app.yaml workers persister
+    depends_on:
+      seed:
+        condition: service_completed_successfully

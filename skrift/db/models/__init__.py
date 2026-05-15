@@ -13,6 +13,7 @@ from skrift.db.models.role import Role, RolePermission, user_roles
 from skrift.db.models.setting import Setting
 from skrift.db.models.second_factor import SecondFactorEnrollment
 from skrift.db.models.user import User
+from skrift.db.models.webhook import WebhookDelivery, WebhookDeliveryAttempt
 from skrift.db.models.worker import (
     WorkerArchiveEventRecord,
     WorkerArchiveSnapshotRecord,
@@ -39,6 +40,8 @@ __all__ = [
     "Setting",
     "StoredNotification",
     "User",
+    "WebhookDelivery",
+    "WebhookDeliveryAttempt",
     "WorkerArchiveEventRecord",
     "WorkerArchiveSnapshotRecord",
     "WorkerDeadLetterRecord",

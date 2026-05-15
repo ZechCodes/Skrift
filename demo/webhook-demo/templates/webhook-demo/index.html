@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Webhook Demo - {{ site_name() }}{% endblock %}
+
+{% block content %}
+<main class="sk-container" style="padding: 4rem 1rem;">
+    <h1>Webhook Demo</h1>
+    <p>
+        This Skrift site enqueues outbound webhook calls every few seconds using
+        the durable webhook framework. A second site receives the calls and can
+        be switched into slow, transient-error, or permanent-failure modes.
+    </p>
+    <p>
+        <a href="/admin/webhooks" role="button">Open Webhook Admin</a>
+        <a href="/admin/workers" role="button" class="sk-btn-outline">Workers</a>
+        <a href="{{ receiver_url }}" role="button" class="sk-btn-outline">Receiver Site</a>
+        <a href="{{ direct_receiver_url }}" role="button" class="sk-btn-outline">Receiver Direct</a>
+        <a href="/auth/login" role="button" class="sk-btn-outline">Demo Login</a>
+    </p>
+    <form method="post" action="/webhooks/send">
+        <button type="submit">Send Webhook Now</button>
+    </form>
+</main>
+{% endblock %}

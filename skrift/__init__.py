@@ -34,6 +34,11 @@ from skrift.workers import (
     submit,
     wake,
 )
+from skrift.webhooks import (
+    configure_webhooks,
+    enqueue as enqueue_webhook,
+    enqueue_standalone as enqueue_webhook_standalone,
+)
 
 __all__ = [
     "Agent",
@@ -54,6 +59,9 @@ __all__ = [
     "attach_artifact",
     "audit_export",
     "configure_workers",
+    "configure_webhooks",
+    "enqueue_webhook",
+    "enqueue_webhook_standalone",
     "get_handle",
     "get_runtime",
     "handler",

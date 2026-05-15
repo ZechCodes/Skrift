@@ -1002,6 +1002,138 @@
 }
 
 /* ========================================
+   Webhook Admin
+   ======================================== */
+
+.sk-webhook-stats {
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    margin-bottom: 1.25rem;
+}
+
+.sk-webhook-panel {
+    margin-bottom: 1.25rem;
+}
+
+.sk-webhook-live {
+    background: rgba(52, 211, 153, 0.12);
+    border: 1px solid rgba(52, 211, 153, 0.32);
+    border-radius: 999px;
+    color: var(--sk-color-success);
+    display: inline-flex;
+    font-size: 0.75rem;
+    font-weight: 700;
+    margin-left: 0.625rem;
+    padding: 0.125rem 0.5rem;
+    text-transform: uppercase;
+}
+
+.sk-webhook-live-stale {
+    background: rgba(245, 158, 11, 0.14);
+    border-color: rgba(245, 158, 11, 0.32);
+    color: var(--sk-color-warning);
+}
+
+.sk-panel-subtitle {
+    color: var(--sk-color-muted);
+    font-size: 0.875rem;
+    margin: 0.25rem 0 0;
+}
+
+.sk-webhook-summary-grid {
+    display: grid;
+    gap: 1.25rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sk-webhook-filters {
+    align-items: end;
+}
+
+.sk-webhook-filters button {
+    min-height: 2.25rem;
+}
+
+.sk-webhook-delivery-table {
+    min-width: 78rem;
+}
+
+.sk-webhook-attempt-table {
+    min-width: 70rem;
+}
+
+.sk-webhook-compact-table {
+    min-width: 32rem;
+}
+
+.sk-webhook-check {
+    width: 2.5rem;
+}
+
+.sk-webhook-id {
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.sk-webhook-muted {
+    color: var(--sk-color-muted);
+    font-size: 0.8125rem;
+    margin-top: 0.125rem;
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sk-webhook-result {
+    max-width: 20rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sk-webhook-stat-domain {
+    font-size: 1.125rem;
+    overflow-wrap: anywhere;
+}
+
+.sk-webhook-status {
+    text-transform: capitalize;
+}
+
+.sk-webhook-status-succeeded,
+.sk-webhook-status-success {
+    background: rgba(52, 211, 153, 0.12);
+    color: var(--sk-color-success);
+}
+
+.sk-webhook-status-retrying,
+.sk-webhook-status-queued,
+.sk-webhook-status-sending,
+.sk-webhook-status-retry {
+    background: rgba(245, 158, 11, 0.14);
+    color: var(--sk-color-warning);
+}
+
+.sk-webhook-status-dead,
+.sk-webhook-status-cancelled {
+    background: rgba(239, 68, 68, 0.14);
+    color: var(--sk-color-error);
+}
+
+.sk-webhook-detail-list code,
+.sk-webhook-delivery-table code,
+.sk-webhook-attempt-table code,
+.sk-webhook-compact-table code {
+    font-size: 0.8125rem;
+}
+
+@media (max-width: 1100px) {
+    .sk-webhook-summary-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ========================================
    Light Theme Overrides
    ======================================== */
 

@@ -19,6 +19,7 @@ from skrift.admin.oauth2_clients import OAuth2ClientAdminController  # noqa: F40
 from skrift.admin.api_keys import APIKeyAdminController  # noqa: F401
 from skrift.admin.workers import WorkersAdminController  # noqa: F401
 from skrift.admin.agent_usage import AgentUsageAdminController  # noqa: F401
+from skrift.admin.webhooks import WebhooksAdminController  # noqa: F401
 
 
 class AdminController(Controller):

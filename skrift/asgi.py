@@ -171,6 +171,7 @@ def load_controllers() -> list:
                 "APIKeyAdminController",
                 "WorkersAdminController",
                 "AgentUsageAdminController",
+                "WebhooksAdminController",
             ):
                 sub_class = getattr(module, sub_name, None)
                 if sub_class and sub_class not in controllers:
@@ -1092,6 +1093,11 @@ def create_app() -> ASGIApp:
             if store_cfg.backend == "local":
                 Path(store_cfg.local_path).mkdir(parents=True, exist_ok=True)
 
+        if settings.webhooks.enabled:
+            from skrift.webhooks import configure_webhooks
+
+            configure_webhooks(settings.webhooks, session_maker=db_config.get_session)
+
         if settings.workers.enabled:
             from skrift.agents.config import configure_agent_runtime
             from skrift.workers import configure_workers
@@ -1099,6 +1105,8 @@ def create_app() -> ASGIApp:
 
             validate_worker_runtime_config(settings.workers, context="web")
             configure_agent_runtime(settings.agents)
+            if settings.webhooks.enabled:
+                import skrift.webhooks.jobs  # noqa: F401 - register built-in handlers
 
             worker_runtime = configure_workers(
                 mode=settings.workers.execution,
@@ -1113,6 +1121,13 @@ def create_app() -> ASGIApp:
             )
             if settings.workers.execution != "out_of_process":
                 await worker_runtime.start()
+            if settings.webhooks.enabled:
+                from skrift.webhooks.jobs import ReconcileWebhooks
+
+                await worker_runtime.submit(
+                    ReconcileWebhooks(),
+                    queue="webhooks",
+                )
 
         await hooks.do_action(APP_STARTUP, _app)
 

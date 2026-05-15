@@ -130,6 +130,8 @@ def _import_worker_modules(settings, extra_imports: tuple[str, ...] = ()) -> Non
     for spec in [*settings.controllers, *settings.workers.imports, *extra_imports]:
         module_path = spec.split(":", 1)[0]
         importlib.import_module(module_path)
+    if getattr(settings, "webhooks", None) is not None and settings.webhooks.enabled:
+        importlib.import_module("skrift.webhooks.jobs")
 
 
 def _configure_worker_runtime(settings, *, session_maker, queues, concurrency, mode=None):
@@ -287,6 +289,10 @@ def workers_run(
 
     async def _run():
         db_config = _build_db_config(settings)
+        if settings.webhooks.enabled:
+            from skrift.webhooks import configure_webhooks
+
+            configure_webhooks(settings.webhooks, session_maker=db_config.get_session)
         selected_queues = queues or tuple(settings.workers.queues)
         runtime = _configure_worker_runtime(
             settings,

@@ -72,6 +72,7 @@ nav:
     - Protecting Routes: guides/protecting-routes.md
     - Observability: guides/observability.md
     - Workers: guides/workers.md
+    - Outbound Webhooks: guides/webhooks.md
     - Agents:
       - Overview: guides/agents.md
       - Basic Chat: guides/agent-chat.md

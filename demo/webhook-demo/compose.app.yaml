@@ -1,0 +1,59 @@
+environment: compose
+debug: true
+controllers:
+  - webhookdemo.controllers:WebhookDemoController
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+db:
+  url: $DATABASE_URL
+  pool_pre_ping: true
+redis:
+  url: redis://redis:6379
+auth:
+  redirect_base_url: http://localhost:8084
+  methods:
+    dummy:
+      type: dummy
+      label: Demo Login
+rate_limit:
+  enabled: false
+workers:
+  enabled: true
+  preset: distributed
+  queues:
+    - default
+    - webhooks
+  concurrency: 4
+  poll_interval: 0.1
+  visibility_timeout: 30.0
+  max_reclaims: 3
+  imports:
+    - webhookdemo.controllers
+    - skrift.webhooks.jobs
+  persistence:
+    streams:
+      - workers:lifecycle
+    batch_size: 100
+    flush_interval: 1.0
+    snapshot_keys:
+      - workers:queue_wait_history
+    snapshot_interval: 10.0
+webhooks:
+  enabled: true
+  reconcile_interval_seconds: 15
+  profiles:
+    receiver:
+      url: http://receiver:8090/webhook
+      queue: webhooks
+      signing_secret: compose-webhook-demo-secret
+      timeout_seconds: 20
+      max_attempts: 8
+      dead_letter_after_seconds: 300
+      backoff:
+        initial_seconds: 3
+        factor: 2
+        max_seconds: 30
+        jitter_seconds: 1
+      retention:
+        succeeded_seconds: 86400
+        dead_seconds: 604800

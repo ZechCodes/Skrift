@@ -214,6 +214,21 @@ class TestWorkersAdminController:
         get_runtime.return_value.retry_dlq_entries.assert_awaited_once_with(["abc"])
 
 
+class TestWebhooksAdminController:
+    @pytest.mark.asyncio
+    async def test_webhooks_stream_returns_sse_response(self):
+        from litestar.response.sse import ServerSentEvent
+        from skrift.admin.webhooks import WebhooksAdminController
+
+        controller = WebhooksAdminController(owner=MagicMock())
+        request = MagicMock()
+        request.app.state.session_maker_class = MagicMock()
+
+        result = await controller.stream.fn(controller, request)
+
+        assert isinstance(result, ServerSentEvent)
+
+
 class TestAgentUsageAdminController:
     @pytest.mark.asyncio
     async def test_agent_usage_page_renders_dashboard(self):
