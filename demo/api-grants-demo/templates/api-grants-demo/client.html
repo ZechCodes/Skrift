@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+
+{% block title %}Grant Client - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .demo-shell {
+        max-width: 1120px;
+        margin: 1.5rem auto 2rem;
+        padding: 0 var(--sk-space-md);
+    }
+
+    .demo-shell > hgroup {
+        margin-bottom: var(--sk-space-xl);
+    }
+
+    .demo-shell > hgroup h1 {
+        font-size: clamp(2rem, 4vw, 3rem);
+    }
+
+    .demo-shell > hgroup p {
+        max-width: 48rem;
+    }
+
+    .settings-grid,
+    .case-grid {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .settings-grid {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .case-grid {
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        margin-top: 1.5rem;
+    }
+
+    .case-card,
+    .result-panel,
+    .settings-panel {
+        border: 1px solid var(--sk-color-border, #e5e7eb);
+        border-radius: 0.5rem;
+        padding: var(--sk-space-lg);
+        background: var(--sk-color-surface);
+    }
+
+    .case-card h2,
+    .result-panel h2 {
+        margin-top: 0;
+    }
+
+    .result-panel {
+        margin-bottom: var(--sk-space-lg);
+    }
+
+    .result-summary {
+        display: flex;
+        align-items: center;
+        gap: var(--sk-space-sm);
+        flex-wrap: wrap;
+        margin-bottom: var(--sk-space-lg);
+    }
+
+    .result-summary p {
+        margin: 0;
+    }
+
+    .result-status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 1.75rem;
+        padding: 0 0.65rem;
+        border-radius: var(--sk-radius-pill);
+        background: var(--sk-color-accent-soft);
+        color: var(--sk-color-accent);
+        font-size: 0.875rem;
+        font-weight: 700;
+    }
+
+    .result-status-error {
+        background: color-mix(in srgb, var(--sk-color-error) 16%, transparent);
+        color: var(--sk-color-error);
+    }
+
+    .result-output h3 {
+        margin-bottom: var(--sk-space-sm);
+        font-size: 1.15rem;
+    }
+
+    .button-row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+    }
+
+    .button-row button {
+        flex: 1 1 10rem;
+        margin-top: 0;
+    }
+
+    .muted {
+        color: var(--sk-color-muted, #6b7280);
+    }
+
+    .result-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 1rem;
+    }
+
+    .settings-panel {
+        margin-bottom: var(--sk-space-lg);
+    }
+
+    .settings-panel h2 {
+        font-size: 1.5rem;
+    }
+
+    .settings-panel label {
+        margin-bottom: 0;
+    }
+
+    .settings-panel input {
+        margin-top: var(--sk-space-xs);
+    }
+
+    .settings-panel input[name="service_key"],
+    .json-panel {
+        font-family: var(--sk-font-mono);
+    }
+
+    .json-panel {
+        overflow: auto;
+        max-height: 22rem;
+        margin-bottom: 0;
+        padding: var(--sk-space-md);
+        border: 1px solid var(--sk-color-border);
+        border-radius: var(--sk-radius-md);
+        background: color-mix(in srgb, var(--sk-color-bg) 88%, white 12%);
+        color: var(--sk-color-text);
+        font-size: 0.85rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+    }
+
+    .json-panel code {
+        display: block;
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        font-size: inherit;
+    }
+
+    .case-card {
+        display: flex;
+        min-height: 17rem;
+        flex-direction: column;
+    }
+
+    .case-card h2 {
+        font-size: 1.4rem;
+    }
+
+    .case-card .button-row {
+        margin-top: auto;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="demo-shell">
+    <hgroup>
+        <h1>Skrift Grant Client</h1>
+        <p>Request provider API permissions with and without an existing service API key.</p>
+    </hgroup>
+
+    {% if result %}
+    <section class="result-panel">
+        <h2>Latest Result</h2>
+        {% if result.error %}
+        <div class="result-summary">
+            <span class="result-status result-status-error">Error{% if result.status_code %} {{ result.status_code }}{% endif %}</span>
+            <p>{{ result.error }}</p>
+        </div>
+        {% else %}
+        <div class="result-summary">
+            <span class="result-status">Success</span>
+            <p><strong>{{ result.case.title }}</strong> requested {{ result.mode.replace("-", " ") }}.</p>
+        </div>
+        {% endif %}
+        <div class="result-grid">
+            {% if result.token_response %}
+            <div class="result-output">
+                <h3>Token Exchange</h3>
+                <pre class="json-panel"><code>{{ result.token_response | tojson(indent=2) }}</code></pre>
+            </div>
+            {% endif %}
+            {% if result.api_response %}
+            <div class="result-output">
+                <h3>Provider API Call</h3>
+                <pre class="json-panel"><code>{{ result.api_response | tojson(indent=2) }}</code></pre>
+            </div>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+
+    <form id="grant-settings">
+        <section class="settings-panel">
+            <h2>Demo Settings</h2>
+            <div class="settings-grid">
+                <label>
+                    Provider public URL
+                    <input type="url" name="provider_public_url" value="{{ provider_public_url }}">
+                </label>
+                <label>
+                    Provider internal URL
+                    <input type="url" name="provider_internal_url" value="{{ provider_internal_url }}">
+                </label>
+                <label>
+                    Client public URL
+                    <input type="url" name="client_public_url" value="{{ client_public_url }}">
+                </label>
+                <label>
+                    Service name
+                    <input type="text" name="service_name" value="Skrift Grant Client Demo">
+                </label>
+                <label>
+                    Service URL
+                    <input type="url" name="service_url" value="{{ client_public_url }}">
+                </label>
+                <label>
+                    Service API key
+                    <input type="text" name="service_key" value="{{ seeded_service_key }}">
+                </label>
+            </div>
+            <p class="muted">
+                The seeded key has the known-service and elevated permissions only.
+                Leave it as-is to see the expected successful paths.
+            </p>
+        </section>
+    </form>
+
+    <section class="case-grid">
+        {% for key, case in cases.items() %}
+        <article class="case-card">
+            <h2>{{ case.title }}</h2>
+            <p><code>{{ case.permission }}</code></p>
+            <p>{{ case.summary }}</p>
+            <div class="button-row">
+                <form method="post" action="/grant/start">
+                    {{ csrf_field() }}
+                    <input type="hidden" name="case" value="{{ key }}">
+                    <input type="hidden" name="mode" value="without-key">
+                    <button type="submit">Without API Key</button>
+                </form>
+                <form method="post" action="/grant/start">
+                    {{ csrf_field() }}
+                    <input type="hidden" name="case" value="{{ key }}">
+                    <input type="hidden" name="mode" value="with-key">
+                    <button type="submit">With API Key</button>
+                </form>
+            </div>
+        </article>
+        {% endfor %}
+    </section>
+</main>
+
+<script nonce="{{ csp_nonce() }}">
+(function () {
+    var settings = document.getElementById("grant-settings");
+    if (!settings) {
+        return;
+    }
+    document.querySelectorAll('form[action="/grant/start"]').forEach(function (form) {
+        form.addEventListener("submit", function () {
+            form.querySelectorAll("[data-setting-copy]").forEach(function (input) {
+                input.remove();
+            });
+            new FormData(settings).forEach(function (value, key) {
+                var input = document.createElement("input");
+                input.type = "hidden";
+                input.name = key;
+                input.value = value;
+                input.dataset.settingCopy = "true";
+                form.appendChild(input);
+            });
+        });
+    });
+})();
+</script>
+{% endblock %}

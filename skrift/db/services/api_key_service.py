@@ -51,6 +51,11 @@ async def create_api_key(
     scoped_roles: list[str] | None = None,
     expires_at: datetime | None = None,
     refresh_token_expiration_days: int = 30,
+    principal_type: str = "user",
+    service_name: str | None = None,
+    service_url: str | None = None,
+    parent_api_key_id: UUID | str | None = None,
+    grant_source: str | None = None,
 ) -> tuple[APIKey, str, str]:
     """Create a new API key.
 
@@ -71,6 +76,11 @@ async def create_api_key(
         key_hash=key_hash,
         scoped_permissions="\n".join(scoped_permissions) if scoped_permissions else None,
         scoped_roles="\n".join(scoped_roles) if scoped_roles else None,
+        principal_type=principal_type,
+        service_name=service_name,
+        service_url=service_url,
+        parent_api_key_id=str(parent_api_key_id) if parent_api_key_id else None,
+        grant_source=grant_source,
         expires_at=expires_at,
         refresh_token_hash=refresh_hash,
         refresh_token_expires_at=refresh_expires,
@@ -117,6 +127,52 @@ async def verify_api_key(
     await db_session.commit()
 
     return api_key
+
+
+async def verify_api_key_with_permissions(
+    db_session: AsyncSession,
+    raw_key: str,
+    *,
+    client_ip: str | None = None,
+):
+    """Verify an API key and return it with its effective user permissions."""
+    api_key = await verify_api_key(db_session, raw_key, client_ip=client_ip)
+    if api_key is None:
+        return None
+
+    return api_key, await effective_permissions_for_api_key(db_session, api_key)
+
+
+async def effective_permissions_for_api_key(
+    db_session: AsyncSession,
+    api_key: APIKey,
+):
+    """Return the effective permissions for an already-loaded API key."""
+    from skrift.auth.roles import ROLE_DEFINITIONS
+    from skrift.auth.services import UserPermissions, get_user_permissions
+
+    user_perms = await get_user_permissions(db_session, str(api_key.user_id))
+
+    key_permissions = set(api_key.scoped_permission_list)
+    key_roles = set(api_key.scoped_role_list)
+
+    if not key_permissions and not key_roles:
+        return user_perms
+
+    scoped = set()
+    if key_roles:
+        for role_name in key_roles & user_perms.roles:
+            role_def = ROLE_DEFINITIONS.get(role_name)
+            if role_def:
+                scoped.update(role_def.permissions)
+    if key_permissions:
+        scoped.update(key_permissions)
+
+    return UserPermissions(
+        user_id=str(api_key.user_id),
+        roles=key_roles & user_perms.roles if key_roles else set(),
+        permissions=scoped & user_perms.permissions,
+    )
 
 
 async def refresh_api_key(

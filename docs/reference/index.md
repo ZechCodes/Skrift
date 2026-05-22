@@ -82,6 +82,14 @@ Technical reference documentation for Skrift.
 
     [:octicons-arrow-right-24: API Keys](api-keys.md)
 
+-   :material-account-key:{ .lg .middle } **API Permission Grants**
+
+    ---
+
+    OAuth-style flow for third-party services to request scoped, user-bound API keys.
+
+    [:octicons-arrow-right-24: API Permission Grants](api-grants.md)
+
 </div>
 
 ## Styling

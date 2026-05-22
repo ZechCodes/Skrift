@@ -8,6 +8,71 @@ from skrift.controllers.sitemap import SitemapController, SitemapEntry
 from skrift.lib.hooks import hooks
 
 
+class TestSkriftDiscovery:
+    """Test /.well-known/skrift discovery."""
+
+    @pytest.mark.asyncio
+    async def test_skrift_discovery_404_when_disabled(self):
+        from litestar.exceptions import NotFoundException
+
+        controller = SitemapController(owner=MagicMock())
+        request = MagicMock()
+
+        with patch("skrift.config.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                api_keys=MagicMock(enabled=True),
+                api_grants=MagicMock(discovery_enabled=False),
+            )
+            with pytest.raises(NotFoundException):
+                await controller.skrift_discovery.fn(controller, request)
+
+    @pytest.mark.asyncio
+    async def test_skrift_discovery_lists_only_anonymous_permissions(self):
+        from skrift.auth.permissions import (
+            ALLOW_ANONYMOUS_SERVICE,
+            PERMISSION_DEFINITIONS,
+            REQUIRE_KNOWN_SERVICE,
+            register_permission,
+        )
+
+        original = dict(PERMISSION_DEFINITIONS)
+        PERMISSION_DEFINITIONS.clear()
+        try:
+            register_permission(
+                "read-public",
+                display_name="Read Public",
+                description="Read public data.",
+                service_clearance=ALLOW_ANONYMOUS_SERVICE,
+            )
+            register_permission(
+                "sync-known",
+                display_name="Sync Known",
+                service_clearance=REQUIRE_KNOWN_SERVICE,
+            )
+            controller = SitemapController(owner=MagicMock())
+            request = MagicMock()
+            request.base_url = "https://site.example/"
+
+            with patch("skrift.config.get_settings") as mock_settings:
+                mock_settings.return_value = MagicMock(
+                    api_keys=MagicMock(enabled=True),
+                    api_grants=MagicMock(discovery_enabled=True),
+                )
+                response = await controller.skrift_discovery.fn(controller, request)
+
+            permissions = response.content["api_grants"]["anonymous_permissions"]
+            assert permissions == [
+                {
+                    "slug": "read-public",
+                    "display_name": "Read Public",
+                    "description": "Read public data.",
+                }
+            ]
+        finally:
+            PERMISSION_DEFINITIONS.clear()
+            PERMISSION_DEFINITIONS.update(original)
+
+
 class TestSecurityTxt:
     """Test the security.txt route."""
 

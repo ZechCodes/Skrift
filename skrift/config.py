@@ -477,6 +477,13 @@ class APIKeyConfig(BaseModel):
     refresh_token_expiration_days: int = 30
 
 
+class APIGrantConfig(BaseModel):
+    """Third-party API permission grant flow configuration."""
+
+    enabled: bool = True
+    discovery_enabled: bool = False
+
+
 class NotificationsConfig(BaseModel):
     """Notification backend configuration."""
 
@@ -892,6 +899,9 @@ class Settings(BaseSettings):
     # API key configuration
     api_keys: APIKeyConfig = APIKeyConfig()
 
+    # Third-party API permission grants
+    api_grants: APIGrantConfig = APIGrantConfig()
+
     # Session config (loaded from app.yaml)
     session: SessionConfig = SessionConfig()
 
@@ -1044,6 +1054,9 @@ def get_settings() -> Settings:
 
     if "oauth2_enabled" in app_config:
         kwargs["oauth2_enabled"] = app_config["oauth2_enabled"]
+
+    if "api_grants" in app_config:
+        kwargs["api_grants"] = APIGrantConfig(**app_config["api_grants"])
 
     if "storage" in app_config:
         storage_data = app_config["storage"]

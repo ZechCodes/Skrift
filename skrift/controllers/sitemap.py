@@ -188,3 +188,40 @@ Sitemap: {sitemap_url}
             media_type="text/plain",
             headers={"Content-Type": "text/plain; charset=utf-8"},
         )
+
+    @get("/.well-known/skrift")
+    async def skrift_discovery(self, request: Request) -> Response:
+        """Skrift API grant discovery document."""
+        from skrift.auth.permissions import ALLOW_ANONYMOUS_SERVICE, list_permission_definitions
+        from skrift.config import get_settings
+
+        settings = get_settings()
+        if not settings.api_keys.enabled or not settings.api_grants.discovery_enabled:
+            raise NotFoundException()
+
+        issuer = str(request.base_url).rstrip("/")
+        anonymous_permissions = [
+            {
+                "slug": permission.slug,
+                "display_name": permission.display_name,
+                "description": permission.description,
+            }
+            for permission in list_permission_definitions()
+            if permission.service_clearance == ALLOW_ANONYMOUS_SERVICE
+        ]
+
+        return Response(
+            content={
+                "skrift": True,
+                "version": 1,
+                "api_grants": {
+                    "authorization_endpoint": f"{issuer}/api/grants/authorize",
+                    "request_endpoint": f"{issuer}/api/grants/request",
+                    "token_endpoint": f"{issuer}/api/grants/token",
+                    "code_challenge_methods_supported": ["S256"],
+                    "anonymous_permissions": anonymous_permissions,
+                },
+            },
+            status_code=200,
+            media_type="application/json",
+        )

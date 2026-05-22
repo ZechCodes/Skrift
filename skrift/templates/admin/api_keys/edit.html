@@ -60,6 +60,7 @@ function copyValue(btn, text) {
 <div style="margin-bottom: 1.5rem; padding: 1rem; background: var(--sk-color-bg-subtle, #f8f9fa); border-radius: 0.5rem;">
     <p><strong>Key Prefix:</strong> <code>{{ api_key.key_prefix }}...</code></p>
     <p><strong>User:</strong> {{ api_key.user.name or api_key.user.email }}</p>
+    <p><strong>Principal:</strong> {{ api_key.principal_type }}{% if api_key.service_name %} — {{ api_key.service_name }}{% endif %}</p>
     <p><strong>Created:</strong> {{ api_key.created_at.strftime("%Y-%m-%d %H:%M UTC") }}</p>
     {% if api_key.last_used_at %}
     <p><strong>Last Used:</strong> {{ api_key.last_used_at.strftime("%Y-%m-%d %H:%M UTC") }}{% if api_key.last_used_ip %} from {{ api_key.last_used_ip }}{% endif %}</p>
@@ -118,6 +119,15 @@ function copyValue(btn, text) {
         <label>
             <input type="checkbox" name="perm_{{ perm }}" {% if api_key and perm in api_key.scoped_permission_list %}checked{% endif %}>
             <span>{{ perm }}</span>
+            {% set permission = permission_definitions.get(perm) %}
+            {% if permission %}
+            <span>
+                <strong>{{ permission.display_name }}</strong>
+                {% if permission.description %}
+                <small class="sk-text-muted"> — {{ permission.description }}</small>
+                {% endif %}
+            </span>
+            {% endif %}
         </label>
         {% endfor %}
     </fieldset>

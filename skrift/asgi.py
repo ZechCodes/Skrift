@@ -994,10 +994,13 @@ def create_app() -> ASGIApp:
 
     # API auth controller — only registered when api_keys are enabled
     from skrift.controllers.api_auth import APIAuthController
+    from skrift.controllers.api_grants import APIGrantController
 
     api_auth_handlers: list = []
     if settings.api_keys.enabled:
         api_auth_handlers.append(APIAuthController)
+        if settings.api_grants.enabled:
+            api_auth_handlers.append(APIGrantController)
 
     # OAuth2 controller — only registered when oauth2 is enabled
     oauth2_handlers: list = []
