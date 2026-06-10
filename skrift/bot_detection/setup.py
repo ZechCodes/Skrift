@@ -2,9 +2,9 @@
 
 Called once at app startup. Registers:
 
-- A :data:`~skrift.lib.hooks.ROBOTS_TXT` filter that injects the
+- A :data:`~skrift.hooks.ROBOTS_TXT` filter that injects the
   rotating ``Disallow: <trap_path>/<token>`` rule.
-- A :data:`~skrift.lib.hooks.ROBOTS_TXT_FETCHED` action handler that
+- A :data:`~skrift.hooks.ROBOTS_TXT_FETCHED` action handler that
   records the fetcher's IP in the cross-request state store.
 
 These are external to the middleware because they fire from the
@@ -24,7 +24,7 @@ from skrift.bot_detection.honeypot import (
     trap_url,
 )
 from skrift.bot_detection.store import BotStateStore
-from skrift.lib.hooks import ROBOTS_TXT, ROBOTS_TXT_FETCHED, hooks
+from skrift.hooks import ROBOTS_TXT, ROBOTS_TXT_FETCHED, hooks
 
 logger = logging.getLogger(__name__)
 

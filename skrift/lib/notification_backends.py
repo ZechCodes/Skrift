@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 from uuid import UUID
 
-from skrift.lib.notifications import Notification, NotificationMode, _parse_source_key
+from skrift.notifications import Notification, NotificationMode, _parse_source_key
 
 if TYPE_CHECKING:
     from skrift.config import Settings

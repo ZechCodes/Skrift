@@ -15,7 +15,7 @@ from skrift.auth.providers import NormalizedUserData
 from skrift.db.models.oauth_account import OAuthAccount
 from skrift.db.models.second_factor import SecondFactorEnrollment
 from skrift.db.models.user import User
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 @dataclass

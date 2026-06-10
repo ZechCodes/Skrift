@@ -9,7 +9,7 @@ from skrift.bot_detection.hooks import BOT_DETECTED, BOT_DETECTION_RESULT
 from skrift.bot_detection.middleware import BotDetectionMiddleware
 from skrift.bot_detection.store import InMemoryBotStateStore
 from skrift.bot_detection.types import BotDetectionResult, MetricResult, Signal
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 @dataclass

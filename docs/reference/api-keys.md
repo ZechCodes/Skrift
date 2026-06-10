@@ -10,6 +10,10 @@ api_keys:
   default_expiration_days: 365       # default key lifetime
   max_keys_per_user: 10              # per-user key limit
   refresh_token_expiration_days: 30  # refresh token lifetime
+
+api_grants:
+  enabled: true                      # third-party permission grant flow
+  discovery_enabled: false           # serve /.well-known/skrift
 ```
 
 ## Creating Keys
@@ -34,6 +38,13 @@ curl -H "Authorization: Bearer sk_abc123..." https://example.com/api/pages
 ```
 
 The key resolves to the associated user. If the key has scoped permissions, the effective permissions are the **intersection** of the user's permissions and the key's scoped permissions. If no scoping is set, the key inherits all of the user's permissions.
+
+API keys also have a principal type:
+
+| Principal | Description |
+|-----------|-------------|
+| `user` | A normal user API key, usually created by an administrator. |
+| `service` | A service key issued through the API permission grant flow. Service keys are still bound to a user and still respect that user's effective permissions. |
 
 ## Route Declaration
 
@@ -118,3 +129,7 @@ Admins can also manually rotate keys from the admin UI via the **Rotate Key** bu
 | `after_api_key_refreshed` | `api_key` | After a key is rotated via refresh token |
 | `before_api_key_deleted` | `api_key` | Before a key is permanently deleted |
 | `after_api_key_deleted` | `key_id` | After a key is permanently deleted |
+
+## See Also
+
+- [API Permission Grants](api-grants.md) — OAuth-style flow for third-party services to request scoped API keys

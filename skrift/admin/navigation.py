@@ -17,6 +17,25 @@ if TYPE_CHECKING:
 ADMIN_NAV_TAG = "admin-nav"
 
 
+def admin_nav(label: str, *, icon: str = "circle", order: int = 100) -> dict:
+    """Route kwargs that list a handler in the admin sidebar.
+
+    Usage::
+
+        @get("/", guards=[auth_guard, Permission("view-reports")],
+             **admin_nav("Reports", icon="bar-chart", order=50))
+        async def reports_index(...) -> ...: ...
+
+    Equivalent to passing ``tags=[ADMIN_NAV_TAG]`` and an ``opt`` dict with
+    label/icon/order. ``icon`` is a Lucide icon name; lower ``order`` sorts
+    higher in the sidebar.
+    """
+    return {
+        "tags": [ADMIN_NAV_TAG],
+        "opt": {"label": label, "icon": icon, "order": order},
+    }
+
+
 @dataclass
 class AdminNavItem:
     """Represents a navigation item in the admin sidebar."""

@@ -9,7 +9,7 @@ from skrift.auth.methods.base import PrimaryAuthMethod, PrimaryAuthMethodDescrip
 from skrift.auth.session_keys import SESSION_AUTH_NEXT
 from skrift.config import get_settings
 from skrift.lib.redirects import is_safe_redirect_url
-from skrift.lib.template import resolve_template_name
+from skrift.template import resolve_template_name
 from skrift.setup.providers import DUMMY_PROVIDER_KEY
 
 

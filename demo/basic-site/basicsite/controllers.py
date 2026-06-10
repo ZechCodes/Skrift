@@ -13,9 +13,9 @@ from sqlalchemy.orm import selectinload
 from skrift.db.models.user import User
 from skrift.db.services import page_service
 from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url
-from skrift.lib.seo import get_page_seo_meta, get_page_og_meta
-from skrift.lib.storage import StorageManager
-from skrift.lib.template import Template
+from skrift.seo import get_page_seo_meta, get_page_og_meta
+from skrift.storage import StorageManager
+from skrift.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent.parent / "skrift" / "templates"
 

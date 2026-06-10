@@ -1,7 +1,7 @@
 """Blog hooks — real-time notification when posts are published."""
 
-from skrift.lib.hooks import action, AFTER_PAGE_SAVE
-from skrift.lib.notifications import notify_session, NotificationMode
+from skrift.hooks import action, AFTER_PAGE_SAVE
+from skrift.notifications import notify_session, NotificationMode
 
 _blog_session_nids: set[str] = set()
 

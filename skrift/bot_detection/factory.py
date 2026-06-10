@@ -23,7 +23,7 @@ from skrift.bot_detection.store import (
     InMemoryBotStateStore,
     RedisBotStateStore,
 )
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 if TYPE_CHECKING:
     from skrift.config import RedisConfig

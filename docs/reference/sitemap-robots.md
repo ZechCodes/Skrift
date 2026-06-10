@@ -80,7 +80,7 @@ Sitemap: https://yoursite.com/sitemap.xml
 ### Exclude Pages from Sitemap
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("sitemap_page")
 def exclude_internal_pages(entry, page):
@@ -93,7 +93,7 @@ def exclude_internal_pages(entry, page):
 ### Modify Sitemap Entry
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("sitemap_page")
 def adjust_priority(entry, page):
@@ -107,7 +107,7 @@ def adjust_priority(entry, page):
 ### Add Custom URLs
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 from skrift.controllers.sitemap import SitemapEntry
 from datetime import datetime, UTC
 
@@ -126,7 +126,7 @@ def add_api_docs(entries):
 ### Customize robots.txt
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("robots_txt")
 def customize_robots(content):
@@ -190,7 +190,7 @@ The sitemap and robots.txt are generated on each request. For high-traffic sites
 2. Adding a filter that caches the result
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 from functools import lru_cache
 from datetime import datetime, timedelta
 

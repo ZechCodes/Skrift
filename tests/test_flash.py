@@ -2,7 +2,7 @@
 
 import pytest
 
-from skrift.lib.flash import (
+from skrift.flash import (
     FlashType,
     FlashMessage,
     add_flash,

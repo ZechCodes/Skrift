@@ -71,7 +71,7 @@ These are no-ops when logfire is not active.
 The `logfire_configured` action fires after all built-in instrumentation is set up. Use it to add your own:
 
 ```python
-from skrift.lib.hooks import action
+from skrift.hooks import action
 from skrift.lib.observability import get_logfire
 
 @action("logfire_configured")

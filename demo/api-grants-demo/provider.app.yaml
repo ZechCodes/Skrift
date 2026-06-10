@@ -1,0 +1,25 @@
+environment: compose
+debug: true
+controllers:
+  - apigrantsdemo.provider:ProviderDemoController
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+db:
+  url: $PROVIDER_DATABASE_URL
+auth:
+  redirect_base_url: http://localhost:8091
+  methods:
+    dummy:
+      type: dummy
+      label: Demo Login
+api_keys:
+  enabled: true
+  default_expiration_days: 365
+  refresh_token_expiration_days: 30
+api_grants:
+  enabled: true
+  discovery_enabled: true
+security_headers:
+  content_security_policy: "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'; form-action 'self' http://localhost:8091 http://localhost:8092; base-uri 'self'"
+rate_limit:
+  enabled: false

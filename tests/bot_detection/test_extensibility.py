@@ -24,7 +24,7 @@ from skrift.bot_detection.hooks import BOT_METRICS
 from skrift.bot_detection.middleware import BotDetectionMiddleware
 from skrift.bot_detection.store import InMemoryBotStateStore
 from skrift.bot_detection.types import MetricResult, Signal
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 class CustomMetric:

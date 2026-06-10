@@ -30,8 +30,9 @@ from skrift.auth.roles import permissions_for_type
 from skrift.config import PageTypeConfig
 from skrift.db.services import page_service, revision_service
 from skrift.db.services.asset_service import get_asset_url
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
-from skrift.lib.storage import StorageManager
+from skrift.flash import flash_error, flash_success, get_flash_messages
+from skrift.hooks import PAGE_ADMIN_CAN_MUTATE, PAGE_ADMIN_PAGE_STATE, hooks
+from skrift.storage import StorageManager
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,31 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             return Redirect(path=admin_base)
         return None
 
+    async def _page_admin_states(request, db_session, pages):
+        states = {}
+        for page in pages:
+            states[str(page.id)] = await hooks.apply_filters(
+                PAGE_ADMIN_PAGE_STATE,
+                {"locked": False, "badges": []},
+                request,
+                db_session,
+                page,
+            )
+        return states
+
+    async def _ensure_page_mutable(request, db_session, page, action: str) -> bool:
+        allowed = await hooks.apply_filters(
+            PAGE_ADMIN_CAN_MUTATE,
+            True,
+            request,
+            db_session,
+            page,
+            action,
+        )
+        if not allowed:
+            flash_error(request, f"This {label.lower()} is managed by another service.")
+        return allowed
+
     class _PageTypeController(Controller):
         path = "/admin"
         guards = [auth_guard]
@@ -89,6 +115,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 permissions=ctx["permissions"],
                 manage_permission=perms["manage"],
             )
+            page_states = await _page_admin_states(request, db_session, pages)
 
             flash_messages = get_flash_messages(request)
             return TemplateResponse(
@@ -96,6 +123,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 context={
                     "flash_messages": flash_messages,
                     "pages": pages,
+                    "page_states": page_states,
                     **page_type_ctx,
                     **ctx,
                 },
@@ -145,7 +173,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             user_id = UUID(request.session[SESSION_USER_ID])
 
             try:
-                page = await create_typed_page(
+                await create_typed_page(
                     db_session,
                     user_id=user_id,
                     form=form,
@@ -177,6 +205,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             await check_page_access(
                 db_session, request, page, perms["edit_own"], perms["manage"]
             )
+            if not await _ensure_page_mutable(request, db_session, page, "edit"):
+                return Redirect(path=admin_base)
 
             # Resolve asset URLs for attached assets
             storage: StorageManager = request.app.state.storage_manager
@@ -226,6 +256,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             await check_page_access(
                 db_session, request, page, perms["edit_own"], perms["manage"]
             )
+            if not await _ensure_page_mutable(request, db_session, page, "update"):
+                return Redirect(path=admin_base)
 
             try:
                 await update_typed_page(
@@ -255,6 +287,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             page = await page_service.get_page_by_id(db_session, page_id)
             if redirect := _get_page_or_redirect(page, request):
                 return redirect
+            if not await _ensure_page_mutable(request, db_session, page, "publish"):
+                return Redirect(path=admin_base)
 
             await page_service.update_page(
                 db_session,
@@ -276,6 +310,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             page = await page_service.get_page_by_id(db_session, page_id)
             if redirect := _get_page_or_redirect(page, request):
                 return redirect
+            if not await _ensure_page_mutable(request, db_session, page, "unpublish"):
+                return Redirect(path=admin_base)
 
             await page_service.update_page(
                 db_session,
@@ -300,6 +336,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             await check_page_access(
                 db_session, request, page, perms["delete_own"], perms["manage"]
             )
+            if not await _ensure_page_mutable(request, db_session, page, "delete"):
+                return Redirect(path=admin_base)
 
             page_title = page.title
             await page_service.delete_page(db_session, page_id)
@@ -356,6 +394,8 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
             await check_page_access(
                 db_session, request, page, perms["edit_own"], perms["manage"]
             )
+            if not await _ensure_page_mutable(request, db_session, page, "restore_revision"):
+                return Redirect(path=admin_base)
 
             revision = await revision_service.get_revision(db_session, revision_id)
             if not revision or revision.page_id != page_id:

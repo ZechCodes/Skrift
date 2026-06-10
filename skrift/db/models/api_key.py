@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import datetime, timezone
+from typing import Any
 from typing import TYPE_CHECKING
+from uuid import UUID
 
-from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey
+from advanced_alchemy.types import DateTimeUTC
+from sqlalchemy import String, Text, Boolean, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from skrift.db.base import Base
 
 if TYPE_CHECKING:
     from skrift.db.models.user import User
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class APIKey(Base):
@@ -25,7 +35,7 @@ class APIKey(Base):
     __tablename__ = "api_keys"
 
     # Owner
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
@@ -41,12 +51,22 @@ class APIKey(Base):
     scoped_permissions: Mapped[str | None] = mapped_column(Text, nullable=True)
     scoped_roles: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Principal metadata
+    principal_type: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
+    service_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    service_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    parent_api_key_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    grant_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    constraints: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Lifecycle
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTimeUTC(timezone=True), nullable=True)
 
     # Usage tracking
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTimeUTC(timezone=True), nullable=True)
     last_used_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
 
     # Refresh token (for key rotation)
@@ -54,7 +74,7 @@ class APIKey(Base):
         String(128), unique=True, index=True, nullable=True
     )
     refresh_token_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        DateTimeUTC(timezone=True), nullable=True
     )
 
     # Relationships
@@ -75,19 +95,28 @@ class APIKey(Base):
         return [r.strip() for r in self.scoped_roles.split("\n") if r.strip()]
 
     @property
+    def constraint_data(self) -> dict[str, Any]:
+        """Parse JSON API-key constraints into a dictionary."""
+        if not self.constraints:
+            return {}
+        try:
+            data = json.loads(self.constraints)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @property
     def is_expired(self) -> bool:
         """Check if the key has expired."""
         if self.expires_at is None:
             return False
-        from datetime import timezone
 
-        return datetime.now(tz=timezone.utc) >= self.expires_at
+        return datetime.now(tz=timezone.utc) >= _as_utc(self.expires_at)
 
     @property
     def refresh_token_expired(self) -> bool:
         """Check if the refresh token has expired."""
         if self.refresh_token_expires_at is None:
             return True  # No refresh token = considered expired
-        from datetime import timezone
 
-        return datetime.now(tz=timezone.utc) >= self.refresh_token_expires_at
+        return datetime.now(tz=timezone.utc) >= _as_utc(self.refresh_token_expires_at)

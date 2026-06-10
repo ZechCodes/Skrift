@@ -523,7 +523,7 @@ The form system integrates with Skrift's [hook/filter system](hooks-and-filters.
 Fires for a specific form only. The hook name includes the form name:
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("form_contact_validated")
 async def sanitize_contact_data(data):
@@ -537,7 +537,7 @@ async def sanitize_contact_data(data):
 Fires for all forms:
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("form_validated")
 async def log_form_submission(data, name):
@@ -637,7 +637,7 @@ class ContactController(Controller):
 
 ```python
 # myapp/hooks.py
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("form_contact_validated")
 async def normalize_contact(data):

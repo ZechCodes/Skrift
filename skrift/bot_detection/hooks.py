@@ -1,9 +1,9 @@
 """Hook constants exposed by the bot detection component.
 
-These names are also defined in :mod:`skrift.lib.hooks` (alongside the
+These names are also defined in :mod:`skrift.hooks` (alongside the
 other Skrift hook constants for discoverability). They live here too
 so that anything importing the component does not need to reach into
-``skrift.lib.hooks`` for the names.
+``skrift.hooks`` for the names.
 
 Filters
 -------

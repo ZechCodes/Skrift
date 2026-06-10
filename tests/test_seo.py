@@ -3,13 +3,13 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
-from skrift.lib.seo import (
+from skrift.seo import (
     SEOMeta,
     OpenGraphMeta,
     get_page_seo_meta,
     get_page_og_meta,
 )
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 @pytest.fixture

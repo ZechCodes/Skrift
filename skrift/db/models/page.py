@@ -11,6 +11,8 @@ from skrift.db.models.page_asset import page_assets
 if TYPE_CHECKING:
     from skrift.db.models.asset import Asset
     from skrift.db.models.page_revision import PageRevision
+    from skrift.db.models.page_republish import PageRepublish
+    from skrift.db.models.user import User
 
 
 class Page(Base):
@@ -64,4 +66,12 @@ class Page(Base):
     # Assets relationship (many-to-many via page_assets)
     assets: Mapped[list["Asset"]] = relationship(
         "Asset", secondary=page_assets, lazy="selectin"
+    )
+
+    republish: Mapped["PageRepublish | None"] = relationship(
+        "PageRepublish",
+        back_populates="page",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        uselist=False,
     )

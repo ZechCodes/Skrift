@@ -7,7 +7,7 @@ import hashlib
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from skrift.lib.storage.base import StoredFile
+from skrift.storage.base import StoredFile
 
 
 class LocalStorageBackend:

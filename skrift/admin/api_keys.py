@@ -14,12 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skrift.admin.helpers import get_admin_context
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.auth.guards import Permission, auth_guard
+from skrift.auth.permissions import get_permission_definition
 from skrift.auth.roles import ROLE_DEFINITIONS
 from skrift.config import get_settings
-from skrift.db.models.api_key import APIKey
 from skrift.db.models.user import User
 from skrift.db.services import api_key_service
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
+from skrift.flash import flash_error, flash_success, get_flash_messages
 
 
 def _all_permissions() -> list[str]:
@@ -29,7 +29,7 @@ def _all_permissions() -> list[str]:
         perms.update(role_def.permissions)
     # Remove the special administrator permission — it's implicit
     perms.discard("administrator")
-    return sorted(perms)
+    return sorted(perms, key=lambda p: get_permission_definition(p).display_name)
 
 
 class APIKeyAdminController(Controller):
@@ -80,6 +80,9 @@ class APIKeyAdminController(Controller):
                 "api_key": None,
                 "users": users,
                 "available_permissions": _all_permissions(),
+                "permission_definitions": {
+                    p: get_permission_definition(p) for p in _all_permissions()
+                },
                 "available_roles": {
                     name: rd for name, rd in ROLE_DEFINITIONS.items() if name != "admin"
                 },
@@ -179,6 +182,9 @@ class APIKeyAdminController(Controller):
                 "api_key": api_key,
                 "users": users,
                 "available_permissions": _all_permissions(),
+                "permission_definitions": {
+                    p: get_permission_definition(p) for p in _all_permissions()
+                },
                 "available_roles": {
                     name: rd for name, rd in ROLE_DEFINITIONS.items() if name != "admin"
                 },

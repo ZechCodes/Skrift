@@ -29,8 +29,8 @@ from litestar import Controller, get, Request
 from litestar.response import Template as TemplateResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from skrift.auth.guards import auth_guard, Permission
-from skrift.admin.navigation import ADMIN_NAV_TAG
+from skrift import auth_guard, Permission
+from skrift.admin import admin_nav, get_admin_context
 
 
 class ReportsController(Controller):
@@ -41,13 +41,8 @@ class ReportsController(Controller):
 
     @get(
         "/",
-        tags=[ADMIN_NAV_TAG],  # Registers in admin navigation
         guards=[auth_guard, Permission("view-reports")],
-        opt={
-            "label": "Reports",     # Navigation label
-            "icon": "bar-chart",    # Lucide icon name
-            "order": 50,            # Sort order (lower = higher)
-        },
+        **admin_nav("Reports", icon="bar-chart", order=50),
     )
     async def reports_index(
         self,
@@ -55,10 +50,7 @@ class ReportsController(Controller):
         db_session: AsyncSession,
     ) -> TemplateResponse:
         """Reports dashboard."""
-        # Get admin context for navigation
-        from skrift.admin.controller import AdminController
-        admin = AdminController()
-        ctx = await admin._get_admin_context(request, db_session)
+        ctx = await get_admin_context(request, db_session)
 
         return TemplateResponse(
             "admin/reports/index.html",
@@ -118,26 +110,39 @@ controllers:
 
 ### 4. Define the Permission (Optional)
 
-If using a custom permission, add it to your roles configuration. Edit `skrift/auth/roles.py` or create custom roles:
+If using a custom permission, register it (and optionally a role granting it) at import time — e.g. in your controllers module:
 
 ```python
-ROLE_DEFINITIONS = {
-    "admin": {
-        "description": "Full administrative access",
-        "permissions": ["administrator"],
-    },
-    "analyst": {
-        "description": "View reports and analytics",
-        "permissions": ["view-reports"],
-    },
-}
+from skrift.auth.permissions import register_permission
+from skrift.auth.roles import register_role
+
+register_permission(
+    "view-reports",
+    display_name="View Reports",
+    description="Access the reports dashboard",
+)
+register_role("analyst", "view-reports", description="View reports and analytics")
 ```
 
 ## Route Configuration Reference
 
-The `@get` decorator accepts these options for admin navigation:
+`admin_nav()` produces the route kwargs that register a handler in the sidebar:
 
 ```python
+from skrift.admin import admin_nav
+
+@get(
+    "/admin/custom",
+    guards=[auth_guard, Permission("custom-permission")],
+    **admin_nav("Custom Page", icon="star", order=50),
+)
+```
+
+It expands to `tags=[ADMIN_NAV_TAG]` plus an `opt` dict — the long form below is equivalent if you need to set other `opt` keys:
+
+```python
+from skrift.admin import ADMIN_NAV_TAG
+
 @get(
     "/admin/custom",
     tags=[ADMIN_NAV_TAG],           # Required for nav inclusion
@@ -258,15 +263,12 @@ The `admin/base.html` template provides:
 
 ## Getting Admin Context
 
-To include the navigation sidebar, you need the admin context. Use the `AdminController` helper method:
+To include the navigation sidebar, build the admin context with the public helper:
 
 ```python
-from skrift.admin.controller import AdminController
+from skrift.admin import get_admin_context
 
-async def get_admin_context(request: Request, db_session: AsyncSession) -> dict:
-    """Get admin context including navigation."""
-    admin = AdminController()
-    return await admin._get_admin_context(request, db_session)
+ctx = await get_admin_context(request, db_session)
 ```
 
 The context includes:
@@ -289,9 +291,8 @@ from litestar import Controller, get, Request
 from litestar.response import Template as TemplateResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from skrift.auth.guards import auth_guard, Permission
-from skrift.admin.navigation import ADMIN_NAV_TAG
-from skrift.admin.controller import AdminController
+from skrift import auth_guard, Permission
+from skrift.admin import admin_nav, get_admin_context
 
 
 class AnalyticsController(Controller):
@@ -300,18 +301,10 @@ class AnalyticsController(Controller):
     path = "/admin/analytics"
     guards = [auth_guard]
 
-    async def _get_context(
-        self, request: Request, db_session: AsyncSession
-    ) -> dict:
-        """Get admin context."""
-        admin = AdminController()
-        return await admin._get_admin_context(request, db_session)
-
     @get(
         "/",
-        tags=[ADMIN_NAV_TAG],
         guards=[auth_guard, Permission("view-analytics")],
-        opt={"label": "Analytics", "icon": "activity", "order": 35},
+        **admin_nav("Analytics", icon="activity", order=35),
     )
     async def dashboard(
         self,
@@ -319,7 +312,7 @@ class AnalyticsController(Controller):
         db_session: AsyncSession,
     ) -> TemplateResponse:
         """Analytics dashboard."""
-        ctx = await self._get_context(request, db_session)
+        ctx = await get_admin_context(request, db_session)
 
         return TemplateResponse(
             "admin/analytics/dashboard.html",

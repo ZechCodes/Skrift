@@ -26,7 +26,7 @@ from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.auth.guards import Permission, auth_guard
 from skrift.config import get_settings
 from skrift.db.models.webhook import WebhookDelivery, WebhookDeliveryAttempt
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
+from skrift.flash import flash_error, flash_success, get_flash_messages
 from skrift.webhooks import retry_delivery
 
 

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skrift.admin.helpers import get_admin_context
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.auth.guards import Permission, auth_guard
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
+from skrift.flash import flash_error, flash_success, get_flash_messages
 from skrift.workers import (
     LIFECYCLE_STREAM,
     DeadLetterCause,

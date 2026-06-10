@@ -1,0 +1,54 @@
+<section class="account-panel">
+    <div class="account-header">
+        <h2>Republishing</h2>
+        <a href="/account/republish/links/new" role="button">Link Site</a>
+    </div>
+
+    <h3>Sites This Site Publishes To</h3>
+    {% if republish_account.outbound_links %}
+    <table class="sk-admin-table">
+        <thead>
+            <tr>
+                <th>Site</th>
+                <th>URL</th>
+                <th>Linked</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for link in republish_account.outbound_links %}
+            <tr>
+                <td>{{ link.site_name or link.target_origin }}</td>
+                <td><a href="{{ link.site_url }}" rel="nofollow noopener">{{ link.target_origin }}</a></td>
+                <td>{{ link.created_at.strftime('%Y-%m-%d') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="account-empty">No publishing destinations linked yet.</p>
+    {% endif %}
+
+    <h3>Sites Publishing To This Site</h3>
+    {% if republish_account.inbound_publishers %}
+    <table class="sk-admin-table">
+        <thead>
+            <tr>
+                <th>Publisher</th>
+                <th>Origin</th>
+                <th>Reposts</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for publisher in republish_account.inbound_publishers %}
+            <tr>
+                <td>{{ publisher.service_name or publisher.source_origin }}</td>
+                <td><a href="{{ publisher.source_origin }}" rel="nofollow noopener">{{ publisher.source_origin }}</a></td>
+                <td>{{ publisher.post_count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="account-empty">No external sites are publishing here yet.</p>
+    {% endif %}
+</section>

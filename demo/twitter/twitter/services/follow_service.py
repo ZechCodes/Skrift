@@ -4,7 +4,7 @@ from sqlalchemy import select, and_, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models.user import User
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 from twitter.hooks import AFTER_USER_FOLLOW, AFTER_USER_UNFOLLOW
 from twitter.models.follow import Follow
 

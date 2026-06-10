@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from skrift.auth.permissions import ensure_permission
+
 
 @dataclass
 class RoleDefinition:
@@ -32,6 +34,9 @@ def create_role(
     Returns:
         A RoleDefinition instance
     """
+    for permission in permissions:
+        ensure_permission(permission)
+
     return RoleDefinition(
         name=name,
         permissions=set(permissions),
@@ -109,6 +114,8 @@ def expand_roles_for_page_types(page_types: list) -> None:
     """Add type-specific permissions to default roles. Called at startup."""
     for pt in page_types:
         perms = permissions_for_type(pt.plural)
+        for permission in perms.values():
+            ensure_permission(permission)
         ADMIN.permissions.add(perms["manage"])
         AUTHOR.permissions.update({perms["edit_own"], perms["delete_own"], perms["create"]})
         EDITOR.permissions.update({perms["manage"], perms["create"]})

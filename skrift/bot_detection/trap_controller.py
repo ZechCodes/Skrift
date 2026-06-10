@@ -24,7 +24,7 @@ from skrift.bot_detection.honeypot import STATE_TTL_SECONDS, TRAP_HIT_NS
 from skrift.bot_detection.hooks import BOT_TRAP_HIT
 from skrift.bot_detection.store import BotStateStore
 from skrift.lib.client_ip import get_client_ip
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 logger = logging.getLogger(__name__)
 

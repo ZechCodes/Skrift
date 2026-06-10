@@ -645,7 +645,7 @@ class SetupController(Controller):
                     content = await favicon_file.read()
                     if content:
                         from skrift.config import get_settings as get_app_settings
-                        from skrift.lib.storage import StorageManager
+                        from skrift.storage import StorageManager
                         from skrift.db.services.asset_service import upload_asset
 
                         app_settings = get_app_settings()

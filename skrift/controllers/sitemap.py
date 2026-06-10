@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skrift.db.services import page_service
 from skrift.db.services.setting_service import get_cached_site_base_url, get_cached_robots_txt
 from skrift.lib.client_ip import get_client_ip
-from skrift.lib.hooks import hooks, ROBOTS_TXT, ROBOTS_TXT_FETCHED, SITEMAP_PAGE, SITEMAP_URLS
+from skrift.hooks import hooks, ROBOTS_TXT, ROBOTS_TXT_FETCHED, SITEMAP_PAGE, SITEMAP_URLS
 
 
 @dataclass
@@ -187,4 +187,64 @@ Sitemap: {sitemap_url}
             content=content,
             media_type="text/plain",
             headers={"Content-Type": "text/plain; charset=utf-8"},
+        )
+
+    @get("/.well-known/skrift")
+    async def skrift_discovery(self, request: Request) -> Response:
+        """Skrift discovery document."""
+        from skrift.auth.permissions import ALLOW_ANONYMOUS_SERVICE, list_permission_definitions
+        from skrift.config import get_settings
+
+        settings = get_settings()
+        republish_settings = getattr(settings, "__dict__", {}).get("republish")
+        api_grants_discovery = settings.api_grants.discovery_enabled
+        republish_discovery = bool(
+            republish_settings
+            and republish_settings.enabled
+            and republish_settings.discovery_enabled
+        )
+        if not settings.api_keys.enabled or not (api_grants_discovery or republish_discovery):
+            raise NotFoundException()
+
+        issuer = str(request.base_url).rstrip("/")
+
+        discovery = {
+            "skrift": True,
+            "version": 1,
+        }
+
+        if api_grants_discovery:
+            anonymous_permissions = [
+                {
+                    "slug": permission.slug,
+                    "display_name": permission.display_name,
+                    "description": permission.description,
+                }
+                for permission in list_permission_definitions()
+                if permission.service_clearance == ALLOW_ANONYMOUS_SERVICE
+            ]
+            discovery["api_grants"] = {
+                    "authorization_endpoint": f"{issuer}/api/grants/authorize",
+                    "request_endpoint": f"{issuer}/api/grants/request",
+                    "token_endpoint": f"{issuer}/api/grants/token",
+                    "code_challenge_methods_supported": ["S256"],
+                    "anonymous_permissions": anonymous_permissions,
+            }
+
+        if republish_discovery:
+            from skrift.republish import REPUBLISH_PERMISSION
+
+            discovery["republish"] = {
+                "capabilities_endpoint": f"{issuer}/api/republish/capabilities",
+                "upsert_endpoint": f"{issuer}/api/republish/posts",
+                "delete_endpoint": f"{issuer}/api/republish/posts",
+                "permission": REPUBLISH_PERMISSION,
+                "schema": "baseline-v1",
+                "media": {"mode": "hotlink"},
+            }
+
+        return Response(
+            content=discovery,
+            status_code=200,
+            media_type="application/json",
         )

@@ -147,7 +147,7 @@ The `RESOLVE_THEME` filter hook lets plugins override the active theme on a per-
 ### Example: Per-User Theme Preference
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("resolve_theme")
 async def user_theme_preference(theme_name, request):
@@ -158,7 +158,7 @@ async def user_theme_preference(theme_name, request):
 ### Example: Query Parameter Override
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("resolve_theme")
 async def theme_preview(theme_name, request):

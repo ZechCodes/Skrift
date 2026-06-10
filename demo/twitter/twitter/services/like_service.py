@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy import select, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 from twitter.hooks import AFTER_TWEET_LIKE, AFTER_TWEET_UNLIKE
 from twitter.models.like import Like
 from twitter.models.tweet import Tweet

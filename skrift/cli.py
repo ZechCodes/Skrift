@@ -1645,7 +1645,7 @@ def storage_orphans(store, do_delete):
     import asyncio
 
     from skrift.config import get_settings
-    from skrift.lib.storage import StorageManager
+    from skrift.storage import StorageManager
 
     settings = get_settings()
 
@@ -1706,7 +1706,7 @@ def storage_sync(source, store, dry_run, do_delete):
     import hashlib
 
     from skrift.config import get_settings
-    from skrift.lib.storage import StorageManager
+    from skrift.storage import StorageManager
 
     settings = get_settings()
     source_path = Path(source)
@@ -1786,7 +1786,7 @@ def storage_migrate(from_store, to_store, dry_run):
     import asyncio
 
     from skrift.config import get_settings
-    from skrift.lib.storage import StorageManager
+    from skrift.storage import StorageManager
 
     settings = get_settings()
 

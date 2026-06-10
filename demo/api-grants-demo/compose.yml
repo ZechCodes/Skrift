@@ -1,0 +1,62 @@
+x-skrift-app: &skrift_app
+  image: ghcr.io/astral-sh/uv:python3.13-bookworm
+  working_dir: /workspace/demo/api-grants-demo
+  volumes:
+    - ../..:/workspace
+  environment:
+    SKRIFT_ENV: compose
+    DEBUG: "true"
+    SECRET_KEY: compose-development-secret-key-change-me
+    PROVIDER_DATABASE_URL: sqlite+aiosqlite:////workspace/demo/api-grants-demo/provider.db
+    CLIENT_DATABASE_URL: sqlite+aiosqlite:////workspace/demo/api-grants-demo/client.db
+    PYTHONUNBUFFERED: "1"
+    UV_CACHE_DIR: /tmp/uv-cache
+    UV_LINK_MODE: copy
+    UV_PROJECT_ENVIRONMENT: /tmp/skrift-api-grants-demo-venv
+
+services:
+  provider-migrate:
+    <<: *skrift_app
+    command: uv run skrift -f provider.app.yaml db upgrade heads
+    restart: "no"
+
+  provider-seed:
+    <<: *skrift_app
+    command: uv run python -m apigrantsdemo.bootstrap provider
+    depends_on:
+      provider-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  client-migrate:
+    <<: *skrift_app
+    command: uv run skrift -f client.app.yaml db upgrade heads
+    restart: "no"
+
+  client-seed:
+    <<: *skrift_app
+    command: uv run python -m apigrantsdemo.bootstrap client
+    depends_on:
+      client-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  provider:
+    <<: *skrift_app
+    command: uv run skrift -f provider.app.yaml serve --host 0.0.0.0 --port 8080
+    ports:
+      - "8091:8080"
+    depends_on:
+      provider-seed:
+        condition: service_completed_successfully
+
+  client:
+    <<: *skrift_app
+    command: uv run skrift -f client.app.yaml serve --host 0.0.0.0 --port 8080
+    ports:
+      - "8092:8080"
+    depends_on:
+      client-seed:
+        condition: service_completed_successfully
+      provider:
+        condition: service_started

@@ -12,7 +12,7 @@ from skrift.auth.guards import auth_guard, Permission
 from skrift.auth.services import get_user_permissions
 from skrift.admin.navigation import build_admin_nav, ADMIN_NAV_TAG
 from skrift.db.models.user import User
-from skrift.lib.flash import flash_success, flash_error, get_flash_messages
+from skrift.flash import flash_success, flash_error, get_flash_messages
 
 from twitter.models.tweet import Tweet
 from twitter.services import tweet_service

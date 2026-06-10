@@ -21,7 +21,7 @@ Without `PushController` registered, no push-related routes, hooks, or service w
 Keys are auto-generated on first use and stored in the settings table:
 
 ```python
-from skrift.lib.push import get_vapid_public_key
+from skrift.push import get_vapid_public_key
 
 # Returns base64url-encoded public key for the browser Push API
 public_key = await get_vapid_public_key(db_session)
@@ -36,7 +36,7 @@ Settings keys: `webpush:vapid_private`, `webpush:vapid_public`. Keys use ECDSA P
 Send to all of a user's subscribed browsers:
 
 ```python
-from skrift.lib.push import send_push
+from skrift.push import send_push
 
 count = await send_push(
     db_session,
@@ -55,7 +55,7 @@ Returns the number sent. Automatically removes expired endpoints (HTTP 404/410).
 Sends SSE notification; falls back to push when user has no active SSE connection:
 
 ```python
-from skrift.lib.push import notify
+from skrift.push import notify
 
 await notify(
     db_session,
@@ -87,7 +87,7 @@ await notify(
 Control push behavior per notification via the `push_notify` payload key:
 
 ```python
-from skrift.lib.notifications import notify_user
+from skrift.notifications import notify_user
 
 # Always push (even if SSE connected) — important alerts
 await notify_user(user_id, "message", title="Alert", push_notify=True)
@@ -104,7 +104,7 @@ await notify_user(user_id, "generic", title="Update")
 `setup_push_hook()` registers a `NOTIFICATION_SENT` action hook so all user-scoped notifications automatically trigger push fallback:
 
 ```python
-from skrift.lib.push import setup_push_hook
+from skrift.push import setup_push_hook
 
 # Called during app startup in asgi.py
 setup_push_hook(db_config.get_session)
@@ -115,7 +115,7 @@ Fires at priority 50, checks SSE connectivity, sends push only when user has no 
 ## Subscription Management
 
 ```python
-from skrift.lib.push import save_subscription, remove_subscription
+from skrift.push import save_subscription, remove_subscription
 
 await save_subscription(db_session, user_id, endpoint, p256dh, auth)
 removed = await remove_subscription(db_session, endpoint)  # returns True if found

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Grant Provider - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .demo-shell {
+        max-width: 980px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+    }
+
+    .demo-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 1rem;
+        margin-top: 1.5rem;
+    }
+
+    .demo-card {
+        border: 1px solid var(--sk-color-border, #e5e7eb);
+        border-radius: 0.5rem;
+        padding: 1rem;
+        background: var(--sk-color-bg, #fff);
+    }
+
+    code {
+        word-break: break-word;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="demo-shell">
+    <hgroup>
+        <h1>Skrift Grant Provider</h1>
+        <p>This site owns protected API endpoints and issues scoped, user-bound service API keys.</p>
+    </hgroup>
+
+    <p>
+        Open the client site at <a href="http://localhost:8092">http://localhost:8092</a>
+        to request grants against this provider.
+    </p>
+
+    <section class="demo-grid">
+        <article class="demo-card">
+            <h2>Anonymous Grant</h2>
+            <p><code>demo-anonymous-read</code></p>
+            <p>Any service can request this permission, but the user still approves the grant.</p>
+        </article>
+        <article class="demo-card">
+            <h2>Known Service</h2>
+            <p><code>demo-known-read</code></p>
+            <p>The requester needs an existing service API key with this permission.</p>
+        </article>
+        <article class="demo-card">
+            <h2>Elevated Security</h2>
+            <p><code>demo-elevated-write</code></p>
+            <p>The requester needs a known service key and the user must complete consent.</p>
+        </article>
+        <article class="demo-card">
+            <h2>Disallowed</h2>
+            <p><code>demo-disallowed-admin</code></p>
+            <p>This permission is deliberately blocked from third-party API grants.</p>
+        </article>
+    </section>
+
+    <section>
+        <h2>Discovery</h2>
+        <p><a href="/.well-known/skrift"><code>/.well-known/skrift</code></a> advertises only the anonymous grantable permission.</p>
+    </section>
+</main>
+{% endblock %}

@@ -52,6 +52,22 @@ Technical reference documentation for Skrift.
 
     [:octicons-arrow-right-24: OAuth Providers](auth-providers.md)
 
+-   :material-file-document-multiple:{ .lg .middle } **Page Types**
+
+    ---
+
+    What a page_types entry generates: admin CRUD, public routes, permissions, and template conventions.
+
+    [:octicons-arrow-right-24: Page Types](page-types.md)
+
+-   :material-swap-horizontal:{ .lg .middle } **Migration: Framework Cleanup**
+
+    ---
+
+    Every import move, rename, and behavior change from the June 2026 API cleanup — old to new.
+
+    [:octicons-arrow-right-24: Migration Guide](migration-framework-cleanup.md)
+
 </div>
 
 ## Security
@@ -81,6 +97,22 @@ Technical reference documentation for Skrift.
     Programmatic authentication with bearer tokens, permission scoping, and key rotation via refresh tokens.
 
     [:octicons-arrow-right-24: API Keys](api-keys.md)
+
+-   :material-account-key:{ .lg .middle } **API Permission Grants**
+
+    ---
+
+    OAuth-style flow for third-party services to request scoped, user-bound API keys.
+
+    [:octicons-arrow-right-24: API Permission Grants](api-grants.md)
+
+-   :material-repeat:{ .lg .middle } **Republish API**
+
+    ---
+
+    Optional cross-site repost ingestion using API grants and source-origin constraints.
+
+    [:octicons-arrow-right-24: Republish API](republish.md)
 
 </div>
 

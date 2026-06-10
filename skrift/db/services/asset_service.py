@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skrift.db.cache import evict_pk, get_by_pk, seed_instance
 from skrift.db.models.asset import Asset
 from skrift.db.models.page_asset import page_assets
-from skrift.lib.hooks import (
+from skrift.hooks import (
     AFTER_ASSET_DELETE,
     AFTER_ASSET_UPLOAD,
     ASSET_UPLOAD_DATA,
@@ -20,7 +20,7 @@ from skrift.lib.hooks import (
     BEFORE_ASSET_UPLOAD,
     hooks,
 )
-from skrift.lib.storage.manager import StorageManager
+from skrift.storage.manager import StorageManager
 
 
 class UploadTooLargeError(Exception):

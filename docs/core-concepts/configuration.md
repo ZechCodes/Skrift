@@ -390,6 +390,31 @@ print(settings.debug)  # True/False
 print(settings.db.url)  # Database URL
 ```
 
+## Custom Config Sections
+
+Apps and extensions can add their own typed `app.yaml` sections without modifying Skrift. Register a Pydantic model at import time (before the app is created):
+
+```python
+from pydantic import BaseModel
+from skrift import register_config_section
+
+class ShopConfig(BaseModel):
+    enabled: bool = False
+    currency: str = "USD"
+
+register_config_section("shop", ShopConfig)
+```
+
+Then configure it like any built-in section:
+
+```yaml
+shop:
+  enabled: true
+  currency: EUR
+```
+
+And read it anywhere as a typed attribute — `get_settings().shop.currency`. When the section is absent from `app.yaml`, it defaults to `ShopConfig()`. Built-in sections (`db`, `auth`, `workers`, …) parse through the same registry; top-level keys with bespoke parsing (`storage`, `page_types`, `sites`, and scalar keys like `theme`) are reserved.
+
 ## Best Practices
 
 1. **Keep production as the default** - If `SKRIFT_ENV` is unset, production config loads

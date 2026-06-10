@@ -69,7 +69,7 @@ That's it. Skrift handles VAPID key generation, subscription storage, and push d
 If you're already using `notify_user()` for SSE notifications, push fallback happens automatically via the `NOTIFICATION_SENT` hook. No code changes needed — users without an SSE connection receive a push notification instead.
 
 ```python
-from skrift.lib.notifications import notify_user
+from skrift.notifications import notify_user
 
 # This automatically triggers a push notification if the user has no SSE connection
 await notify_user(str(user.id), "generic", title="New reply", message="Someone replied.")
@@ -101,7 +101,7 @@ await notify_user(str(user.id), "generic", title="Update")
 For more control over push content separately from SSE:
 
 ```python
-from skrift.lib.push import notify
+from skrift.push import notify
 
 await notify(
     db_session,
@@ -132,7 +132,7 @@ await notify(
 For push-only delivery (no SSE):
 
 ```python
-from skrift.lib.push import send_push
+from skrift.push import send_push
 
 count = await send_push(
     db_session,

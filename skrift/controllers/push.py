@@ -7,7 +7,7 @@ from litestar.response import File, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.session_keys import SESSION_USER_ID
-from skrift.lib.push import get_vapid_public_key, remove_subscription, save_subscription
+from skrift.push import get_vapid_public_key, remove_subscription, save_subscription
 
 _SW_PATH = Path(__file__).parent.parent / "static" / "sw.js"
 

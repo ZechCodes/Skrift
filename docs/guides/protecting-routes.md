@@ -32,6 +32,23 @@ async def list_users():
 
 The user must have the `manage-users` permission to access this route.
 
+### Permission Metadata
+
+Register permissions with readable metadata when they may appear in admin screens or third-party API grant consent screens:
+
+```python
+from skrift.auth.permissions import ALLOW_ANONYMOUS_SERVICE, register_permission
+
+register_permission(
+    "read-profile",
+    display_name="Read Profile",
+    description="Read your public profile data.",
+    service_clearance=ALLOW_ANONYMOUS_SERVICE,
+)
+```
+
+Permissions default to `disallow-api-grants`, so a permission is not requestable by third-party services unless you explicitly opt it in. See [API Permission Grants](../reference/api-grants.md) for the full clearance model.
+
 ### Built-in Permissions
 
 | Permission | Description | Default Roles |

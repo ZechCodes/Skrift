@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skrift.db.cache import evict_pk, get_by_pk, seed_instance
 from skrift.db.models import Page
 from skrift.db.services import revision_service
-from skrift.lib.hooks import hooks, BEFORE_PAGE_SAVE, AFTER_PAGE_SAVE, BEFORE_PAGE_DELETE, AFTER_PAGE_DELETE, AFTER_PAGE_PUBLISHED, AFTER_PAGE_UNPUBLISHED
+from skrift.hooks import hooks, BEFORE_PAGE_SAVE, AFTER_PAGE_SAVE, BEFORE_PAGE_DELETE, AFTER_PAGE_DELETE, AFTER_PAGE_PUBLISHED, AFTER_PAGE_UNPUBLISHED
 
 
 OrderBy = Literal["order", "created", "published", "title"]

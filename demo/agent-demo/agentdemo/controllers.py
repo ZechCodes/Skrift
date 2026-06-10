@@ -13,8 +13,8 @@ from litestar import Controller, Request, get, post
 from litestar.response import Template as TemplateResponse
 
 from skrift.agents.state import load_runstate
-from skrift.lib.hooks import APP_SHUTDOWN, action
-from skrift.lib.notifications import NotificationMode, _ensure_nid, notify_session
+from skrift.hooks import APP_SHUTDOWN, action
+from skrift.notifications import NotificationMode, ensure_nid, notify_session
 
 from agentdemo.agents import AGENT_NAME, assistant
 
@@ -156,7 +156,7 @@ class AgentDemoController(Controller):
         return TemplateResponse(
             "agent-demo/index.html",
             context={
-                "nid": _ensure_nid(request),
+                "nid": ensure_nid(request),
                 "model_name": os.getenv("AGENT_DEMO_MODEL", "gemini-3.1-flash-lite-preview"),
                 "gemini_configured": _gemini_configured(),
             },
@@ -199,7 +199,7 @@ class AgentDemoController(Controller):
         if not message:
             return {"ok": False, "error": "Message is required."}
 
-        nid = _ensure_nid(request)
+        nid = ensure_nid(request)
         session = await assistant.run(message, actor={"kind": "user", "id": f"session:{nid}"})
         await notify_session(
             nid,
@@ -232,7 +232,7 @@ class AgentDemoController(Controller):
         if not message:
             return {"ok": False, "error": "Message is required."}
 
-        nid = _ensure_nid(request)
+        nid = ensure_nid(request)
         state = await load_runstate(session_id)
         if state is None:
             return {"ok": False, "error": f"Unknown session {session_id!r}."}

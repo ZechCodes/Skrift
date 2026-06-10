@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.guards import auth_guard
 from skrift.admin.helpers import get_admin_context
-from skrift.lib.flash import get_flash_messages
+from skrift.flash import get_flash_messages
 
 # Re-export split controllers for convenient registration
 from skrift.admin.users import UserAdminController  # noqa: F401

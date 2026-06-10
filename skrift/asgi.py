@@ -192,7 +192,7 @@ def load_controllers() -> list:
             from skrift.controllers.page_type_factory import create_public_page_type_controller
 
             for pt in page_types:
-                if pt.name != "page" and not pt.subdomain:
+                if pt.name != "page" and not pt.subdomain and pt.public_routes:
                     controllers.append(create_public_page_type_controller(pt))
 
     return controllers
@@ -600,7 +600,8 @@ def _build_site_app(
         from skrift.controllers.page_type_factory import create_public_page_type_controller
 
         for pt in page_types:
-            controllers.append(create_public_page_type_controller(pt, for_subdomain=True))
+            if pt.public_routes:
+                controllers.append(create_public_page_type_controller(pt, for_subdomain=True))
 
     theme = site_config.theme or settings.theme
 
@@ -886,7 +887,7 @@ def create_app() -> ASGIApp:
     )
 
     # Storage manager
-    from skrift.lib.storage import StorageManager
+    from skrift.storage import StorageManager
 
     storage_manager = StorageManager(settings.storage)
 
@@ -986,18 +987,31 @@ def create_app() -> ASGIApp:
 
     from skrift.controllers.notifications import NotificationsController
     from skrift.controllers.notification_webhook import NotificationsWebhookController
+    from skrift.controllers.account import AccountController
     from skrift.controllers.oauth2 import OAuth2Controller
     from skrift.controllers.sitemap import SitemapController
     from skrift.auth import sync_roles_to_database
     from skrift.lib.notification_backends import InMemoryBackend, load_backend
-    from skrift.lib.notifications import notifications as notification_service
+    from skrift.notifications import notifications as notification_service
 
     # API auth controller — only registered when api_keys are enabled
     from skrift.controllers.api_auth import APIAuthController
+    from skrift.controllers.api_grants import APIGrantController
 
     api_auth_handlers: list = []
     if settings.api_keys.enabled:
         api_auth_handlers.append(APIAuthController)
+        if settings.api_grants.enabled:
+            api_auth_handlers.append(APIGrantController)
+
+    republish_handlers: list = []
+    if settings.republish.enabled:
+        from skrift.republish.controller import AccountRepublishController, RepublishController
+        from skrift.republish.hooks import setup_republish_hooks
+
+        setup_republish_hooks()
+        republish_handlers.append(RepublishController)
+        republish_handlers.append(AccountRepublishController)
 
     # OAuth2 controller — only registered when oauth2 is enabled
     oauth2_handlers: list = []
@@ -1062,7 +1076,7 @@ def create_app() -> ASGIApp:
 
         observability.instrument_sqlalchemy(db_config.get_engine())
 
-        from skrift.lib.hooks import APP_STARTUP, LOGFIRE_CONFIGURED, hooks
+        from skrift.hooks import APP_STARTUP, LOGFIRE_CONFIGURED, hooks
         await hooks.do_action(LOGFIRE_CONFIGURED)
 
         notification_service.set_backend(backend)
@@ -1075,7 +1089,7 @@ def create_app() -> ASGIApp:
         # Register Web Push fallback hook (only when PushController is enabled)
         if _push_enabled:
             try:
-                from skrift.lib.push import setup_push_hook
+                from skrift.push import setup_push_hook
                 setup_push_hook(db_config.get_session)
             except ImportError:
                 logger.debug("pywebpush not installed, push notifications disabled")
@@ -1133,7 +1147,7 @@ def create_app() -> ASGIApp:
 
     async def on_shutdown(_app: Litestar) -> None:
         """Stop notification backend and storage on shutdown."""
-        from skrift.lib.hooks import APP_SHUTDOWN, hooks
+        from skrift.hooks import APP_SHUTDOWN, hooks
         await hooks.do_action(APP_SHUTDOWN, _app)
 
         if settings.workers.enabled:
@@ -1168,7 +1182,7 @@ def create_app() -> ASGIApp:
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
-        route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *api_auth_handlers, *webhook_handlers, *bot_detection_handlers, *controllers],
+        route_handlers=[NotificationsController, SitemapController, AccountController, *oauth2_handlers, *api_auth_handlers, *republish_handlers, *webhook_handlers, *bot_detection_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, *bot_detection_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
         template_config=template_config,

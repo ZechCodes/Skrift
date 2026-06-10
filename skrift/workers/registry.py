@@ -133,7 +133,22 @@ def handler(
     max_attempts: int | None = None,
     visibility_timeout: float = 30.0,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Register a worker handler at import time."""
+    """Register a worker handler at import time.
+
+    Registration happens when the decorated function's module is imported.
+    Worker processes import your controller modules plus anything listed
+    under ``workers.imports`` in app.yaml — handlers defined elsewhere must
+    be added there or they won't exist in the worker::
+
+        workers:
+          imports:
+            - myapp.jobs
+
+    The payload model is inferred from the handler's first parameter
+    annotation (a Pydantic BaseModel); pass ``payload_model=`` only when the
+    annotation can't be resolved. Handlers may accept ``(payload)`` or
+    ``(payload, context: WorkerContext)``.
+    """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         frame = inspect.currentframe()

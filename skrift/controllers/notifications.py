@@ -10,7 +10,7 @@ from litestar.response import Response
 from litestar.response.sse import ServerSentEvent, ServerSentEventMessage
 
 from skrift.auth.session_keys import SESSION_USER_ID
-from skrift.lib.notifications import NotDismissibleError, _ensure_nid, notifications
+from skrift.notifications import NotDismissibleError, ensure_nid, notifications
 
 
 class NotificationsController(Controller):
@@ -19,7 +19,7 @@ class NotificationsController(Controller):
     @get("/stream")
     async def stream(self, request: Request) -> ServerSentEvent:
         """SSE endpoint that streams notifications to the client."""
-        nid = _ensure_nid(request)
+        nid = ensure_nid(request)
         user_id = request.session.get(SESSION_USER_ID)
 
         since_raw = request.query_params.get("since")
@@ -67,7 +67,7 @@ class NotificationsController(Controller):
         self, request: Request, *, notification_id: UUID | None = None, group: str | None = None
     ) -> Response:
         """Shared dismiss logic for by-ID and by-group endpoints."""
-        nid = _ensure_nid(request)
+        nid = ensure_nid(request)
         user_id = request.session.get(SESSION_USER_ID)
         try:
             found = await notifications.dismiss(nid, user_id, notification_id, group=group)

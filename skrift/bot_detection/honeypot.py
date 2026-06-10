@@ -3,10 +3,10 @@
 Strategy:
 
 1. ``Disallow: <trap_path>/<token>`` is appended to ``robots.txt`` via
-   the :data:`~skrift.lib.hooks.ROBOTS_TXT` filter. The token rotates
+   the :data:`~skrift.hooks.ROBOTS_TXT` filter. The token rotates
    weekly so cached crawler maps go stale.
 2. Every fetch of ``robots.txt`` records the client IP via the
-   :data:`~skrift.lib.hooks.ROBOTS_TXT_FETCHED` action. The metric
+   :data:`~skrift.hooks.ROBOTS_TXT_FETCHED` action. The metric
    later reads this state to distinguish "read the rules and ignored
    them" (strongest signal) from "did not even read robots.txt" (still
    suspicious but lower confidence).

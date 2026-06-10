@@ -1,0 +1,154 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Connection Not Started - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .grant-flow {
+        display: grid;
+        place-items: center;
+        min-height: calc(100vh - 4rem);
+        padding: var(--sk-space-xl) var(--sk-space-md);
+    }
+
+    .grant-error {
+        width: 100%;
+        max-width: 520px;
+        margin: 0 auto;
+    }
+
+    .grant-error article {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .grant-error h1 {
+        margin-bottom: 0;
+    }
+
+    .grant-error p {
+        margin: 0;
+    }
+
+    .grant-error-permissions {
+        display: grid;
+        gap: 0.75rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .grant-error-permissions li {
+        margin: 0;
+        padding: 0.75rem 0;
+        border-top: 1px solid var(--sk-color-border);
+    }
+
+    .grant-error-permissions strong,
+    .grant-error-permissions span {
+        display: block;
+    }
+
+    .grant-error-permissions span {
+        margin-top: 0.2rem;
+        color: var(--sk-color-muted);
+        font-size: 0.95rem;
+    }
+
+    .grant-error details {
+        color: var(--sk-color-muted);
+    }
+
+    .grant-error summary {
+        cursor: pointer;
+    }
+
+    .grant-error details p {
+        margin-top: 0.5rem;
+    }
+
+    .grant-error-actions {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        margin-top: 0.5rem;
+    }
+
+    .grant-error-actions button {
+        margin-top: 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="grant-flow">
+    <div class="grant-error">
+        <article>
+            <header>
+                <h1>{{ title }}</h1>
+            </header>
+            {% if kind == "unknown_service" %}
+            <p>
+                The service that sent you here is unknown to {{ site_name() }}.
+                For security reasons, {{ site_name() }} cannot allow you to grant it access
+                to the following permissions:
+            </p>
+            {% elif kind == "blocked_permissions" %}
+            <p>
+                The service that sent you here requested permissions that {{ site_name() }}
+                does not allow through this connection flow:
+            </p>
+            {% else %}
+            <p>{{ summary }}</p>
+            {% endif %}
+
+            {% if blocked_permissions %}
+            <ul class="grant-error-permissions">
+                {% for permission in blocked_permissions %}
+                <li>
+                    <strong>{{ permission.display_name }}</strong>
+                    {% if permission.description %}
+                    <span>{{ permission.description }}</span>
+                    {% else %}
+                    <span>{{ permission.slug }}</span>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            {% if kind == "unknown_service" %}
+            <p>
+                Reach out to the {{ service_name or "service" }} administrators to have them
+                verify their service with {{ site_name() }}.
+            </p>
+            {% else %}
+            <p>{{ next_step }}</p>
+            {% endif %}
+
+            {% if developer_detail %}
+            <details>
+                <summary>Technical details</summary>
+                <p>{{ developer_detail }}</p>
+            </details>
+            {% endif %}
+
+            <div class="grant-error-actions">
+                {% if return_url %}
+                <a href="{{ return_url }}" role="button" rel="nofollow noopener">{{ return_label }}</a>
+                {% else %}
+                <button type="button" class="sk-btn-outline" data-history-back>{{ return_label }}</button>
+                {% endif %}
+            </div>
+        </article>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+document.querySelector("[data-history-back]")?.addEventListener("click", function () {
+    history.back();
+});
+</script>
+{% endblock %}

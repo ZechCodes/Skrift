@@ -24,7 +24,7 @@ from skrift.auth.roles import ROLE_DEFINITIONS
 from skrift.admin.helpers import get_admin_context
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.db.models.user import User
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
+from skrift.flash import flash_error, flash_success, get_flash_messages
 
 
 class UserAdminController(Controller):

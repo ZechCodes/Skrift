@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 @pytest.fixture

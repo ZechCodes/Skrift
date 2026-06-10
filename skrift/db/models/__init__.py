@@ -5,8 +5,10 @@ from skrift.db.models.oauth2_client import OAuth2Client
 from skrift.db.models.oauth_account import OAuthAccount
 from skrift.db.models.page import Page
 from skrift.db.models.page_asset import page_assets
+from skrift.db.models.page_republish import PageRepublish
 from skrift.db.models.page_revision import PageRevision
 from skrift.db.models.push_subscription import PushSubscription
+from skrift.db.models.republish_site_link import RepublishSiteLink
 from skrift.db.models.revoked_family import RevokedFamily
 from skrift.db.models.revoked_token import RevokedToken
 from skrift.db.models.role import Role, RolePermission, user_roles
@@ -30,8 +32,10 @@ __all__ = [
     "OAuth2Client",
     "OAuthAccount",
     "Page",
+    "PageRepublish",
     "PageRevision",
     "PushSubscription",
+    "RepublishSiteLink",
     "RevokedFamily",
     "RevokedToken",
     "Role",

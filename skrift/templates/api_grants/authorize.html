@@ -1,0 +1,145 @@
+{% extends "auth/base.html" %}
+
+{% block title %}Authorize API Access - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .grant-flow {
+        display: grid;
+        place-items: center;
+        min-height: calc(100vh - 4rem);
+        padding: var(--sk-space-xl) var(--sk-space-md);
+    }
+
+    .grant-container {
+        width: 100%;
+        max-width: 460px;
+        margin: 0 auto;
+    }
+
+    .service-name {
+        font-weight: 700;
+        color: var(--sk-color-accent);
+    }
+
+    .service-meta {
+        display: grid;
+        gap: 0.25rem;
+        margin: 1rem 0 1.25rem;
+        color: var(--sk-color-muted);
+    }
+
+    .service-meta span {
+        font-size: 0.875rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .service-meta a {
+        width: fit-content;
+    }
+
+    .permission-list {
+        list-style: none;
+        padding: 0;
+        margin: 1.5rem 0;
+    }
+
+    .permission-list li {
+        padding: 0.75rem 0;
+        border-bottom: 1px solid var(--sk-color-border, #e5e7eb);
+    }
+
+    .permission-list strong {
+        display: block;
+    }
+
+    .permission-list span {
+        display: block;
+        margin-top: 0.2rem;
+        color: var(--sk-color-muted, #6b7280);
+        font-size: 0.95rem;
+    }
+
+    .grant-warning {
+        margin: 1rem 0;
+        padding: 0.75rem;
+        border-left: 4px solid var(--sk-color-warning);
+        background: color-mix(in srgb, var(--sk-color-warning) 12%, transparent);
+        color: var(--sk-color-text);
+    }
+
+    .grant-buttons {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        margin-top: 1.5rem;
+    }
+
+    .grant-buttons button {
+        margin-top: 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="grant-flow">
+    <div class="grant-container">
+        <article>
+            <header>
+                <h1>Authorize API Access</h1>
+            </header>
+
+            <p>
+                <span class="service-name">{{ service_name }}</span>
+                wants API access connected to your account.
+            </p>
+
+            {% if service_url %}
+            <div class="service-meta">
+                <span>Service website</span>
+                <a href="{{ service_url }}" rel="nofollow noopener">{{ service_origin or service_url }}</a>
+            </div>
+            {% endif %}
+
+            {% if requires_elevated_security %}
+            <div class="grant-warning">
+                This request requires elevated security and will issue a user-bound service key.
+            </div>
+            {% endif %}
+
+            <p>This will allow the service to:</p>
+            {% for fragment in grant_fragments.before_permissions %}
+                {% include fragment.template %}
+            {% endfor %}
+            <ul class="permission-list">
+                {% for permission in permissions %}
+                <li>
+                    <strong>{{ permission.display_name }}</strong>
+                    {% if permission.description %}
+                    <span>{{ permission.description }}</span>
+                    {% else %}
+                    <span>{{ permission.slug }}</span>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+
+            <form method="post" action="/api/grants/authorize">
+                {{ csrf_field() }}
+                {% for fragment in grant_fragments.after_permissions %}
+                    {% include fragment.template %}
+                {% endfor %}
+                {% for fragment in grant_fragments.before_actions %}
+                    {% include fragment.template %}
+                {% endfor %}
+                <div class="grant-buttons">
+                    <button type="submit" name="action" value="deny" class="sk-btn-outline">Deny</button>
+                    <button type="submit" name="action" value="allow">Allow</button>
+                </div>
+            </form>
+        </article>
+    </div>
+</div>
+{% endblock %}

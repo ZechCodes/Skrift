@@ -316,7 +316,7 @@ async def upload(self, request: Request) -> Response:
 Leverage Skrift's WordPress-like template resolution:
 
 ```python
-from skrift.lib.template import Template
+from skrift.template import Template
 
 class CustomPageController(Controller):
     path = "/custom"

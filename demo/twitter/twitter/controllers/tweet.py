@@ -10,10 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skrift.auth.guards import auth_guard
 from skrift.db.models.user import User
 from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url
-from skrift.lib.flash import flash_success, flash_error, get_flash_messages
-from skrift.lib.hooks import hooks
-from skrift.lib.notifications import notify_user, notify_broadcast
-from skrift.lib.seo import SEOMeta, OpenGraphMeta
+from skrift.flash import flash_success, flash_error, get_flash_messages
+from skrift.hooks import hooks
+from skrift.notifications import notify_user, notify_broadcast
+from skrift.seo import SEOMeta, OpenGraphMeta
 from skrift.forms import Form, verify_csrf, csrf_field
 
 from twitter.forms import ComposeTweetForm, ReplyForm

@@ -2,7 +2,7 @@
 
 import pytest
 
-from skrift.lib.markdown import render_markdown, get_renderer, create_markdown_renderer
+from skrift.markdown import render_markdown, get_renderer, create_markdown_renderer
 
 
 class TestRenderMarkdownEmptyInput:

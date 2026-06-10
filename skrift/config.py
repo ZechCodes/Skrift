@@ -6,7 +6,7 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, create_model, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from skrift.bot_detection.config import BotDetectionConfig
@@ -42,9 +42,14 @@ _config_path_override: Path | None = None
 
 
 def set_config_path(path: Path) -> None:
-    """Set an explicit config file path, overriding environment-based resolution."""
+    """Set an explicit config file path, overriding environment-based resolution.
+
+    Clears any cached Settings so the next get_settings() call reads the
+    new file.
+    """
     global _config_path_override
     _config_path_override = path
+    get_settings.cache_clear()
 
 
 def get_environment() -> str:
@@ -151,6 +156,92 @@ def load_model_modules() -> list[str]:
     return config.get("models", [])
 
 
+# --- Config section registry -------------------------------------------------
+#
+# Every uniform app.yaml section (a mapping parsed into a single Pydantic
+# model) goes through this registry — built-ins and extensions alike.
+# Top-level keys with bespoke parsing (storage, page_types, sites) and
+# scalar keys are handled explicitly in get_settings() and are reserved.
+
+_CONFIG_SECTIONS: dict[str, type[BaseModel]] = {}
+
+_RESERVED_CONFIG_KEYS = frozenset(
+    {
+        "environment",
+        "debug",
+        "secret_key",
+        "theme",
+        "domain",
+        "security_contact",
+        "oauth2_enabled",
+        "controllers",
+        "models",
+        "middleware",
+        "sites",
+        "storage",
+        "page_types",
+    }
+)
+
+
+def register_config_section(name: str, model: type[BaseModel]) -> None:
+    """Register an app.yaml section parsed into Settings.
+
+    Call at import time, before the app is created. The section becomes a
+    typed attribute on the settings object — ``get_settings().<name>`` —
+    defaulting to ``model()`` when the section is absent from app.yaml.
+
+    Example (an extension package's __init__.py)::
+
+        from pydantic import BaseModel
+        from skrift.config import register_config_section
+
+        class ShopConfig(BaseModel):
+            enabled: bool = False
+            currency: str = "USD"
+
+        register_config_section("shop", ShopConfig)
+
+    Then in app.yaml::
+
+        shop:
+          enabled: true
+          currency: EUR
+
+    And anywhere in code: ``get_settings().shop.currency``.
+    """
+    if not name.isidentifier():
+        raise ValueError(
+            f"Config section name {name!r} must be a valid Python identifier"
+        )
+    if name in _RESERVED_CONFIG_KEYS:
+        raise ValueError(f"Config section name {name!r} is reserved")
+    existing = _CONFIG_SECTIONS.get(name)
+    if existing is not None and existing is not model:
+        raise ValueError(
+            f"Config section {name!r} is already registered with "
+            f"{existing.__name__}"
+        )
+    _CONFIG_SECTIONS[name] = model
+    try:
+        get_settings.cache_clear()
+    except NameError:
+        # Module still importing; get_settings not defined yet.
+        pass
+
+
+def _settings_model() -> "type[Settings]":
+    """Settings, extended with any registered sections it doesn't declare."""
+    extra_fields = {
+        name: (model, Field(default_factory=model))
+        for name, model in _CONFIG_SECTIONS.items()
+        if name not in Settings.model_fields
+    }
+    if not extra_fields:
+        return Settings
+    return create_model("Settings", __base__=Settings, **extra_fields)
+
+
 class PageTypeConfig(BaseModel):
     """Configuration for a page type."""
 
@@ -159,6 +250,9 @@ class PageTypeConfig(BaseModel):
     icon: str = "file-text"
     nav_order: int = 20
     subdomain: str = ""  # When set, type is served on this subdomain only
+    public_routes: bool = True  # Set false to hand-write the public routes
+    # (/{name}/ archive and /{name}/{slug}) in your own controller while
+    # keeping the generated admin CRUD and permissions.
 
 
 DEFAULT_PAGE_TYPES = [
@@ -475,6 +569,24 @@ class APIKeyConfig(BaseModel):
     default_expiration_days: int = 365
     max_keys_per_user: int = 10
     refresh_token_expiration_days: int = 30
+
+
+class APIGrantConfig(BaseModel):
+    """Third-party API permission grant flow configuration."""
+
+    enabled: bool = True
+    discovery_enabled: bool = False
+
+
+class RepublishConfig(BaseModel):
+    """Cross-site republishing component configuration."""
+
+    enabled: bool = False
+    discovery_enabled: bool = True
+    default_page_type: str = "post"
+    page_types: list[str] = []
+    default_post_behavior: Literal["draft", "publish"] = "draft"
+    default_delete_behavior: Literal["unpublish", "delete", "ignore"] = "unpublish"
 
 
 class NotificationsConfig(BaseModel):
@@ -892,6 +1004,12 @@ class Settings(BaseSettings):
     # API key configuration
     api_keys: APIKeyConfig = APIKeyConfig()
 
+    # Third-party API permission grants
+    api_grants: APIGrantConfig = APIGrantConfig()
+
+    # Cross-site republishing
+    republish: RepublishConfig = RepublishConfig()
+
     # Session config (loaded from app.yaml)
     session: SessionConfig = SessionConfig()
 
@@ -936,6 +1054,33 @@ class Settings(BaseSettings):
 
     # Security contact for /.well-known/security.txt (RFC 9116)
     security_contact: str = ""
+
+
+def _register_builtin_sections() -> None:
+    """Built-in sections parse through the same registry extensions use."""
+    for name, model in {
+        "db": DatabaseConfig,
+        "auth": AuthConfig,
+        "session": SessionConfig,
+        "security_headers": SecurityHeadersConfig,
+        "rate_limit": RateLimitConfig,
+        "bot_detection": BotDetectionConfig,
+        "trusted_proxy": TrustedProxyConfig,
+        "redis": RedisConfig,
+        "notifications": NotificationsConfig,
+        "webhooks": WebhooksConfig,
+        "workers": WorkersConfig,
+        "agents": AgentsConfig,
+        "email": EmailConfig,
+        "logfire": LogfireConfig,
+        "api_keys": APIKeyConfig,
+        "api_grants": APIGrantConfig,
+        "republish": RepublishConfig,
+    }.items():
+        register_config_section(name, model)
+
+
+_register_builtin_sections()
 
 
 def clear_settings_cache() -> None:
@@ -984,7 +1129,7 @@ def get_settings() -> Settings:
     try:
         app_config = load_app_config()
     except FileNotFoundError:
-        return Settings()
+        return _settings_model()()
     except ValueError as e:
         config_path = get_config_path()
         raise SystemExit(
@@ -1000,47 +1145,10 @@ def get_settings() -> Settings:
     # model_copy issues with nested BaseModel instances in Pydantic v2
     kwargs = {}
 
-    if "db" in app_config:
-        kwargs["db"] = DatabaseConfig(**app_config["db"])
-
-    if "auth" in app_config:
-        kwargs["auth"] = AuthConfig(**app_config["auth"])
-
-    if "session" in app_config:
-        kwargs["session"] = SessionConfig(**app_config["session"])
-
-    if "security_headers" in app_config:
-        kwargs["security_headers"] = SecurityHeadersConfig(**app_config["security_headers"])
-
-    if "rate_limit" in app_config:
-        kwargs["rate_limit"] = RateLimitConfig(**app_config["rate_limit"])
-
-    if "bot_detection" in app_config:
-        kwargs["bot_detection"] = BotDetectionConfig(**app_config["bot_detection"])
-
-    if "trusted_proxy" in app_config:
-        kwargs["trusted_proxy"] = TrustedProxyConfig(**app_config["trusted_proxy"])
-
-    if "redis" in app_config:
-        kwargs["redis"] = RedisConfig(**app_config["redis"])
-
-    if "notifications" in app_config:
-        kwargs["notifications"] = NotificationsConfig(**app_config["notifications"])
-
-    if "webhooks" in app_config:
-        kwargs["webhooks"] = WebhooksConfig(**app_config["webhooks"])
-
-    if "workers" in app_config:
-        kwargs["workers"] = WorkersConfig(**app_config["workers"])
-
-    if "agents" in app_config:
-        kwargs["agents"] = AgentsConfig(**app_config["agents"])
-
-    if "email" in app_config:
-        kwargs["email"] = EmailConfig(**app_config["email"])
-
-    if "logfire" in app_config:
-        kwargs["logfire"] = LogfireConfig(**app_config["logfire"])
+    # Uniform sections: built-ins and extension-registered alike
+    for name, model in _CONFIG_SECTIONS.items():
+        if name in app_config:
+            kwargs[name] = model(**app_config[name])
 
     if "oauth2_enabled" in app_config:
         kwargs["oauth2_enabled"] = app_config["oauth2_enabled"]
@@ -1084,4 +1192,4 @@ def get_settings() -> Settings:
 
     # Create Settings with YAML nested configs
     # BaseSettings will still load debug/secret_key from env, but kwargs take precedence
-    return Settings(**kwargs)
+    return _settings_model()(**kwargs)

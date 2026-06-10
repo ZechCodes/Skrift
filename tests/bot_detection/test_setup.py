@@ -6,7 +6,7 @@ from skrift.bot_detection.config import BotDetectionConfig
 from skrift.bot_detection.honeypot import ROBOTS_READ_NS
 from skrift.bot_detection.setup import setup_honeypot_hooks
 from skrift.bot_detection.store import InMemoryBotStateStore
-from skrift.lib.hooks import ROBOTS_TXT, ROBOTS_TXT_FETCHED, hooks
+from skrift.hooks import ROBOTS_TXT, ROBOTS_TXT_FETCHED, hooks
 
 
 @pytest.fixture(autouse=True)

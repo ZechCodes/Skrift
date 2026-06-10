@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from skrift.lib.notifications import NotDismissibleError, Notification, NotificationMode
+from skrift.notifications import NotDismissibleError, Notification, NotificationMode
 
 
 # ---------------------------------------------------------------------------

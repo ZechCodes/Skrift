@@ -5,13 +5,13 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING
 
-from skrift.lib.storage.local import LocalStorageBackend
+from skrift.storage.local import LocalStorageBackend
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from skrift.config import StorageConfig, StoreConfig
-    from skrift.lib.storage.base import StorageBackend
+    from skrift.storage.base import StorageBackend
 
 
 class StorageManager:
@@ -61,7 +61,7 @@ def create_storage_backend(config: StoreConfig, store_name: str = "default") -> 
         )
 
     if backend_type == "s3":
-        from skrift.lib.storage.s3 import S3StorageBackend
+        from skrift.storage.s3 import S3StorageBackend
 
         return S3StorageBackend(config.s3)
 

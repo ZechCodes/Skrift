@@ -144,7 +144,7 @@ class Form(Generic[T]):
             return False
 
         # Fire hooks - import here to avoid circular imports
-        from skrift.lib.hooks import hooks
+        from skrift.hooks import hooks
 
         self.data = await hooks.apply_filters(
             f"form_{self.name}_validated", self.data
@@ -215,7 +215,7 @@ class Form(Generic[T]):
         """Render the form using template hierarchy:
         form-{name}.html -> form.html -> programmatic fallback
         """
-        from skrift.lib.template import Template
+        from skrift.template import Template
 
         template = Template("form", self.name)
         template_engine = self.request.app.template_engine

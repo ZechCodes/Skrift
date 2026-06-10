@@ -1,0 +1,62 @@
+x-skrift-app: &skrift_app
+  image: ghcr.io/astral-sh/uv:python3.13-bookworm
+  working_dir: /workspace/demo/republish-demo
+  volumes:
+    - ../..:/workspace
+  environment:
+    SKRIFT_ENV: compose
+    DEBUG: "true"
+    SECRET_KEY: compose-development-secret-key-change-me
+    SOURCE_DATABASE_URL: sqlite+aiosqlite:////workspace/demo/republish-demo/source.db
+    TARGET_DATABASE_URL: sqlite+aiosqlite:////workspace/demo/republish-demo/target.db
+    PYTHONUNBUFFERED: "1"
+    UV_CACHE_DIR: /tmp/uv-cache
+    UV_LINK_MODE: copy
+    UV_PROJECT_ENVIRONMENT: /tmp/skrift-republish-demo-venv
+
+services:
+  source-migrate:
+    <<: *skrift_app
+    command: uv run skrift -f source.app.yaml db upgrade heads
+    restart: "no"
+
+  source-seed:
+    <<: *skrift_app
+    command: uv run python -m republishdemo.bootstrap source
+    depends_on:
+      source-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  target-migrate:
+    <<: *skrift_app
+    command: uv run skrift -f target.app.yaml db upgrade heads
+    restart: "no"
+
+  target-seed:
+    <<: *skrift_app
+    command: uv run python -m republishdemo.bootstrap target
+    depends_on:
+      target-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  target:
+    <<: *skrift_app
+    command: uv run skrift -f target.app.yaml serve --host 0.0.0.0 --port 8080
+    ports:
+      - "8094:8080"
+    depends_on:
+      target-seed:
+        condition: service_completed_successfully
+
+  source:
+    <<: *skrift_app
+    command: uv run skrift -f source.app.yaml serve --host 0.0.0.0 --port 8080
+    ports:
+      - "8093:8080"
+    depends_on:
+      source-seed:
+        condition: service_completed_successfully
+      target:
+        condition: service_started

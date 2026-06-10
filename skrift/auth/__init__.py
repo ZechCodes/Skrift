@@ -18,6 +18,18 @@ from skrift.auth.methods import (
     get_primary_auth_method,
     register_primary_auth_method,
 )
+from skrift.auth.permissions import (
+    ALLOW_ANONYMOUS_SERVICE,
+    DISALLOW_API_GRANTS,
+    REQUIRE_ELEVATED_SECURITY,
+    REQUIRE_KNOWN_SERVICE,
+    PERMISSION_DEFINITIONS,
+    PermissionDefinition,
+    ensure_permission,
+    get_permission_definition,
+    list_permission_definitions,
+    register_permission,
+)
 from skrift.auth.second_factors import (
     SecondFactorMethod,
     SecondFactorMethodDescriptor,
@@ -76,6 +88,16 @@ __all__ = [
     "PrimaryAuthMethodDescriptor",
     "get_primary_auth_method",
     "register_primary_auth_method",
+    "ALLOW_ANONYMOUS_SERVICE",
+    "DISALLOW_API_GRANTS",
+    "REQUIRE_ELEVATED_SECURITY",
+    "REQUIRE_KNOWN_SERVICE",
+    "PERMISSION_DEFINITIONS",
+    "PermissionDefinition",
+    "ensure_permission",
+    "get_permission_definition",
+    "list_permission_definitions",
+    "register_permission",
     # Second-factor methods
     "SecondFactorMethod",
     "SecondFactorMethodDescriptor",
