@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Account - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .account-shell {
+        max-width: 880px;
+        margin: 2rem auto;
+        display: grid;
+        gap: 1.25rem;
+    }
+
+    .account-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .account-panel {
+        padding: 1.25rem;
+        border: 1px solid var(--sk-color-border, #e5e7eb);
+        border-radius: var(--sk-radius-lg, 0.75rem);
+        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+    }
+
+    .account-panel h2,
+    .account-panel h3 {
+        margin-top: 0;
+    }
+
+    .account-detail-list {
+        display: grid;
+        gap: 0.65rem;
+        margin: 0;
+    }
+
+    .account-detail-row {
+        display: grid;
+        grid-template-columns: minmax(8rem, 12rem) 1fr;
+        gap: 1rem;
+    }
+
+    .account-detail-row dt {
+        color: var(--sk-color-muted, #6b7280);
+    }
+
+    .account-actions {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .account-empty {
+        color: var(--sk-color-muted, #6b7280);
+        margin-bottom: 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="account-shell">
+    <div class="account-header">
+        <hgroup>
+            <h1>Account</h1>
+            <p>Signed in as {{ user.email or user.name or user.id }}.</p>
+        </hgroup>
+        <div class="account-actions">
+            <a href="/auth/passkeys" role="button" class="sk-btn-outline">Passkeys</a>
+            <a href="/admin" role="button" class="sk-btn-outline">Dashboard</a>
+        </div>
+    </div>
+
+    <section class="account-panel">
+        <h2>Profile</h2>
+        <dl class="account-detail-list">
+            <div class="account-detail-row">
+                <dt>Name</dt>
+                <dd>{{ user.name or "Not set" }}</dd>
+            </div>
+            <div class="account-detail-row">
+                <dt>Email</dt>
+                <dd>{{ user.email or "Not set" }}</dd>
+            </div>
+            <div class="account-detail-row">
+                <dt>Last Login</dt>
+                <dd>{{ user.last_login_at.strftime('%Y-%m-%d %H:%M') if user.last_login_at else "Not recorded" }}</dd>
+            </div>
+        </dl>
+    </section>
+
+    {% for section in account_sections %}
+        {% include section.template %}
+    {% endfor %}
+</div>
+{% endblock %}

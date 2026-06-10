@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from typing import Any
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -57,6 +59,7 @@ class APIKey(Base):
         ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True, index=True
     )
     grant_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    constraints: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Lifecycle
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -90,6 +93,17 @@ class APIKey(Base):
         if not self.scoped_roles:
             return []
         return [r.strip() for r in self.scoped_roles.split("\n") if r.strip()]
+
+    @property
+    def constraint_data(self) -> dict[str, Any]:
+        """Parse JSON API-key constraints into a dictionary."""
+        if not self.constraints:
+            return {}
+        try:
+            data = json.loads(self.constraints)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
     @property
     def is_expired(self) -> bool:

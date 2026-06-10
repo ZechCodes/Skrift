@@ -110,6 +110,9 @@
             {% endif %}
 
             <p>This will allow the service to:</p>
+            {% for fragment in grant_fragments.before_permissions %}
+                {% include fragment.template %}
+            {% endfor %}
             <ul class="permission-list">
                 {% for permission in permissions %}
                 <li>
@@ -125,6 +128,12 @@
 
             <form method="post" action="/api/grants/authorize">
                 {{ csrf_field() }}
+                {% for fragment in grant_fragments.after_permissions %}
+                    {% include fragment.template %}
+                {% endfor %}
+                {% for fragment in grant_fragments.before_actions %}
+                    {% include fragment.template %}
+                {% endfor %}
                 <div class="grant-buttons">
                     <button type="submit" name="action" value="deny" class="sk-btn-outline">Deny</button>
                     <button type="submit" name="action" value="allow">Allow</button>

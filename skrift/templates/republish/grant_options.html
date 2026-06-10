@@ -1,0 +1,24 @@
+<fieldset class="form-group">
+    <legend>Republishing</legend>
+
+    <label for="republish_page_type">Page type</label>
+    <select id="republish_page_type" name="republish_page_type">
+        {% for option in republish_options.page_types %}
+        <option value="{{ option }}" {% if option == republish_options.default_page_type %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="republish_post_behavior">New and updated posts</label>
+    <select id="republish_post_behavior" name="republish_post_behavior">
+        {% for option in republish_options.post_behaviors %}
+        <option value="{{ option }}" {% if option == republish_options.default_post_behavior %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="republish_delete_behavior">Deleted source posts</label>
+    <select id="republish_delete_behavior" name="republish_delete_behavior">
+        {% for option in republish_options.delete_behaviors %}
+        <option value="{{ option }}" {% if option == republish_options.default_delete_behavior %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+    </select>
+</fieldset>

@@ -484,6 +484,17 @@ class APIGrantConfig(BaseModel):
     discovery_enabled: bool = False
 
 
+class RepublishConfig(BaseModel):
+    """Cross-site republishing component configuration."""
+
+    enabled: bool = False
+    discovery_enabled: bool = True
+    default_page_type: str = "post"
+    page_types: list[str] = []
+    default_post_behavior: Literal["draft", "publish"] = "draft"
+    default_delete_behavior: Literal["unpublish", "delete", "ignore"] = "unpublish"
+
+
 class NotificationsConfig(BaseModel):
     """Notification backend configuration."""
 
@@ -902,6 +913,9 @@ class Settings(BaseSettings):
     # Third-party API permission grants
     api_grants: APIGrantConfig = APIGrantConfig()
 
+    # Cross-site republishing
+    republish: RepublishConfig = RepublishConfig()
+
     # Session config (loaded from app.yaml)
     session: SessionConfig = SessionConfig()
 
@@ -1057,6 +1071,9 @@ def get_settings() -> Settings:
 
     if "api_grants" in app_config:
         kwargs["api_grants"] = APIGrantConfig(**app_config["api_grants"])
+
+    if "republish" in app_config:
+        kwargs["republish"] = RepublishConfig(**app_config["republish"])
 
     if "storage" in app_config:
         storage_data = app_config["storage"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import pytest
@@ -17,8 +18,10 @@ from skrift.auth.permissions import (
     get_permission_definition,
     register_permission,
 )
+from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.auth.tokens import create_signed_token, verify_signed_token
 from skrift.controllers.api_grants import APIGrantController
+from skrift.lib.hooks import API_GRANT_AUTHORIZE_CONSTRAINTS, hooks
 
 
 SECRET = "api-grant-test-secret"
@@ -282,3 +285,49 @@ async def test_token_exchange_issues_user_bound_service_key():
     assert create_key.await_args.kwargs["principal_type"] == "service"
     assert create_key.await_args.kwargs["scoped_permissions"] == ["read-public-data"]
     assert create_key.await_args.kwargs["grant_source"] == "api-grant"
+
+
+@pytest.mark.asyncio
+async def test_authorize_post_persists_hook_constraints_in_code(clean_hooks):
+    controller = APIGrantController(owner=MagicMock())
+    user_id = str(uuid4())
+    request = _request(
+        form_data={"action": "allow", "custom": "value"},
+        session={
+            SESSION_USER_ID: user_id,
+            "api_grant_authorize": {
+                "redirect_uri": "https://service.example/callback",
+                "permissions": ["read-public-data"],
+                "service_name": "Service",
+                "service_url": "https://service.example",
+                "service_clearance": ALLOW_ANONYMOUS_SERVICE,
+                "parent_api_key_id": "",
+                "state": "opaque",
+                "code_challenge": "challenge",
+            },
+        },
+    )
+
+    async def add_constraints(constraints, request, grant_data, form_data):
+        constraints["custom"] = {
+            "source_origin": "https://service.example",
+            "selected": form_data["custom"],
+        }
+        return constraints
+
+    hooks.add_filter(API_GRANT_AUTHORIZE_CONSTRAINTS, add_constraints)
+
+    with patch("skrift.controllers.api_grants.get_settings", return_value=_settings()), patch(
+        "skrift.controllers.api_grants.verify_csrf",
+        new=AsyncMock(return_value=True),
+    ):
+        result = await APIGrantController.authorize_post.fn(controller, request, AsyncMock())
+
+    code = parse_qs(urlparse(result.url).query)["code"][0]
+    payload = verify_signed_token(code, SECRET)
+    assert payload["constraints"] == {
+        "custom": {
+            "source_origin": "https://service.example",
+            "selected": "value",
+        }
+    }

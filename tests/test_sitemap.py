@@ -72,6 +72,25 @@ class TestSkriftDiscovery:
             PERMISSION_DEFINITIONS.clear()
             PERMISSION_DEFINITIONS.update(original)
 
+    @pytest.mark.asyncio
+    async def test_skrift_discovery_includes_republish_when_enabled(self):
+        controller = SitemapController(owner=MagicMock())
+        request = MagicMock()
+        request.base_url = "https://site.example/"
+
+        with patch("skrift.config.get_settings") as mock_settings:
+            mock_settings.return_value = MagicMock(
+                api_keys=MagicMock(enabled=True),
+                api_grants=MagicMock(discovery_enabled=False),
+                republish=MagicMock(enabled=True, discovery_enabled=True),
+            )
+            response = await controller.skrift_discovery.fn(controller, request)
+
+        assert response.content["republish"]["capabilities_endpoint"] == (
+            "https://site.example/api/republish/capabilities"
+        )
+        assert response.content["republish"]["schema"] == "baseline-v1"
+
 
 class TestSecurityTxt:
     """Test the security.txt route."""

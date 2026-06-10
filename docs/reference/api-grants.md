@@ -167,6 +167,8 @@ Response:
 
 The issued key is always bound to the approving user and has `principal_type="service"`. Permission checks still intersect the key's scope with the user's current permissions.
 
+Grant extensions may add consent-screen fragments and API-key constraints through hooks. Constraints are signed into the authorization code and stored on the issued key, which lets optional components bind a grant to choices such as source origin, resource type, or delivery behavior without hard-coding those concerns into the core grant protocol.
+
 ## Discovery
 
 When enabled, `GET /.well-known/skrift` returns:

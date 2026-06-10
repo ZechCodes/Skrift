@@ -1,0 +1,42 @@
+environment: compose
+debug: true
+controllers:
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+  - skrift.controllers.web:WebController
+db:
+  url: $TARGET_DATABASE_URL
+auth:
+  redirect_base_url: http://localhost:8094
+  methods:
+    dummy:
+      type: dummy
+      label: Demo Login
+page_types:
+  - name: page
+    plural: pages
+    icon: file-text
+    nav_order: 20
+  - name: post
+    plural: posts
+    icon: file-text
+    nav_order: 10
+api_keys:
+  enabled: true
+  default_expiration_days: 365
+  refresh_token_expiration_days: 30
+api_grants:
+  enabled: true
+  discovery_enabled: true
+republish:
+  enabled: true
+  discovery_enabled: true
+  default_page_type: post
+  page_types:
+    - post
+  default_post_behavior: draft
+  default_delete_behavior: unpublish
+security_headers:
+  content_security_policy: "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'; form-action 'self' http://localhost:8093 http://localhost:8094; base-uri 'self'"
+rate_limit:
+  enabled: false

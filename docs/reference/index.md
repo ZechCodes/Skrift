@@ -90,6 +90,14 @@ Technical reference documentation for Skrift.
 
     [:octicons-arrow-right-24: API Permission Grants](api-grants.md)
 
+-   :material-repeat:{ .lg .middle } **Republish API**
+
+    ---
+
+    Optional cross-site repost ingestion using API grants and source-origin constraints.
+
+    [:octicons-arrow-right-24: Republish API](republish.md)
+
 </div>
 
 ## Styling

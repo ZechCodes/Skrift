@@ -1,0 +1,22 @@
+environment: compose
+debug: true
+controllers:
+  - republishdemo.source:SourceDemoController
+  - skrift.controllers.auth:AuthController
+  - skrift.admin.controller:AdminController
+db:
+  url: $SOURCE_DATABASE_URL
+auth:
+  redirect_base_url: http://localhost:8093
+  methods:
+    dummy:
+      type: dummy
+      label: Demo Login
+api_keys:
+  enabled: true
+api_grants:
+  enabled: false
+security_headers:
+  content_security_policy: "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' https:; script-src 'self'; form-action 'self' http://localhost:8093 http://localhost:8094; base-uri 'self'"
+rate_limit:
+  enabled: false

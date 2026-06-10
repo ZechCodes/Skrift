@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -56,6 +58,7 @@ async def create_api_key(
     service_url: str | None = None,
     parent_api_key_id: UUID | str | None = None,
     grant_source: str | None = None,
+    constraints: dict[str, Any] | None = None,
 ) -> tuple[APIKey, str, str]:
     """Create a new API key.
 
@@ -81,6 +84,7 @@ async def create_api_key(
         service_url=service_url,
         parent_api_key_id=str(parent_api_key_id) if parent_api_key_id else None,
         grant_source=grant_source,
+        constraints=json.dumps(constraints, sort_keys=True) if constraints else None,
         expires_at=expires_at,
         refresh_token_hash=refresh_hash,
         refresh_token_expires_at=refresh_expires,

@@ -198,6 +198,19 @@ class HookRegistry:
 hooks = HookRegistry()
 
 
+# Well-known hook names used by framework components.
+API_GRANT_AUTHORIZE_CONTEXT = "api_grant_authorize_context"
+API_GRANT_AUTHORIZE_FRAGMENTS = "api_grant_authorize_fragments"
+API_GRANT_AUTHORIZE_CONSTRAINTS = "api_grant_authorize_constraints"
+API_GRANT_TOKEN_RESPONSE = "api_grant_token_response"
+
+PAGE_ADMIN_CAN_MUTATE = "page_admin_can_mutate"
+PAGE_ADMIN_PAGE_STATE = "page_admin_page_state"
+
+ACCOUNT_PAGE_CONTEXT = "account_page_context"
+ACCOUNT_PAGE_SECTIONS = "account_page_sections"
+
+
 # Convenience functions that use the global registry
 def add_action(
     hook_name: str,

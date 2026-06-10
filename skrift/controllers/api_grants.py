@@ -25,6 +25,13 @@ from skrift.controllers.oauth2 import _verify_pkce
 from skrift.db.services import api_key_service, oauth2_service
 from skrift.forms import verify_csrf
 from skrift.lib.client_ip import get_client_ip
+from skrift.lib.hooks import (
+    API_GRANT_AUTHORIZE_CONSTRAINTS,
+    API_GRANT_AUTHORIZE_CONTEXT,
+    API_GRANT_AUTHORIZE_FRAGMENTS,
+    API_GRANT_TOKEN_RESPONSE,
+    hooks,
+)
 
 
 REQUEST_TOKEN_TTL = 600
@@ -86,6 +93,20 @@ def _permission_context(permissions: list[str]) -> list[dict[str, str]]:
         }
         for definition in (get_permission_definition(p) for p in permissions)
     ]
+
+
+def _group_fragments(fragments: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {
+        "before_permissions": [],
+        "after_permissions": [],
+        "before_actions": [],
+    }
+    for fragment in fragments:
+        if not isinstance(fragment, dict) or not fragment.get("template"):
+            continue
+        slot = str(fragment.get("slot") or "after_permissions")
+        grouped.setdefault(slot, []).append(fragment)
+    return grouped
 
 
 async def _verify_service_key(
@@ -187,18 +208,34 @@ class APIGrantController(Controller):
 
         request.session["api_grant_authorize"] = grant_data
 
+        context = {
+            "request": request,
+            "service_name": grant_data["service_name"],
+            "service_url": grant_data.get("service_url", ""),
+            "service_origin": _origin_from_uri(grant_data.get("service_url", "")),
+            "permissions": _permission_context(grant_data["permissions"]),
+            "requires_elevated_security": (
+                grant_data["service_clearance"] == REQUIRE_ELEVATED_SECURITY
+            ),
+        }
+        context = await hooks.apply_filters(
+            API_GRANT_AUTHORIZE_CONTEXT,
+            context,
+            request,
+            grant_data,
+        )
+        fragments = await hooks.apply_filters(
+            API_GRANT_AUTHORIZE_FRAGMENTS,
+            [],
+            request,
+            grant_data,
+            context,
+        )
+        context["grant_fragments"] = _group_fragments(fragments)
+
         return TemplateResponse(
             "api_grants/authorize.html",
-            context={
-                "request": request,
-                "service_name": grant_data["service_name"],
-                "service_url": grant_data.get("service_url", ""),
-                "service_origin": _origin_from_uri(grant_data.get("service_url", "")),
-                "permissions": _permission_context(grant_data["permissions"]),
-                "requires_elevated_security": (
-                    grant_data["service_clearance"] == REQUIRE_ELEVATED_SECURITY
-                ),
-            },
+            context=context,
         )
 
     @post("/authorize")
@@ -226,6 +263,17 @@ class APIGrantController(Controller):
         if not user_id:
             return _json_error("invalid_request", "User not logged in")
 
+        constraints = dict(grant_data.get("constraints", {}))
+        constraints = await hooks.apply_filters(
+            API_GRANT_AUTHORIZE_CONSTRAINTS,
+            constraints,
+            request,
+            grant_data,
+            form_data,
+        )
+        if isinstance(constraints, Response):
+            return constraints
+
         settings = get_settings()
         code = create_signed_token(
             {
@@ -238,6 +286,7 @@ class APIGrantController(Controller):
                 "service_clearance": grant_data["service_clearance"],
                 "parent_api_key_id": grant_data.get("parent_api_key_id", ""),
                 "code_challenge": grant_data["code_challenge"],
+                "constraints": constraints,
             },
             settings.secret_key,
             AUTH_CODE_TTL,
@@ -308,24 +357,34 @@ class APIGrantController(Controller):
             service_url=payload.get("service_url") or None,
             parent_api_key_id=parent_api_key_id or None,
             grant_source="api-grant",
+            constraints=payload.get("constraints") or None,
+        )
+
+        response_content = {
+            "key": raw_key,
+            "refresh_token": raw_refresh,
+            "key_prefix": api_key.key_prefix,
+            "token_type": "bearer",
+            "principal_type": api_key.principal_type,
+            "service_name": api_key.service_name,
+            "permissions": permissions,
+            "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
+            "refresh_token_expires_at": (
+                api_key.refresh_token_expires_at.isoformat()
+                if api_key.refresh_token_expires_at
+                else None
+            ),
+        }
+        response_content = await hooks.apply_filters(
+            API_GRANT_TOKEN_RESPONSE,
+            response_content,
+            request,
+            payload,
+            api_key,
         )
 
         return Response(
-            content={
-                "key": raw_key,
-                "refresh_token": raw_refresh,
-                "key_prefix": api_key.key_prefix,
-                "token_type": "bearer",
-                "principal_type": api_key.principal_type,
-                "service_name": api_key.service_name,
-                "permissions": permissions,
-                "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
-                "refresh_token_expires_at": (
-                    api_key.refresh_token_expires_at.isoformat()
-                    if api_key.refresh_token_expires_at
-                    else None
-                ),
-            },
+            content=response_content,
             status_code=200,
             media_type="application/json",
         )

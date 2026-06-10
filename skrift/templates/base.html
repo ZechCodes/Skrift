@@ -60,6 +60,7 @@
                 <a href="/" class="sk-nav-link">Home</a>
                 {% endblock %}
                 {% if user %}
+                    <a href="/account" class="sk-nav-link">Account</a>
                     <a href="/admin" class="sk-nav-link">Dashboard</a>
                     <form method="post" action="/auth/logout" class="sk-inline-logout">
                         {{ csrf_field() }}

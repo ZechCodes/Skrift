@@ -986,6 +986,7 @@ def create_app() -> ASGIApp:
 
     from skrift.controllers.notifications import NotificationsController
     from skrift.controllers.notification_webhook import NotificationsWebhookController
+    from skrift.controllers.account import AccountController
     from skrift.controllers.oauth2 import OAuth2Controller
     from skrift.controllers.sitemap import SitemapController
     from skrift.auth import sync_roles_to_database
@@ -1001,6 +1002,15 @@ def create_app() -> ASGIApp:
         api_auth_handlers.append(APIAuthController)
         if settings.api_grants.enabled:
             api_auth_handlers.append(APIGrantController)
+
+    republish_handlers: list = []
+    if settings.republish.enabled:
+        from skrift.republish.controller import AccountRepublishController, RepublishController
+        from skrift.republish.hooks import setup_republish_hooks
+
+        setup_republish_hooks()
+        republish_handlers.append(RepublishController)
+        republish_handlers.append(AccountRepublishController)
 
     # OAuth2 controller — only registered when oauth2 is enabled
     oauth2_handlers: list = []
@@ -1171,7 +1181,7 @@ def create_app() -> ASGIApp:
     app = Litestar(
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
-        route_handlers=[NotificationsController, SitemapController, *oauth2_handlers, *api_auth_handlers, *webhook_handlers, *bot_detection_handlers, *controllers],
+        route_handlers=[NotificationsController, SitemapController, AccountController, *oauth2_handlers, *api_auth_handlers, *republish_handlers, *webhook_handlers, *bot_detection_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, *bot_detection_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
         template_config=template_config,

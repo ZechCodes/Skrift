@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Link Site - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .account-shell {
+        max-width: 720px;
+        margin: 2rem auto;
+    }
+
+    .account-panel {
+        padding: 1.25rem;
+        border: 1px solid var(--sk-color-border, #e5e7eb);
+        border-radius: var(--sk-radius-lg, 0.75rem);
+        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+    }
+
+    .account-actions {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="account-shell">
+    <section class="account-panel">
+        <h1>Link Site</h1>
+        <form method="post" action="/account/republish/links/new">
+            {{ csrf_field() }}
+
+            <label for="site_url">Site URL</label>
+            <input type="url" id="site_url" name="site_url" placeholder="https://example.com" required>
+
+            <label for="site_name">Display Name</label>
+            <input type="text" id="site_name" name="site_name" placeholder="Example">
+
+            <div class="account-actions">
+                <button type="submit">Link Site</button>
+                <a href="/account" role="button" class="sk-btn-outline">Cancel</a>
+            </div>
+        </form>
+    </section>
+</div>
+{% endblock %}
