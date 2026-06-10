@@ -32,6 +32,15 @@ def get_form_model(name: str) -> type[BaseModel]:
         raise LookupError(f"No form named '{name}'. Registered: {available}")
 
 
+def list_forms() -> dict[str, type[BaseModel]]:
+    """All registered forms by name.
+
+    Forms register when their FormModel subclass is defined, so a form only
+    appears here once its module has been imported.
+    """
+    return dict(_form_registry)
+
+
 class FormModel(BaseModel):
     """Base class for form-backed Pydantic models.
 

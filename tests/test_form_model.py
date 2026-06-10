@@ -260,3 +260,16 @@ class TestPydanticValidation:
         data = instance.model_dump()
         assert data == {"name": "Alice", "age": 30}
         assert "_form_name" not in data
+
+
+def test_list_forms_returns_registered_forms():
+    from skrift.forms import FormModel, list_forms
+
+    class InventoryAuditForm(FormModel):
+        sku: str
+
+    forms = list_forms()
+    assert forms["inventory-audit"] is InventoryAuditForm
+    # Returned mapping is a copy; mutating it doesn't touch the registry
+    forms.pop("inventory-audit")
+    assert "inventory-audit" in list_forms()
