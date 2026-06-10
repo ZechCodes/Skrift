@@ -72,7 +72,7 @@ async def create_api_key(
     refresh_expires = datetime.now(tz=timezone.utc) + timedelta(days=refresh_token_expiration_days)
 
     api_key = APIKey(
-        user_id=str(user_id),
+        user_id=user_id if isinstance(user_id, UUID) else UUID(user_id),
         display_name=display_name,
         description=description,
         key_prefix=prefix,

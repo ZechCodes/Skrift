@@ -47,7 +47,6 @@ def upgrade() -> None:
         sa.Column("site_name", sa.String(length=255), nullable=True),
         sa.Column("site_url", sa.String(length=2048), nullable=False),
         sa.Column("target_origin", sa.String(length=1024), nullable=False),
-        sa.Column("last_published_at", DateTimeUTC(timezone=True), nullable=True),
         sa.Column("created_at", DateTimeUTC(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", DateTimeUTC(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("sa_orm_sentinel", sa.Integer(), nullable=True),

@@ -11,7 +11,7 @@
             <tr>
                 <th>Site</th>
                 <th>URL</th>
-                <th>Last Published</th>
+                <th>Linked</th>
             </tr>
         </thead>
         <tbody>
@@ -19,7 +19,7 @@
             <tr>
                 <td>{{ link.site_name or link.target_origin }}</td>
                 <td><a href="{{ link.site_url }}" rel="nofollow noopener">{{ link.target_origin }}</a></td>
-                <td>{{ link.last_published_at.strftime('%Y-%m-%d %H:%M') if link.last_published_at else "Never" }}</td>
+                <td>{{ link.created_at.strftime('%Y-%m-%d') }}</td>
             </tr>
             {% endfor %}
         </tbody>

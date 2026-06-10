@@ -161,7 +161,7 @@ class RepublishController(Controller):
 
         metadata, created = await upsert_republished_page(
             db_session,
-            user_id=UUID(str(api_key.user_id)),
+            user_id=api_key.user_id,
             canonical_url=canonical_url,
             source_origin=str(constraints["source_origin"]),
             page_type=str(constraints["page_type"]),
@@ -186,7 +186,7 @@ class RepublishController(Controller):
             media_type="application/json",
         )
 
-    @delete("/posts")
+    @delete("/posts", status_code=200)
     async def delete_post(self, request: Request, db_session: AsyncSession) -> Response:
         settings = get_settings()
         if not settings.republish.enabled:
@@ -265,7 +265,7 @@ class AccountRepublishController(Controller):
         user_id = request.session.get(SESSION_USER_ID)
         await save_outbound_link(
             db_session,
-            user_id=str(user_id),
+            user_id=UUID(str(user_id)),
             site_url=site_url,
             site_name=site_name,
         )

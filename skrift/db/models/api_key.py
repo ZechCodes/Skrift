@@ -35,7 +35,7 @@ class APIKey(Base):
     __tablename__ = "api_keys"
 
     # Owner
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
 

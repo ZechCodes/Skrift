@@ -7,6 +7,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,7 +64,7 @@ async def get_republish_by_canonical_url(
 async def upsert_republished_page(
     db_session: AsyncSession,
     *,
-    user_id: str,
+    user_id: UUID,
     canonical_url: str,
     source_origin: str,
     page_type: str,
@@ -152,7 +153,7 @@ async def apply_republish_delete_behavior(
 async def list_outbound_links(
     db_session: AsyncSession,
     *,
-    user_id: str,
+    user_id: UUID,
 ) -> list[RepublishSiteLink]:
     result = await db_session.execute(
         select(RepublishSiteLink)
@@ -165,7 +166,7 @@ async def list_outbound_links(
 async def save_outbound_link(
     db_session: AsyncSession,
     *,
-    user_id: str,
+    user_id: UUID,
     site_url: str,
     site_name: str = "",
 ) -> RepublishSiteLink:
@@ -196,7 +197,7 @@ async def save_outbound_link(
 async def list_inbound_publishers(
     db_session: AsyncSession,
     *,
-    user_id: str,
+    user_id: UUID,
 ) -> list[dict[str, object]]:
     post_counts_result = await db_session.execute(
         select(PageRepublish.source_origin, func.count(PageRepublish.id))

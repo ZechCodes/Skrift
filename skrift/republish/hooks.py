@@ -177,8 +177,8 @@ async def add_account_context(
     user,
 ) -> dict[str, Any]:
     context["republish_account"] = {
-        "outbound_links": await list_outbound_links(db_session, user_id=str(user.id)),
-        "inbound_publishers": await list_inbound_publishers(db_session, user_id=str(user.id)),
+        "outbound_links": await list_outbound_links(db_session, user_id=user.id),
+        "inbound_publishers": await list_inbound_publishers(db_session, user_id=user.id),
     }
     return context
 

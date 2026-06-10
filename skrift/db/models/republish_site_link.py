@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from advanced_alchemy.types import DateTimeUTC
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,9 +30,5 @@ class RepublishSiteLink(Base):
     site_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     site_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     target_origin: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
-    last_published_at: Mapped[datetime | None] = mapped_column(
-        DateTimeUTC(timezone=True),
-        nullable=True,
-    )
 
     user: Mapped["User"] = relationship("User")
