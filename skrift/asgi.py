@@ -192,7 +192,7 @@ def load_controllers() -> list:
             from skrift.controllers.page_type_factory import create_public_page_type_controller
 
             for pt in page_types:
-                if pt.name != "page" and not pt.subdomain:
+                if pt.name != "page" and not pt.subdomain and pt.public_routes:
                     controllers.append(create_public_page_type_controller(pt))
 
     return controllers
@@ -600,7 +600,8 @@ def _build_site_app(
         from skrift.controllers.page_type_factory import create_public_page_type_controller
 
         for pt in page_types:
-            controllers.append(create_public_page_type_controller(pt, for_subdomain=True))
+            if pt.public_routes:
+                controllers.append(create_public_page_type_controller(pt, for_subdomain=True))
 
     theme = site_config.theme or settings.theme
 

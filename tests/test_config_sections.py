@@ -114,3 +114,17 @@ class TestBuiltinSections:
         other.write_text(yaml.safe_dump({"secret_key": "x", "debug": False}))
         set_config_path(other)
         assert get_settings().debug is False
+
+
+class TestPageTypePublicRoutes:
+    def test_public_routes_defaults_true(self):
+        from skrift.config import PageTypeConfig
+
+        pt = PageTypeConfig(name="post", plural="posts")
+        assert pt.public_routes is True
+
+    def test_public_routes_opt_out(self):
+        from skrift.config import PageTypeConfig
+
+        pt = PageTypeConfig(name="post", plural="posts", public_routes=False)
+        assert pt.public_routes is False

@@ -14,7 +14,10 @@ page_types:
     plural: pages
 ```
 
-When `page_types` is omitted entirely, the default `page`/`pages` type is registered. Optional per-type key `subdomain: blog` serves the type on that subdomain instead of the primary domain (see [Multisite](../guides/multisite.md)).
+When `page_types` is omitted entirely, the default `page`/`pages` type is registered. Two optional per-type keys:
+
+- `subdomain: blog` — serve the type on that subdomain instead of the primary domain (see [Multisite](../guides/multisite.md))
+- `public_routes: false` — skip the generated public routes so you can hand-write them in your own controller (the admin section and permissions are still generated). Without this, declaring a route like `/post/{slug}` yourself collides with the generated one at startup.
 
 ## What One Entry Generates
 
@@ -74,4 +77,4 @@ add_filter(PAGE_ADMIN_CAN_MUTATE, my_can_mutate)   # (allowed, request, db_sessi
 add_filter(PAGE_ADMIN_PAGE_STATE, my_page_state)   # (state, request, db_session, page)
 ```
 
-For behavior beyond what hooks cover, write a regular Litestar controller alongside the generated ones — the factories are public API (`skrift.admin.page_type_factory.create_page_type_controller`, `skrift.controllers.page_type_factory.create_public_page_type_controller`) if you want to build on them directly.
+For custom public rendering, set `public_routes: false` on the type and write your own controller for `/{name}/` and `/{name}/{slug}` (see the blog demo's `BlogController`). The factories are also public API (`skrift.admin.page_type_factory.create_page_type_controller`, `skrift.controllers.page_type_factory.create_public_page_type_controller`) if you want to build on them directly.

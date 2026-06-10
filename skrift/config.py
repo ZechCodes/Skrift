@@ -250,6 +250,9 @@ class PageTypeConfig(BaseModel):
     icon: str = "file-text"
     nav_order: int = 20
     subdomain: str = ""  # When set, type is served on this subdomain only
+    public_routes: bool = True  # Set false to hand-write the public routes
+    # (/{name}/ archive and /{name}/{slug}) in your own controller while
+    # keeping the generated admin CRUD and permissions.
 
 
 DEFAULT_PAGE_TYPES = [
