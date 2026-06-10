@@ -10,7 +10,7 @@ from skrift.bot_detection.honeypot import TRAP_HIT_NS
 from skrift.bot_detection.hooks import BOT_TRAP_HIT
 from skrift.bot_detection.store import InMemoryBotStateStore
 from skrift.bot_detection.trap_controller import build_trap_controller
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 @pytest.fixture(autouse=True)

@@ -7,8 +7,8 @@ from skrift.controllers.notification_webhook import (
     _FailedAuthLimiter,
 )
 from skrift.lib.client_ip import get_client_ip
-from skrift.lib.hooks import hooks, WEBHOOK_NOTIFICATION_RECEIVED
-from skrift.lib.notifications import NotificationMode, NotificationService
+from skrift.hooks import hooks, WEBHOOK_NOTIFICATION_RECEIVED
+from skrift.notifications import NotificationMode, NotificationService
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ class TestGetClientIP:
 def notification_svc():
     """Create a fresh NotificationService for each test."""
     svc = NotificationService()
-    from skrift.lib import notifications as mod
+    from skrift import notifications as mod
 
     original = mod.notifications
     mod.notifications = svc

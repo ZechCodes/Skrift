@@ -25,7 +25,7 @@ from skrift.controllers.oauth2 import _verify_pkce
 from skrift.db.services import api_key_service, oauth2_service
 from skrift.forms import verify_csrf
 from skrift.lib.client_ip import get_client_ip
-from skrift.lib.hooks import (
+from skrift.hooks import (
     API_GRANT_AUTHORIZE_CONSTRAINTS,
     API_GRANT_AUTHORIZE_CONTEXT,
     API_GRANT_AUTHORIZE_FRAGMENTS,

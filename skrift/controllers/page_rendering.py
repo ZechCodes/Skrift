@@ -14,8 +14,8 @@ from skrift.db.services.setting_service import (
     get_cached_site_base_url,
     get_cached_site_name,
 )
-from skrift.lib.seo import get_page_og_meta, get_page_seo_meta
-from skrift.lib.storage import StorageManager
+from skrift.seo import get_page_og_meta, get_page_seo_meta
+from skrift.storage import StorageManager
 
 
 @dataclass

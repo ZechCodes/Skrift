@@ -8,9 +8,9 @@ from skrift.auth.methods.base import PrimaryAuthMethod, PrimaryAuthMethodDescrip
 from skrift.auth.second_factors.passkey_service import is_webauthn_available
 from skrift.auth.session_keys import SESSION_AUTH_NEXT
 from skrift.config import get_settings
-from skrift.lib.flash import get_flash_messages
+from skrift.flash import get_flash_messages
 from skrift.lib.redirects import is_safe_redirect_url
-from skrift.lib.template import resolve_template_name
+from skrift.template import resolve_template_name
 
 
 class PasskeyPrimaryAuthMethod(PrimaryAuthMethod):

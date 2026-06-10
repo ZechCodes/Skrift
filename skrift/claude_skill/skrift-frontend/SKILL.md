@@ -12,7 +12,7 @@ Templates, themes, static assets, and security for the Skrift frontend.
 WordPress-style hierarchy with fallbacks and optional theme support:
 
 ```python
-from skrift.lib.template import Template
+from skrift.template import Template
 
 # Tries: page-about.html -> page.html
 template = Template("page", "about")
@@ -94,7 +94,7 @@ theme_name = get_cached_site_theme()
 The `RESOLVE_THEME` filter hook allows overriding the theme per-request:
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("resolve_theme")
 async def user_theme(theme_name, request):

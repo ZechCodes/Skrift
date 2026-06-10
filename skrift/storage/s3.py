@@ -13,7 +13,7 @@ except ImportError as exc:
         "S3 storage backend requires aioboto3. Install it with: pip install skrift[s3]"
     ) from exc
 
-from skrift.lib.storage.base import StoredFile
+from skrift.storage.base import StoredFile
 
 if TYPE_CHECKING:
     from skrift.config import S3Config

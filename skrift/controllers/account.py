@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.guards import auth_guard
 from skrift.controllers.helpers import get_user_context
-from skrift.lib.flash import get_flash_messages
-from skrift.lib.hooks import ACCOUNT_PAGE_CONTEXT, ACCOUNT_PAGE_SECTIONS, hooks
+from skrift.flash import get_flash_messages
+from skrift.hooks import ACCOUNT_PAGE_CONTEXT, ACCOUNT_PAGE_SECTIONS, hooks
 
 
 class AccountController(Controller):

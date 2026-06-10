@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from skrift.db.services import page_service
 from skrift.db.services.setting_service import get_cached_site_base_url, get_cached_robots_txt
 from skrift.lib.client_ip import get_client_ip
-from skrift.lib.hooks import hooks, ROBOTS_TXT, ROBOTS_TXT_FETCHED, SITEMAP_PAGE, SITEMAP_URLS
+from skrift.hooks import hooks, ROBOTS_TXT, ROBOTS_TXT_FETCHED, SITEMAP_PAGE, SITEMAP_URLS
 
 
 @dataclass

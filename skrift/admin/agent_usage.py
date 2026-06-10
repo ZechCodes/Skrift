@@ -13,7 +13,7 @@ from skrift.admin.helpers import get_admin_context
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.agents.models import AgentUsageRecord, AgentUsageTotals, RunState
 from skrift.auth.guards import Permission, auth_guard
-from skrift.lib.flash import get_flash_messages
+from skrift.flash import get_flash_messages
 from skrift.workers import get_runtime
 
 

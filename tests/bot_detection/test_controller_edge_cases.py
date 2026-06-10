@@ -28,7 +28,7 @@ from skrift.bot_detection.challenge import (
 from skrift.bot_detection.config import BotDetectionConfig
 from skrift.bot_detection.controllers import BotDetectionController
 from skrift.bot_detection.store import InMemoryBotStateStore
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 @pytest.fixture(autouse=True)

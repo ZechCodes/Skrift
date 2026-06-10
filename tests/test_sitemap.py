@@ -5,7 +5,7 @@ from datetime import datetime, UTC
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from skrift.controllers.sitemap import SitemapController, SitemapEntry
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 class TestSkriftDiscovery:

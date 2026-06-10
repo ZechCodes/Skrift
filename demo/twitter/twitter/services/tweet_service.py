@@ -5,7 +5,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 from twitter.hooks import (
     BEFORE_TWEET_SAVE, AFTER_TWEET_SAVE,
     BEFORE_TWEET_DELETE, AFTER_TWEET_DELETE,

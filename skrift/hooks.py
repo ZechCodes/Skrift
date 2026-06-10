@@ -7,7 +7,7 @@ Actions: Execute callbacks without modifying a value (side effects)
 Filters: Execute callbacks that can modify a value (transformations)
 
 Usage:
-    from skrift.lib.hooks import hooks, action, filter
+    from skrift.hooks import hooks, action, filter
 
     # Using decorators (auto-registered on import)
     @action("after_page_save", priority=10)

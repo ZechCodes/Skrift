@@ -30,9 +30,9 @@ from skrift.auth.roles import permissions_for_type
 from skrift.config import PageTypeConfig
 from skrift.db.services import page_service, revision_service
 from skrift.db.services.asset_service import get_asset_url
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
-from skrift.lib.hooks import PAGE_ADMIN_CAN_MUTATE, PAGE_ADMIN_PAGE_STATE, hooks
-from skrift.lib.storage import StorageManager
+from skrift.flash import flash_error, flash_success, get_flash_messages
+from skrift.hooks import PAGE_ADMIN_CAN_MUTATE, PAGE_ADMIN_PAGE_STATE, hooks
+from skrift.storage import StorageManager
 
 logger = logging.getLogger(__name__)
 

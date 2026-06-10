@@ -265,7 +265,7 @@ class TestPendingAuthSession:
                 stage="second_factor_required",
             )
 
-        from skrift.lib.hooks import AUTH_PENDING_AUTHENTICATION, hooks
+        from skrift.hooks import AUTH_PENDING_AUTHENTICATION, hooks
 
         hooks.add_filter(AUTH_PENDING_AUTHENTICATION, hold_for_second_factor)
         try:
@@ -300,7 +300,7 @@ class TestPendingAuthSession:
         async def hold_without_redirect(decision, *_args):
             return PendingAuthTransitionDecision(promote_immediately=False)
 
-        from skrift.lib.hooks import AUTH_PENDING_AUTHENTICATION, hooks
+        from skrift.hooks import AUTH_PENDING_AUTHENTICATION, hooks
 
         hooks.add_filter(AUTH_PENDING_AUTHENTICATION, hold_without_redirect)
         try:

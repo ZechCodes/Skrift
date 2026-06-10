@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from markupsafe import Markup
 
-from skrift.lib.hooks import hooks, PAGE_SEO_META, PAGE_OG_META
+from skrift.hooks import hooks, PAGE_SEO_META, PAGE_OG_META
 
 if TYPE_CHECKING:
     from skrift.db.models import Page

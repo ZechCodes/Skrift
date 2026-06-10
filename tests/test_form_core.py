@@ -112,7 +112,7 @@ class TestCSRF:
         request = make_csrf_request(token="test-token-123", name="John", email="john@example.com")
         form = Form(SimpleForm, request)
 
-        with patch("skrift.lib.hooks.hooks") as mock_hooks:
+        with patch("skrift.hooks.hooks") as mock_hooks:
             mock_hooks.apply_filters = AsyncMock(side_effect=lambda name, val, *a: val)
             result = await form.validate()
 
@@ -124,7 +124,7 @@ class TestCSRF:
         request = make_csrf_request(token=token, name="John", email="john@example.com")
         form = Form(SimpleForm, request)
 
-        with patch("skrift.lib.hooks.hooks") as mock_hooks:
+        with patch("skrift.hooks.hooks") as mock_hooks:
             mock_hooks.apply_filters = AsyncMock(side_effect=lambda name, val, *a: val)
             await form.validate()
 
@@ -162,7 +162,7 @@ class TestValidation:
         request = make_csrf_request(name="Alice", email="alice@example.com")
         form = Form(SimpleForm, request)
 
-        with patch("skrift.lib.hooks.hooks") as mock_hooks:
+        with patch("skrift.hooks.hooks") as mock_hooks:
             mock_hooks.apply_filters = AsyncMock(side_effect=lambda name, val, *a: val)
             result = await form.validate()
 
@@ -181,7 +181,7 @@ class TestValidation:
         request = make_csrf_request(name="Bob", email="bob@test.com")
         form = Form(SimpleForm, request)
 
-        with patch("skrift.lib.hooks.hooks") as mock_hooks:
+        with patch("skrift.hooks.hooks") as mock_hooks:
             mock_hooks.apply_filters = AsyncMock(side_effect=lambda name, val, *a: val)
             await form.validate()
 
@@ -231,7 +231,7 @@ class TestValidation:
         request = make_csrf_request(name="Alice")
         form = Form(BoolForm, request)
 
-        with patch("skrift.lib.hooks.hooks") as mock_hooks:
+        with patch("skrift.hooks.hooks") as mock_hooks:
             mock_hooks.apply_filters = AsyncMock(side_effect=lambda name, val, *a: val)
             result = await form.validate()
 
@@ -243,7 +243,7 @@ class TestValidation:
         request = make_csrf_request(name="A", email="a@b.com")
         form = Form(SimpleForm, request)
 
-        with patch("skrift.lib.hooks.hooks") as mock_hooks:
+        with patch("skrift.hooks.hooks") as mock_hooks:
             mock_hooks.apply_filters = AsyncMock(side_effect=lambda name, val, *a: val)
             await form.validate()
 
@@ -321,7 +321,7 @@ class TestIteration:
 
         request.form = _form
 
-        with patch("skrift.lib.hooks.hooks") as mock_hooks:
+        with patch("skrift.hooks.hooks") as mock_hooks:
             mock_hooks.apply_filters = AsyncMock(side_effect=lambda name, val, *a: val)
             await form.validate()
 

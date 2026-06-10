@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from skrift.config import get_settings, load_page_types_from_yaml
 from skrift.db.models import PageRepublish
-from skrift.lib.hooks import (
+from skrift.hooks import (
     API_GRANT_AUTHORIZE_CONSTRAINTS,
     API_GRANT_AUTHORIZE_CONTEXT,
     API_GRANT_AUTHORIZE_FRAGMENTS,

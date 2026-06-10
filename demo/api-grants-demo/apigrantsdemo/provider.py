@@ -15,7 +15,7 @@ from skrift.auth.permissions import (
     register_permission,
 )
 from skrift.auth.roles import register_role
-from skrift.lib.hooks import AFTER_USER_CREATED, action
+from skrift.hooks import AFTER_USER_CREATED, action
 
 from apigrantsdemo.permissions import (
     DEMO_ROLE,

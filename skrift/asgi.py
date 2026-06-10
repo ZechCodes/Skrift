@@ -886,7 +886,7 @@ def create_app() -> ASGIApp:
     )
 
     # Storage manager
-    from skrift.lib.storage import StorageManager
+    from skrift.storage import StorageManager
 
     storage_manager = StorageManager(settings.storage)
 
@@ -991,7 +991,7 @@ def create_app() -> ASGIApp:
     from skrift.controllers.sitemap import SitemapController
     from skrift.auth import sync_roles_to_database
     from skrift.lib.notification_backends import InMemoryBackend, load_backend
-    from skrift.lib.notifications import notifications as notification_service
+    from skrift.notifications import notifications as notification_service
 
     # API auth controller — only registered when api_keys are enabled
     from skrift.controllers.api_auth import APIAuthController
@@ -1075,7 +1075,7 @@ def create_app() -> ASGIApp:
 
         observability.instrument_sqlalchemy(db_config.get_engine())
 
-        from skrift.lib.hooks import APP_STARTUP, LOGFIRE_CONFIGURED, hooks
+        from skrift.hooks import APP_STARTUP, LOGFIRE_CONFIGURED, hooks
         await hooks.do_action(LOGFIRE_CONFIGURED)
 
         notification_service.set_backend(backend)
@@ -1088,7 +1088,7 @@ def create_app() -> ASGIApp:
         # Register Web Push fallback hook (only when PushController is enabled)
         if _push_enabled:
             try:
-                from skrift.lib.push import setup_push_hook
+                from skrift.push import setup_push_hook
                 setup_push_hook(db_config.get_session)
             except ImportError:
                 logger.debug("pywebpush not installed, push notifications disabled")
@@ -1146,7 +1146,7 @@ def create_app() -> ASGIApp:
 
     async def on_shutdown(_app: Litestar) -> None:
         """Stop notification backend and storage on shutdown."""
-        from skrift.lib.hooks import APP_SHUTDOWN, hooks
+        from skrift.hooks import APP_SHUTDOWN, hooks
         await hooks.do_action(APP_SHUTDOWN, _app)
 
         if settings.workers.enabled:

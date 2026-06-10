@@ -11,7 +11,7 @@ from skrift.bot_detection.beacon import (
 from skrift.bot_detection.controllers import BotDetectionController
 from skrift.bot_detection.store import InMemoryBotStateStore
 from skrift.bot_detection.hooks import BOT_PIXEL_LOADED
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 @pytest.fixture(autouse=True)

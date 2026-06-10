@@ -15,7 +15,7 @@ from skrift.admin.helpers import get_admin_context
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.db.models.oauth2_client import OAuth2Client
 from skrift.db.services import oauth2_service
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
+from skrift.flash import flash_error, flash_success, get_flash_messages
 
 
 class OAuth2ClientAdminController(Controller):

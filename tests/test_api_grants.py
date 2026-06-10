@@ -21,7 +21,7 @@ from skrift.auth.permissions import (
 from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.auth.tokens import create_signed_token, verify_signed_token
 from skrift.controllers.api_grants import APIGrantController
-from skrift.lib.hooks import API_GRANT_AUTHORIZE_CONSTRAINTS, hooks
+from skrift.hooks import API_GRANT_AUTHORIZE_CONSTRAINTS, hooks
 
 
 SECRET = "api-grant-test-secret"

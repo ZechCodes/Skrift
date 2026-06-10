@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from skrift.db.models.api_key import APIKey
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 def _generate_key() -> tuple[str, str, str]:

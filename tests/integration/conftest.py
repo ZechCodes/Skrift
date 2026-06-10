@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from skrift.config import DatabaseConfig, RedisConfig, Settings
 from skrift.db.base import Base
 from skrift.lib.notification_backends import PgNotifyBackend, RedisBackend
-from skrift.lib.notifications import NotificationService
+from skrift.notifications import NotificationService
 
 
 # ---------------------------------------------------------------------------

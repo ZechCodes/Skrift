@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from skrift.lib.hooks import hooks, NOTIFICATION_PRE_SEND, NOTIFICATION_SENT, NOTIFICATION_DISMISSED
-from skrift.lib.notifications import (
+from skrift.hooks import hooks, NOTIFICATION_PRE_SEND, NOTIFICATION_SENT, NOTIFICATION_DISMISSED
+from skrift.notifications import (
     NotDismissibleError,
     Notification,
     NotificationMode,
@@ -290,7 +290,7 @@ class TestConvenienceFunctionsModeParam:
     async def test_notify_session_mode_forwarded(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -311,7 +311,7 @@ class TestConvenienceFunctionsModeParam:
     async def test_notify_user_mode_forwarded(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -326,7 +326,7 @@ class TestConvenienceFunctionsModeParam:
     async def test_notify_broadcast_is_ephemeral(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -339,7 +339,7 @@ class TestConvenienceFunctionsModeParam:
     async def test_notify_session_default_mode_queued(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -527,7 +527,7 @@ class TestConvenienceFunctions:
     async def test_notify_session_passes_group(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -545,7 +545,7 @@ class TestConvenienceFunctions:
     async def test_notify_user_passes_group(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -558,7 +558,7 @@ class TestConvenienceFunctions:
     async def test_notify_broadcast_passes_group(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -572,7 +572,7 @@ class TestConvenienceFunctions:
     async def test_notify_session_no_group(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -697,7 +697,7 @@ class TestDismissGroupConvenience:
     async def test_dismiss_session_group(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -713,7 +713,7 @@ class TestDismissGroupConvenience:
     async def test_dismiss_session_group_not_found(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -725,7 +725,7 @@ class TestDismissGroupConvenience:
     async def test_dismiss_user_group(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -748,7 +748,7 @@ class TestDismissGroupConvenience:
     async def test_dismiss_user_group_not_found(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -1083,7 +1083,7 @@ class TestSourceSubscriptionModel:
     async def test_notify_source_convenience(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -1103,7 +1103,7 @@ class TestSourceSubscriptionModel:
     async def test_subscribe_source_convenience(self):
         svc = NotificationService()
 
-        from skrift.lib import notifications as mod
+        from skrift import notifications as mod
         original = mod.notifications
         mod.notifications = svc
         try:
@@ -1304,7 +1304,7 @@ class TestPerSubscriberDismissals:
         assert stored[0].id == n2.id
 
     def test_subscriber_key_derivation(self):
-        from skrift.lib.notifications import NotificationService
+        from skrift.notifications import NotificationService
 
         assert NotificationService._subscriber_key_for("s1", "alice") == "user:alice"
         assert NotificationService._subscriber_key_for("s1", None) == "session:s1"

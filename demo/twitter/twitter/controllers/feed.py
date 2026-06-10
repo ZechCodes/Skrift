@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.guards import auth_guard
 from skrift.db.models.user import User
-from skrift.lib.flash import get_flash_messages
+from skrift.flash import get_flash_messages
 from skrift.forms import Form, csrf_field
 
 from twitter.forms import ComposeTweetForm

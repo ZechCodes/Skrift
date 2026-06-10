@@ -61,7 +61,7 @@ The base template provides blocks for customization:
 ### In Controllers
 
 ```python
-from skrift.lib.seo import get_page_seo_meta, get_page_og_meta
+from skrift.seo import get_page_seo_meta, get_page_og_meta
 from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url
 
 async def my_handler(request, db_session, page):
@@ -108,7 +108,7 @@ Use hooks to modify SEO metadata globally:
 ### Add Author Meta
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("page_seo_meta")
 async def add_author(meta, page, site_name, base_url):
@@ -122,7 +122,7 @@ async def add_author(meta, page, site_name, base_url):
 ### Add Twitter Cards
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("page_og_meta")
 async def enhance_social(meta, page, site_name, base_url):

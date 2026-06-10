@@ -80,10 +80,10 @@ from jinja2.exceptions import TemplatesNotFound
 
 from skrift.forms import verify_csrf
 from skrift.forms.core import CSRF_SESSION_KEY
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
-from skrift.lib.hooks import hooks
+from skrift.flash import flash_error, flash_success, get_flash_messages
+from skrift.hooks import hooks
 from skrift.lib.redirects import get_safe_redirect_url, is_safe_redirect_url
-from skrift.lib.template import resolve_template_name
+from skrift.template import resolve_template_name
 from skrift.config import get_settings
 from skrift.setup.providers import DUMMY_PROVIDER_KEY
 

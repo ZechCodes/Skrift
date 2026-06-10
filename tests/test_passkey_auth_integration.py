@@ -282,7 +282,7 @@ def client(app):
 @pytest.fixture(autouse=True)
 def _clear_auth_hooks():
     """The controller fires async hooks on login — keep them isolated."""
-    from skrift.lib.hooks import hooks
+    from skrift.hooks import hooks
 
     original_filters = hooks._filters.copy()
     original_actions = hooks._actions.copy()

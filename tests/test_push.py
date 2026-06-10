@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from skrift.lib.notifications import NotificationService, SourceRegistry
+from skrift.notifications import NotificationService, SourceRegistry
 
 
 # ===========================================================================
@@ -21,7 +21,7 @@ class TestVapidKeyGeneration:
     """Test VAPID keypair generation and caching."""
 
     def test_generate_vapid_keys_returns_base64url_strings(self):
-        from skrift.lib.push import _generate_vapid_keys
+        from skrift.push import _generate_vapid_keys
 
         private, public = _generate_vapid_keys()
 
@@ -35,7 +35,7 @@ class TestVapidKeyGeneration:
         from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, EllipticCurvePublicKey
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_der_private_key
 
-        from skrift.lib.push import _generate_vapid_keys
+        from skrift.push import _generate_vapid_keys
 
         private_b64, public_b64 = _generate_vapid_keys()
 
@@ -50,7 +50,7 @@ class TestVapidKeyGeneration:
         assert public_bytes[0] == 0x04  # Uncompressed point marker
 
     def test_generate_vapid_keys_unique_each_time(self):
-        from skrift.lib.push import _generate_vapid_keys
+        from skrift.push import _generate_vapid_keys
 
         key1 = _generate_vapid_keys()
         key2 = _generate_vapid_keys()
@@ -58,7 +58,7 @@ class TestVapidKeyGeneration:
 
     @pytest.mark.asyncio
     async def test_ensure_vapid_keys_generates_on_first_use(self):
-        import skrift.lib.push as push_mod
+        import skrift.push as push_mod
 
         # Reset cache
         push_mod._vapid_private_key = None
@@ -80,7 +80,7 @@ class TestVapidKeyGeneration:
 
     @pytest.mark.asyncio
     async def test_ensure_vapid_keys_loads_from_db(self):
-        import skrift.lib.push as push_mod
+        import skrift.push as push_mod
 
         push_mod._vapid_private_key = None
         push_mod._vapid_public_key = None
@@ -108,7 +108,7 @@ class TestVapidKeyGeneration:
 
     @pytest.mark.asyncio
     async def test_ensure_vapid_keys_uses_cache(self):
-        import skrift.lib.push as push_mod
+        import skrift.push as push_mod
 
         push_mod._vapid_private_key = "cached-private"
         push_mod._vapid_public_key = "cached-public"
@@ -163,7 +163,7 @@ class TestSubscriptionManagement:
 
     @pytest.mark.asyncio
     async def test_save_subscription_creates_new(self):
-        from skrift.lib.push import save_subscription
+        from skrift.push import save_subscription
 
         mock_session = AsyncMock()
         mock_result = MagicMock()
@@ -181,7 +181,7 @@ class TestSubscriptionManagement:
     @pytest.mark.asyncio
     async def test_save_subscription_updates_existing(self):
         from skrift.db.models.push_subscription import PushSubscription
-        from skrift.lib.push import save_subscription
+        from skrift.push import save_subscription
 
         existing = MagicMock(spec=PushSubscription)
         existing.user_id = "old-user"
@@ -204,7 +204,7 @@ class TestSubscriptionManagement:
 
     @pytest.mark.asyncio
     async def test_remove_subscription_found(self):
-        from skrift.lib.push import remove_subscription
+        from skrift.push import remove_subscription
 
         mock_sub = MagicMock()
         mock_session = AsyncMock()
@@ -220,7 +220,7 @@ class TestSubscriptionManagement:
 
     @pytest.mark.asyncio
     async def test_remove_subscription_not_found(self):
-        from skrift.lib.push import remove_subscription
+        from skrift.push import remove_subscription
 
         mock_session = AsyncMock()
         mock_result = MagicMock()
@@ -251,7 +251,7 @@ class TestSendPush:
 
     @pytest.mark.asyncio
     async def test_send_push_no_subscriptions(self):
-        import skrift.lib.push as push_mod
+        import skrift.push as push_mod
 
         push_mod._vapid_private_key = "fake-key"
         push_mod._vapid_public_key = "fake-pub"
@@ -269,7 +269,7 @@ class TestSendPush:
 
     @pytest.mark.asyncio
     async def test_send_push_success(self):
-        import skrift.lib.push as push_mod
+        import skrift.push as push_mod
 
         # Generate real keys for the test
         private, public = push_mod._generate_vapid_keys()
@@ -316,7 +316,7 @@ class TestSendPush:
 
     @pytest.mark.asyncio
     async def test_send_push_cleans_expired_subscriptions(self):
-        import skrift.lib.push as push_mod
+        import skrift.push as push_mod
 
         push_mod._vapid_private_key = "fake-key"
         push_mod._vapid_public_key = "fake-pub"
@@ -364,12 +364,12 @@ class TestUnifiedNotify:
 
     @pytest.mark.asyncio
     async def test_notify_sends_sse_always(self):
-        from skrift.lib.push import notify
+        from skrift.push import notify
 
         mock_session = AsyncMock()
 
-        with patch("skrift.lib.notifications.notify_user", new_callable=AsyncMock) as mock_notify, \
-             patch("skrift.lib.notifications.notifications") as mock_ns:
+        with patch("skrift.notifications.notify_user", new_callable=AsyncMock) as mock_notify, \
+             patch("skrift.notifications.notifications") as mock_ns:
             # Simulate active SSE connection
             mock_ns._registry.has_listeners.return_value = True
 
@@ -385,13 +385,13 @@ class TestUnifiedNotify:
 
     @pytest.mark.asyncio
     async def test_notify_skips_push_when_sse_connected(self):
-        from skrift.lib.push import notify
+        from skrift.push import notify
 
         mock_session = AsyncMock()
 
-        with patch("skrift.lib.notifications.notify_user", new_callable=AsyncMock), \
-             patch("skrift.lib.notifications.notifications") as mock_ns, \
-             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+        with patch("skrift.notifications.notify_user", new_callable=AsyncMock), \
+             patch("skrift.notifications.notifications") as mock_ns, \
+             patch("skrift.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
             mock_ns._registry.has_listeners.return_value = True
 
             await notify(
@@ -404,13 +404,13 @@ class TestUnifiedNotify:
 
     @pytest.mark.asyncio
     async def test_notify_sends_push_when_no_sse(self):
-        from skrift.lib.push import notify
+        from skrift.push import notify
 
         mock_session = AsyncMock()
 
-        with patch("skrift.lib.notifications.notify_user", new_callable=AsyncMock), \
-             patch("skrift.lib.notifications.notifications") as mock_ns, \
-             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+        with patch("skrift.notifications.notify_user", new_callable=AsyncMock), \
+             patch("skrift.notifications.notifications") as mock_ns, \
+             patch("skrift.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
             mock_ns._registry.has_listeners.return_value = False
             mock_ns._registry._subscribers.get.return_value = set()
 
@@ -431,13 +431,13 @@ class TestUnifiedNotify:
 
     @pytest.mark.asyncio
     async def test_notify_no_push_when_fallback_disabled(self):
-        from skrift.lib.push import notify
+        from skrift.push import notify
 
         mock_session = AsyncMock()
 
-        with patch("skrift.lib.notifications.notify_user", new_callable=AsyncMock), \
-             patch("skrift.lib.notifications.notifications") as mock_ns, \
-             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+        with patch("skrift.notifications.notify_user", new_callable=AsyncMock), \
+             patch("skrift.notifications.notifications") as mock_ns, \
+             patch("skrift.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
             mock_ns._registry.has_listeners.return_value = False
 
             await notify(
@@ -449,13 +449,13 @@ class TestUnifiedNotify:
 
     @pytest.mark.asyncio
     async def test_notify_checks_downstream_sessions(self):
-        from skrift.lib.push import notify
+        from skrift.push import notify
 
         mock_session = AsyncMock()
 
-        with patch("skrift.lib.notifications.notify_user", new_callable=AsyncMock), \
-             patch("skrift.lib.notifications.notifications") as mock_ns, \
-             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+        with patch("skrift.notifications.notify_user", new_callable=AsyncMock), \
+             patch("skrift.notifications.notifications") as mock_ns, \
+             patch("skrift.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
             # No direct listeners on user key
             def has_listeners(key):
                 return key == "session:abc"
@@ -482,8 +482,8 @@ class TestPushHook:
     """Test the NOTIFICATION_SENT hook for push fallback."""
 
     def test_setup_push_hook_registers_action(self):
-        from skrift.lib.hooks import NOTIFICATION_SENT, hooks
-        from skrift.lib.push import setup_push_hook
+        from skrift.hooks import NOTIFICATION_SENT, hooks
+        from skrift.push import setup_push_hook
 
         hooks.clear()
         mock_session_maker = MagicMock()
@@ -494,9 +494,9 @@ class TestPushHook:
 
     @pytest.mark.asyncio
     async def test_push_hook_fires_for_disconnected_user(self):
-        from skrift.lib.hooks import NOTIFICATION_SENT, hooks
-        from skrift.lib.notifications import Notification, NotificationMode
-        from skrift.lib.push import setup_push_hook
+        from skrift.hooks import NOTIFICATION_SENT, hooks
+        from skrift.notifications import Notification, NotificationMode
+        from skrift.push import setup_push_hook
 
         hooks.clear()
 
@@ -513,8 +513,8 @@ class TestPushHook:
             mode=NotificationMode.TIMESERIES,
         )
 
-        with patch("skrift.lib.notifications.notifications") as mock_ns, \
-             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+        with patch("skrift.notifications.notifications") as mock_ns, \
+             patch("skrift.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
             mock_ns._registry.has_listeners.return_value = False
             mock_ns._registry._subscribers.get.return_value = set()
 
@@ -529,9 +529,9 @@ class TestPushHook:
 
     @pytest.mark.asyncio
     async def test_push_hook_skips_non_user_scope(self):
-        from skrift.lib.hooks import NOTIFICATION_SENT, hooks
-        from skrift.lib.notifications import Notification
-        from skrift.lib.push import setup_push_hook
+        from skrift.hooks import NOTIFICATION_SENT, hooks
+        from skrift.notifications import Notification
+        from skrift.push import setup_push_hook
 
         hooks.clear()
 
@@ -540,7 +540,7 @@ class TestPushHook:
 
         notification = Notification(type="test", payload={})
 
-        with patch("skrift.lib.push.send_push", new_callable=AsyncMock) as mock_push:
+        with patch("skrift.push.send_push", new_callable=AsyncMock) as mock_push:
             await hooks.do_action(NOTIFICATION_SENT, notification, "session", "abc")
 
         mock_push.assert_not_awaited()
@@ -549,9 +549,9 @@ class TestPushHook:
     @pytest.mark.asyncio
     async def test_push_hook_respects_push_notify_true(self):
         """push_notify=True forces push even when SSE is connected."""
-        from skrift.lib.hooks import NOTIFICATION_SENT, hooks
-        from skrift.lib.notifications import Notification, NotificationMode
-        from skrift.lib.push import setup_push_hook
+        from skrift.hooks import NOTIFICATION_SENT, hooks
+        from skrift.notifications import Notification, NotificationMode
+        from skrift.push import setup_push_hook
 
         hooks.clear()
 
@@ -568,8 +568,8 @@ class TestPushHook:
             mode=NotificationMode.TIMESERIES,
         )
 
-        with patch("skrift.lib.notifications.notifications") as mock_ns, \
-             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+        with patch("skrift.notifications.notifications") as mock_ns, \
+             patch("skrift.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
             # SSE IS connected, but push_notify=True overrides
             mock_ns._registry.has_listeners.return_value = True
 
@@ -581,9 +581,9 @@ class TestPushHook:
     @pytest.mark.asyncio
     async def test_push_hook_respects_push_notify_false(self):
         """push_notify=False blocks push even when SSE is disconnected."""
-        from skrift.lib.hooks import NOTIFICATION_SENT, hooks
-        from skrift.lib.notifications import Notification, NotificationMode
-        from skrift.lib.push import setup_push_hook
+        from skrift.hooks import NOTIFICATION_SENT, hooks
+        from skrift.notifications import Notification, NotificationMode
+        from skrift.push import setup_push_hook
 
         hooks.clear()
 
@@ -596,8 +596,8 @@ class TestPushHook:
             mode=NotificationMode.TIMESERIES,
         )
 
-        with patch("skrift.lib.notifications.notifications") as mock_ns, \
-             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+        with patch("skrift.notifications.notifications") as mock_ns, \
+             patch("skrift.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
             # SSE is NOT connected, but push_notify=False prevents push
             mock_ns._registry.has_listeners.return_value = False
             mock_ns._registry._subscribers.get.return_value = set()
@@ -610,9 +610,9 @@ class TestPushHook:
     @pytest.mark.asyncio
     async def test_push_hook_push_notify_none_is_auto(self):
         """push_notify=None (default) uses SSE presence to decide."""
-        from skrift.lib.hooks import NOTIFICATION_SENT, hooks
-        from skrift.lib.notifications import Notification, NotificationMode
-        from skrift.lib.push import setup_push_hook
+        from skrift.hooks import NOTIFICATION_SENT, hooks
+        from skrift.notifications import Notification, NotificationMode
+        from skrift.push import setup_push_hook
 
         hooks.clear()
 
@@ -625,8 +625,8 @@ class TestPushHook:
             mode=NotificationMode.TIMESERIES,
         )
 
-        with patch("skrift.lib.notifications.notifications") as mock_ns, \
-             patch("skrift.lib.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
+        with patch("skrift.notifications.notifications") as mock_ns, \
+             patch("skrift.push.send_push", new_callable=AsyncMock, create=True) as mock_push:
             # SSE IS connected — auto mode should skip push
             mock_ns._registry.has_listeners.return_value = True
 

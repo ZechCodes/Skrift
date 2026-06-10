@@ -24,7 +24,7 @@ from litestar.middleware.session.client_side import (
 from litestar.template import TemplateConfig
 
 from skrift.lib.exceptions import http_exception_handler, internal_server_error_handler
-from skrift.lib.markdown import render_markdown
+from skrift.markdown import render_markdown
 from skrift.middleware.security import csp_nonce_var
 
 if TYPE_CHECKING:

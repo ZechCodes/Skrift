@@ -29,7 +29,7 @@ from skrift.agents.state import (
     update_runstate,
 )
 from skrift.config import AgentsConfig
-from skrift.lib.hooks import AGENT_EVENT_APPENDED, hooks
+from skrift.hooks import AGENT_EVENT_APPENDED, hooks
 from skrift.workers.models import DeadJobEntry, DeadLetterCause, JobEnvelope
 from skrift.workers.registry import registry as worker_registry
 

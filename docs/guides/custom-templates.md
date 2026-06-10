@@ -23,7 +23,7 @@ This allows you to create:
 The `Template` class in `skrift/lib/template.py` handles resolution:
 
 ```python
-from skrift.lib.template import Template
+from skrift.template import Template
 
 # For URL /about
 template = Template("page", "about")

@@ -19,7 +19,7 @@ from skrift.agents.models import (
     OutboxWake,
     RunState,
 )
-from skrift.lib.hooks import AGENT_EVENT_APPENDED, hooks
+from skrift.hooks import AGENT_EVENT_APPENDED, hooks
 from skrift.workers import get_runtime
 from skrift.workers.models import utcnow
 

@@ -11,7 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
 from skrift.db.models.role import Role, RolePermission
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession

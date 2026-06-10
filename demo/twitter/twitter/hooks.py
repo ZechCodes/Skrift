@@ -1,6 +1,6 @@
 import re
 
-from skrift.lib.hooks import filter as filter_hook
+from skrift.hooks import filter as filter_hook
 
 # Action hook constants
 BEFORE_TWEET_SAVE = "before_tweet_save"

@@ -9,7 +9,7 @@ from skrift.auth.session_keys import SESSION_USER_ID
 from skrift.db.cache import get_by_pk
 from skrift.db.models.user import User
 from skrift.db.services.setting_service import get_cached_site_theme
-from skrift.lib.hooks import RESOLVE_THEME, apply_filters
+from skrift.hooks import RESOLVE_THEME, apply_filters
 
 
 async def get_user_context(request: Request, db_session: AsyncSession) -> dict:

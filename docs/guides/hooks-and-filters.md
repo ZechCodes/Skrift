@@ -14,7 +14,7 @@ The hook system has two types of extensibility points:
 ## Quick Start
 
 ```python
-from skrift.lib.hooks import action, filter, hooks
+from skrift.hooks import action, filter, hooks
 
 # Using decorators (auto-registered on import)
 @action("after_page_save")
@@ -38,7 +38,7 @@ Actions let you execute code when something happens. They don't return values.
 ### Registering an Action
 
 ```python
-from skrift.lib.hooks import hooks, action
+from skrift.hooks import hooks, action
 
 # Via decorator
 @action("after_page_save", priority=10)
@@ -65,7 +65,7 @@ hooks.add_action("after_page_save", sync_handler, priority=20)
 ### Triggering Actions
 
 ```python
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 # In your code
 await hooks.do_action("my_custom_action", arg1, arg2, kwarg=value)
@@ -78,7 +78,7 @@ Filters let you modify values as they pass through. They must return the (modifi
 ### Registering a Filter
 
 ```python
-from skrift.lib.hooks import hooks, filter
+from skrift.hooks import hooks, filter
 
 @filter("page_seo_meta", priority=10)
 async def customize_seo(meta, page, site_name, base_url):
@@ -101,7 +101,7 @@ hooks.add_filter("sitemap_urls", add_custom_urls, priority=5)
 ### Applying Filters
 
 ```python
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 # In your code
 result = await hooks.apply_filters("my_filter", initial_value, extra_arg)
@@ -240,7 +240,7 @@ def sync_handler(page, is_new):
 ## Removing Hooks
 
 ```python
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 # Remove specific callback
 hooks.remove_action("my_hook", my_callback)
@@ -255,7 +255,7 @@ hooks.clear()
 ### Add Custom Sitemap URLs
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 from skrift.controllers.sitemap import SitemapEntry
 
 @filter("sitemap_urls")
@@ -271,7 +271,7 @@ def add_api_docs(entries):
 ### Exclude Pages from Sitemap
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("sitemap_page")
 def exclude_private_pages(entry, page):
@@ -283,7 +283,7 @@ def exclude_private_pages(entry, page):
 ### Customize robots.txt
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("robots_txt")
 def add_crawl_delay(content):
@@ -293,7 +293,7 @@ def add_crawl_delay(content):
 ### Log All Page Changes
 
 ```python
-from skrift.lib.hooks import action
+from skrift.hooks import action
 import logging
 
 logger = logging.getLogger(__name__)
@@ -313,7 +313,7 @@ async def audit_delete(page):
 Import hook names as constants for better IDE support:
 
 ```python
-from skrift.lib.hooks import (
+from skrift.hooks import (
     # Page hooks
     BEFORE_PAGE_SAVE,
     AFTER_PAGE_SAVE,

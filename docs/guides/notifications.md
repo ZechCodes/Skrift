@@ -4,15 +4,15 @@ Skrift includes a real-time notification system delivered via Server-Sent Events
 
 ## Sending Notifications
 
-Use the convenience functions in `skrift.lib.notifications`:
+Use the convenience functions in `skrift.notifications`:
 
 ```python
-from skrift.lib.notifications import (
-    notify_session, notify_user, notify_broadcast, _ensure_nid
+from skrift.notifications import (
+    notify_session, notify_user, notify_broadcast, ensure_nid
 )
 
 # Session-scoped — stored, replayed on reconnect
-nid = _ensure_nid(request)
+nid = ensure_nid(request)
 await notify_session(nid, "generic", title="Saved", message="Your draft was saved.")
 
 # User-scoped — stored, delivered to all sessions of a user
@@ -35,9 +35,9 @@ Stored notifications replay on reconnect. Broadcast notifications are ephemeral.
 Every notification has a **mode** that controls storage, replay, and dismiss behavior. Pass the `mode` keyword to any convenience function:
 
 ```python
-from skrift.lib.notifications import notify_session, NotificationMode, _ensure_nid
+from skrift.notifications import notify_session, NotificationMode, ensure_nid
 
-nid = _ensure_nid(request)
+nid = ensure_nid(request)
 
 # Queued (default) — stored, replayed on reconnect, user dismisses manually
 await notify_session(nid, "generic", title="New comment", message="...")
@@ -85,7 +85,7 @@ The InMemory backend does not run cleanup (notifications are lost on restart).
 All three functions accept an optional `group` keyword. A new notification with the same group key automatically replaces the previous one:
 
 ```python
-nid = _ensure_nid(request)
+nid = ensure_nid(request)
 
 # Progress updates — each replaces the previous toast
 await notify_session(nid, "generic", group="deploy", title="Deploying…", message="Step 1/3")
@@ -96,7 +96,7 @@ await notify_session(nid, "generic", group="deploy", title="Deployed!", message=
 ### Dismissing by Group Key
 
 ```python
-from skrift.lib.notifications import dismiss_session_group, dismiss_user_group
+from skrift.notifications import dismiss_session_group, dismiss_user_group
 
 # Dismiss the active "deploy" notification without knowing its UUID
 await dismiss_session_group(nid, "deploy")

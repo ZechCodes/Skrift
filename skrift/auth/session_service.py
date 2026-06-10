@@ -258,7 +258,7 @@ async def decide_pending_authentication_transition(
     initial_decision: PendingAuthTransitionDecision | None = None,
 ) -> PendingAuthTransitionDecision:
     """Decide whether pending auth should promote immediately or remain pending."""
-    from skrift.lib.hooks import AUTH_PENDING_AUTHENTICATION, hooks
+    from skrift.hooks import AUTH_PENDING_AUTHENTICATION, hooks
 
     decision = initial_decision or PendingAuthTransitionDecision(promote_immediately=True)
     decision = await hooks.apply_filters(

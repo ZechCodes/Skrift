@@ -7,10 +7,10 @@ from litestar import Controller, Request, post
 from litestar.response import Response
 from pydantic import BaseModel, Field
 
-from skrift.lib import notifications as _notifications_mod
+from skrift import notifications as _notifications_mod
 from skrift.lib.client_ip import get_client_ip
-from skrift.lib.hooks import hooks, WEBHOOK_NOTIFICATION_RECEIVED
-from skrift.lib.notifications import Notification, NotificationMode
+from skrift.hooks import hooks, WEBHOOK_NOTIFICATION_RECEIVED
+from skrift.notifications import Notification, NotificationMode
 from skrift.lib.sliding_window import InMemorySlidingWindowCounter, SlidingWindowCounter
 
 

@@ -8,7 +8,7 @@ Provides three layers:
    for disconnected users. Single dispatch point for app code.
 
 Usage:
-    from skrift.lib.push import send_push, get_vapid_public_key, notify
+    from skrift.push import send_push, get_vapid_public_key, notify
 
     # Get the public key for frontend subscription
     public_key = await get_vapid_public_key(db_session)
@@ -285,7 +285,7 @@ async def notify(
         push_tag: Tag for push grouping (falls back to event type)
         group: Notification group key for SSE
     """
-    from skrift.lib.notifications import NotificationMode, notifications, notify_user
+    from skrift.notifications import NotificationMode, notifications, notify_user
 
     payload = data or {}
 
@@ -346,8 +346,8 @@ def setup_push_hook(session_maker) -> None:
     Args:
         session_maker: Async session factory (e.g. db_config.get_session)
     """
-    from skrift.lib.hooks import NOTIFICATION_SENT, hooks
-    from skrift.lib.notifications import Notification
+    from skrift.hooks import NOTIFICATION_SENT, hooks
+    from skrift.notifications import Notification
 
     async def _push_on_notification(notification: Notification, scope: str, scope_id: str | None) -> None:
         """Hook: send push notification when user has no active SSE connection."""
@@ -361,7 +361,7 @@ def setup_push_hook(session_maker) -> None:
 
         if push_notify is not True:
             # Auto mode: only send push if no active SSE connection
-            from skrift.lib.notifications import notifications
+            from skrift.notifications import notifications
 
             user_key = f"user:{scope_id}"
             has_sse = notifications._registry.has_listeners(user_key)

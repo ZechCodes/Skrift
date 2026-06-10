@@ -200,7 +200,7 @@ self.data = await hooks.apply_filters("form_validated", self.data, self.name)
 Example hook:
 
 ```python
-from skrift.lib.hooks import filter
+from skrift.hooks import filter
 
 @filter("form_contact_validated")
 async def sanitize_contact(data):

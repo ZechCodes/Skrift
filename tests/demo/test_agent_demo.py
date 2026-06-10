@@ -12,11 +12,11 @@ from pydantic_ai.models.test import TestModel
 
 import skrift
 import skrift.config as config_mod
-import skrift.lib.notifications as notifications_mod
+import skrift.notifications as notifications_mod
 from skrift.agents.registry import registry as agent_registry
 from skrift.agents.runtime import register_agent_handlers
 from skrift.config import clear_settings_cache, set_config_path
-from skrift.lib.notifications import NotificationMode, NotificationService
+from skrift.notifications import NotificationMode, NotificationService
 from skrift.workers.registry import registry as worker_registry
 
 
@@ -83,7 +83,7 @@ def test_demo_agent_exposes_basic_calculator_tool():
 async def test_agent_event_watcher_emits_timeseries_notifications(monkeypatch):
     controllers = importlib.import_module("agentdemo.controllers")
     svc = NotificationService()
-    monkeypatch.setattr("skrift.lib.notifications.notifications", svc)
+    monkeypatch.setattr("skrift.notifications.notifications", svc)
     monkeypatch.setattr(controllers, "notify_session", notifications_mod.notify_session)
 
     agent = skrift.Agent(TestModel(custom_output_text="hello from demo"), name="demo.watch")
@@ -101,7 +101,7 @@ async def test_agent_event_watcher_emits_timeseries_notifications(monkeypatch):
 async def test_agent_event_watcher_continues_across_queued_turn(monkeypatch):
     controllers = importlib.import_module("agentdemo.controllers")
     svc = NotificationService()
-    monkeypatch.setattr("skrift.lib.notifications.notifications", svc)
+    monkeypatch.setattr("skrift.notifications.notifications", svc)
     monkeypatch.setattr(controllers, "notify_session", notifications_mod.notify_session)
 
     runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
@@ -124,7 +124,7 @@ async def test_agent_event_watcher_continues_across_queued_turn(monkeypatch):
 async def test_controller_starts_session_and_queues_watcher(monkeypatch):
     controllers = importlib.import_module("agentdemo.controllers")
     svc = NotificationService()
-    monkeypatch.setattr("skrift.lib.notifications.notifications", svc)
+    monkeypatch.setattr("skrift.notifications.notifications", svc)
     monkeypatch.setattr(controllers, "notify_session", notifications_mod.notify_session)
     monkeypatch.setattr(controllers, "_gemini_configured", lambda: True)
     monkeypatch.setattr(

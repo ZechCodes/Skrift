@@ -1,7 +1,7 @@
 """Tests for the hook/filter system."""
 
 import pytest
-from skrift.lib.hooks import HookRegistry, action, filter, hooks
+from skrift.hooks import HookRegistry, action, filter, hooks
 
 
 @pytest.fixture

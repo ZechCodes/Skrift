@@ -30,7 +30,7 @@ from skrift.bot_detection.types import (
     BotDetectionResult,
     derive_overall_verdict,
 )
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ Custom sources (e.g., ``blog:tech``) can be declared; users subscribe to them.
 The backend is pluggable via app.yaml — see notification_backends.py.
 
 Usage:
-    from skrift.lib.notifications import notify_session, notify_user, notify_source
+    from skrift.notifications import notify_session, notify_user, notify_source
 
     await notify_session(nid, "generic", title="Page published", message="Now live.")
     await notify_user(user_id, "generic", title="New comment", message="On your post.")
@@ -24,7 +24,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from skrift.lib.hooks import hooks, NOTIFICATION_PRE_SEND, NOTIFICATION_SENT, NOTIFICATION_DISMISSED
+from skrift.hooks import hooks, NOTIFICATION_PRE_SEND, NOTIFICATION_SENT, NOTIFICATION_DISMISSED
 
 if TYPE_CHECKING:
     from skrift.lib.notification_backends import NotificationBackend
@@ -553,7 +553,7 @@ async def dismiss_user_group(user_id: str, group: str) -> bool:
     return await notifications.dismiss(anchor_nid, user_id, group=group)
 
 
-def _ensure_nid(request) -> str:
+def ensure_nid(request) -> str:
     """Get or lazily create _nid in session."""
     nid = request.session.get("_nid")
     if not nid:

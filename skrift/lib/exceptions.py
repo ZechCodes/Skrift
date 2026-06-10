@@ -25,7 +25,7 @@ def _accepts_html(request: Request) -> bool:
 def _resolve_error_template(status_code: int) -> str:
     """Resolve error template with fallback, WP-style."""
     from skrift.db.services.setting_service import get_cached_site_theme
-    from skrift.lib.template import Template
+    from skrift.template import Template
     return Template("error", str(status_code)).resolve(
         TEMPLATE_DIR, theme_name=get_cached_site_theme()
     )

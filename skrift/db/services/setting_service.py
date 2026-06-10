@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models import Setting
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 # In-memory cache for site settings (avoids DB queries on every page render)
 _site_settings_cache: dict[str, str] = {}

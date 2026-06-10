@@ -16,7 +16,7 @@ from litestar.enums import RequestEncodingType
 from litestar.params import Body
 from litestar.response import Redirect, Response, Template as TemplateResponse
 
-from skrift.lib.hooks import AFTER_USER_CREATED, APP_SHUTDOWN, APP_STARTUP, action
+from skrift.hooks import AFTER_USER_CREATED, APP_SHUTDOWN, APP_STARTUP, action
 from skrift.workers.models import utcnow
 
 

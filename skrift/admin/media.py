@@ -26,8 +26,8 @@ from skrift.db.services.asset_service import (
     list_assets,
     upload_asset,
 )
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
-from skrift.lib.storage import StorageManager
+from skrift.flash import flash_error, flash_success, get_flash_messages
+from skrift.storage import StorageManager
 
 logger = logging.getLogger(__name__)
 

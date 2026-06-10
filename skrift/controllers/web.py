@@ -12,7 +12,7 @@ from skrift.controllers.page_rendering import (
     wants_markdown_response,
 )
 from skrift.db.services import page_service
-from skrift.lib.template import Template
+from skrift.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
 

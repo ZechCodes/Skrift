@@ -21,7 +21,7 @@ from skrift.db.models import APIKey
 from skrift.db.services import api_key_service
 from skrift.forms import verify_csrf
 from skrift.lib.client_ip import get_client_ip
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
+from skrift.flash import flash_error, flash_success, get_flash_messages
 from skrift.republish import REPUBLISH_PERMISSION
 from skrift.republish.service import (
     apply_republish_delete_behavior,

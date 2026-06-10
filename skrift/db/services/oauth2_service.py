@@ -12,7 +12,7 @@ from skrift.auth.client_secret import hash_client_secret
 from skrift.db.models.oauth2_client import OAuth2Client
 from skrift.db.models.revoked_family import RevokedFamily
 from skrift.db.models.revoked_token import RevokedToken
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 
 @dataclass(slots=True)

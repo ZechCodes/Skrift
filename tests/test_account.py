@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from skrift.controllers.account import AccountController
-from skrift.lib.hooks import ACCOUNT_PAGE_CONTEXT, ACCOUNT_PAGE_SECTIONS, hooks
+from skrift.hooks import ACCOUNT_PAGE_CONTEXT, ACCOUNT_PAGE_SECTIONS, hooks
 
 
 @pytest.mark.asyncio

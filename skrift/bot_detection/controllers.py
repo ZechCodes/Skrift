@@ -28,7 +28,7 @@ from skrift.bot_detection.challenge import (
 )
 from skrift.bot_detection.hooks import BOT_CHALLENGE_PASSED, BOT_PIXEL_LOADED
 from skrift.lib.client_ip import get_client_ip
-from skrift.lib.hooks import hooks
+from skrift.hooks import hooks
 
 logger = logging.getLogger(__name__)
 

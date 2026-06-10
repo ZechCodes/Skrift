@@ -19,7 +19,7 @@ from skrift.auth.roles import ROLE_DEFINITIONS
 from skrift.config import get_settings
 from skrift.db.models.user import User
 from skrift.db.services import api_key_service
-from skrift.lib.flash import flash_error, flash_success, get_flash_messages
+from skrift.flash import flash_error, flash_success, get_flash_messages
 
 
 def _all_permissions() -> list[str]:

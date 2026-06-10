@@ -3,7 +3,7 @@ from unittest.mock import patch
 import jinja2
 import pytest
 
-from skrift.lib.template import Template
+from skrift.template import Template
 
 
 class MockTemplateEngine:

@@ -33,7 +33,7 @@ from skrift.bot_detection.middleware import BotDetectionMiddleware
 from skrift.bot_detection.setup import setup_honeypot_hooks
 from skrift.bot_detection.store import InMemoryBotStateStore
 from skrift.bot_detection.trap_controller import build_trap_controller
-from skrift.lib.hooks import (
+from skrift.hooks import (
     ROBOTS_TXT,
     ROBOTS_TXT_FETCHED,
     hooks,

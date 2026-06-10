@@ -16,10 +16,10 @@ from skrift.db.services.setting_service import (
     get_cached_site_base_url,
     get_cached_site_theme,
 )
-from skrift.lib.hooks import RESOLVE_THEME, apply_filters
-from skrift.lib.notifications import _ensure_nid
-from skrift.lib.seo import get_page_seo_meta, get_page_og_meta
-from skrift.lib.template import Template
+from skrift.hooks import RESOLVE_THEME, apply_filters
+from skrift.notifications import ensure_nid
+from skrift.seo import get_page_seo_meta, get_page_og_meta
+from skrift.template import Template
 
 import blog.hooks  # noqa: F401 — registers hooks on import
 
@@ -55,7 +55,7 @@ class BlogController(Controller):
         flash = request.session.pop("flash", None)
 
         # Ensure notification ID for real-time updates
-        nid = _ensure_nid(request)
+        nid = ensure_nid(request)
         blog.hooks.register_blog_session(nid)
 
         posts = await page_service.list_pages(
@@ -95,7 +95,7 @@ class BlogController(Controller):
         theme_name = await self._resolve_theme(request)
         flash = request.session.pop("flash", None)
 
-        nid = _ensure_nid(request)
+        nid = ensure_nid(request)
         blog.hooks.register_blog_session(nid)
 
         page = await page_service.get_page_by_slug(
