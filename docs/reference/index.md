@@ -60,6 +60,14 @@ Technical reference documentation for Skrift.
 
     [:octicons-arrow-right-24: Page Types](page-types.md)
 
+-   :material-swap-horizontal:{ .lg .middle } **Migration: Framework Cleanup**
+
+    ---
+
+    Every import move, rename, and behavior change from the June 2026 API cleanup — old to new.
+
+    [:octicons-arrow-right-24: Migration Guide](migration-framework-cleanup.md)
+
 </div>
 
 ## Security

@@ -100,6 +100,7 @@ nav:
     - Republishing: reference/republish.md
     - Security Features: reference/security-features.md
     - CSS Framework: reference/css-framework.md
+    - "Migration: Framework Cleanup": reference/migration-framework-cleanup.md
   - Deployment:
     - deployment/index.md
     - Production: deployment/production.md
