@@ -101,6 +101,44 @@ middleware:
   - myapp.middleware:create_logging_middleware
 ```
 
+### Custom config sections
+
+Extensions add their own typed app.yaml sections without touching core — register at import time, before app creation:
+
+```python
+from pydantic import BaseModel
+from skrift import register_config_section
+
+class ShopConfig(BaseModel):
+    enabled: bool = False
+    currency: str = "USD"
+
+register_config_section("shop", ShopConfig)
+# app.yaml:  shop: {enabled: true, currency: EUR}
+# anywhere:  get_settings().shop.currency  (defaults to ShopConfig() if absent)
+```
+
+Built-in sections (db, auth, workers, …) parse through the same registry. Bespoke top-level keys (`storage`, `page_types`, `sites`, scalars) are reserved.
+
+## Public Import Surface
+
+The everyday toolkit is importable from top-level `skrift`:
+
+```python
+from skrift import (
+    FormModel, Form,                      # forms
+    auth_guard, Permission, Role,         # guards
+    action, add_filter, do_action, apply_filters, hooks,  # hooks
+    flash_success, flash_error,           # flash messages
+    notify_user, notify_session, ensure_nid,  # notifications
+    get_settings, register_config_section,    # config
+    Template, render_markdown,            # rendering
+    handler, submit, Job,                 # workers
+)
+```
+
+Subsystem modules live at guessable top-level paths: `skrift.hooks`, `skrift.forms`, `skrift.notifications`, `skrift.push`, `skrift.flash`, `skrift.template`, `skrift.markdown`, `skrift.seo`, `skrift.storage`. `skrift.lib` is internal — never import from it in downstream code.
+
 ## CLI Commands
 
 ```bash

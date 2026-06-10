@@ -181,9 +181,10 @@ Template hierarchy: `form-{name}.html` → `form.html` → programmatic fallback
 ## Registration Mechanism
 
 Forms are registered in a global `_form_registry` dict (in `model.py`):
-- `FormModel.__init_subclass__()` auto-registers on class creation
+- `FormModel.__init_subclass__()` auto-registers on class creation; the name derives from the class name unless `form_name=` is passed (`ContactForm` → `"contact"`, `NewsletterSignupForm` → `"newsletter-signup"`)
 - `@form()` decorator registers explicitly
 - `get_form_model(name)` retrieves by name, raises `LookupError` if missing
+- `list_forms()` returns all registered forms by name (registration happens at import time, so a form appears only once its module is imported)
 
 ## Hook Integration
 
