@@ -551,3 +551,29 @@ class TestSettingsController:
         assert result.template_name == "admin/settings/site.html"
         assert result.context["current_favicon_url"] == ""
         mock_log.assert_called_once()
+
+
+class TestAdminNavHelper:
+    """Tests for the admin_nav() route-kwargs helper."""
+
+    def test_returns_tag_and_opt(self):
+        from skrift.admin import ADMIN_NAV_TAG, admin_nav
+
+        kwargs = admin_nav("Reports", icon="bar-chart", order=50)
+        assert kwargs == {
+            "tags": [ADMIN_NAV_TAG],
+            "opt": {"label": "Reports", "icon": "bar-chart", "order": 50},
+        }
+
+    def test_defaults(self):
+        from skrift.admin import admin_nav
+
+        kwargs = admin_nav("Reports")
+        assert kwargs["opt"] == {"label": "Reports", "icon": "circle", "order": 100}
+
+    def test_public_admin_exports(self):
+        import skrift.admin as admin
+
+        for name in ("get_admin_context", "admin_nav", "ADMIN_NAV_TAG"):
+            assert name in admin.__all__
+            assert hasattr(admin, name)
