@@ -92,10 +92,12 @@ nav:
     - Agents Reference: reference/agents.md
     - Environment Variables: reference/environment-variables.md
     - Environment-Specific Config: reference/environments.md
+    - Page Types: reference/page-types.md
     - OAuth Providers: reference/auth-providers.md
     - OAuth2 Server: reference/oauth2-server.md
     - API Keys: reference/api-keys.md
     - API Permission Grants: reference/api-grants.md
+    - Republishing: reference/republish.md
     - Security Features: reference/security-features.md
     - CSS Framework: reference/css-framework.md
   - Deployment:

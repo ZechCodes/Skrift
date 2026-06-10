@@ -52,6 +52,14 @@ Technical reference documentation for Skrift.
 
     [:octicons-arrow-right-24: OAuth Providers](auth-providers.md)
 
+-   :material-file-document-multiple:{ .lg .middle } **Page Types**
+
+    ---
+
+    What a page_types entry generates: admin CRUD, public routes, permissions, and template conventions.
+
+    [:octicons-arrow-right-24: Page Types](page-types.md)
+
 </div>
 
 ## Security
