@@ -31,7 +31,7 @@ from skrift.agents import (
     set_blob_store,
 )
 from skrift.auth.guards import Permission, Role, auth_guard
-from skrift.config import get_settings
+from skrift.config import get_settings, register_config_section
 from skrift.flash import (
     flash_error,
     flash_info,
@@ -129,6 +129,7 @@ __all__ = [
     "notify_session",
     "notify_user",
     "record_artifact",
+    "register_config_section",
     "render_markdown",
     "replay",
     "require_approval",
