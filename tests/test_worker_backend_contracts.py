@@ -81,6 +81,19 @@ async def _assert_state_store_contract(store) -> None:
     await asyncio.sleep(0.02)
     assert await store.get("jobs:short") is None
 
+    # Callable TTL is resolved against the value being written (post-`fn` for update).
+    def ttl_for(value):
+        return 0.01 if value == "expire" else None
+
+    await store.set("jobs:keep", "stay", ttl=ttl_for)
+    await store.update("jobs:keep", lambda _v: "expire", ttl=ttl_for)
+    await asyncio.sleep(0.02)
+    assert await store.get("jobs:keep") is None
+
+    await store.set("jobs:persist", "stay", ttl=ttl_for)
+    await asyncio.sleep(0.02)
+    assert await store.get("jobs:persist") == "stay"
+
 
 async def _assert_event_log_contract(log) -> None:
     assert await log.append("contract", {"n": 1}) == 0

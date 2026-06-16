@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from skrift.agents.blob import offload_large_payload_fields
-from skrift.agents.config import get_agents_config
+from skrift.agents.config import get_agents_config, get_worker_retention_config
 from skrift.agents.models import (
     AGENT_EVENT_SCHEMA_VERSION,
     Actor,
@@ -36,13 +36,35 @@ def stream_name(session_id: str) -> str:
     return f"agents:run:{session_id}"
 
 
+def _runstate_ttl(state: RunState) -> float | None:
+    """TTL for a runstate write: bounded once terminal, sliding while active.
+
+    Terminal runstate is durable in the archive snapshot, so the hot copy is a
+    cache that can safely expire. Active sessions refresh a long sliding TTL on
+    every write so a wedged session can't leak indefinitely.
+    """
+
+    retention = get_worker_retention_config()
+    if state.terminal_at is not None:
+        return retention.terminal_runstate_ttl
+    return retention.active_runstate_ttl
+
+
+def _coerce_runstate(value: Any) -> RunState:
+    return value if isinstance(value, RunState) else RunState.model_validate(value)
+
+
 async def load_runstate(session_id: str) -> RunState | None:
-    value = await get_runtime().state_store.get(runstate_key(session_id))
-    if value is None:
+    runtime = get_runtime()
+    value = await runtime.state_store.get(runstate_key(session_id))
+    if value is not None:
+        return _coerce_runstate(value)
+    # Hot copy may have expired (terminal sessions get a bounded TTL); fall back
+    # to the durable archive snapshot so terminal sessions remain readable.
+    snapshot = await runtime.archive.latest_state_snapshot(runstate_key(session_id))
+    if snapshot is None:
         return None
-    if isinstance(value, RunState):
-        return value
-    return RunState.model_validate(value)
+    return _coerce_runstate(snapshot)
 
 
 async def update_runstate(session_id: str, fn: UpdateRunState) -> RunState:
@@ -63,7 +85,9 @@ async def update_runstate(session_id: str, fn: UpdateRunState) -> RunState:
             should_snapshot = True
         return next_state
 
-    updated = await get_runtime().state_store.update(runstate_key(session_id), wrapper)
+    updated = await get_runtime().state_store.update(
+        runstate_key(session_id), wrapper, ttl=_runstate_ttl
+    )
     if should_snapshot:
         await _snapshot_runstate(updated)
     return updated
@@ -81,7 +105,9 @@ async def create_or_update_runstate(state: RunState) -> RunState:
         existing = value if isinstance(value, RunState) else RunState.model_validate(value)
         return existing
 
-    updated = await get_runtime().state_store.update(runstate_key(state.session_id), wrapper)
+    updated = await get_runtime().state_store.update(
+        runstate_key(state.session_id), wrapper, ttl=_runstate_ttl
+    )
     if should_snapshot:
         await _snapshot_runstate(updated)
     return updated

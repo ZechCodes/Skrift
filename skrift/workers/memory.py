@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from skrift.workers.interfaces import BackendCapabilities, UpdateFn
+from skrift.workers.interfaces import TTL, BackendCapabilities, UpdateFn, resolve_ttl
 from skrift.workers.models import (
     ClaimedJob,
     DeadJobEntry,
@@ -54,8 +54,9 @@ class InMemoryStateStore:
                 return None
             return stored.value
 
-    async def set(self, key: str, value: Any, *, ttl: float | None = None) -> None:
-        expires_at = _now() + timedelta(seconds=ttl) if ttl is not None else None
+    async def set(self, key: str, value: Any, *, ttl: TTL = None) -> None:
+        resolved_ttl = resolve_ttl(ttl, value)
+        expires_at = _now() + timedelta(seconds=resolved_ttl) if resolved_ttl is not None else None
         async with self._lock:
             self._values[key] = _StoredValue(value=value, expires_at=expires_at)
 
@@ -63,8 +64,7 @@ class InMemoryStateStore:
         async with self._lock:
             self._values.pop(key, None)
 
-    async def update(self, key: str, fn: UpdateFn, *, ttl: float | None = None) -> Any:
-        expires_at = _now() + timedelta(seconds=ttl) if ttl is not None else None
+    async def update(self, key: str, fn: UpdateFn, *, ttl: TTL = None) -> Any:
         async with self._lock:
             current = self._values.get(key)
             current_value = None
@@ -73,6 +73,10 @@ class InMemoryStateStore:
             next_value = fn(current_value)
             if inspect.isawaitable(next_value):
                 next_value = await next_value
+            resolved_ttl = resolve_ttl(ttl, next_value)
+            expires_at = (
+                _now() + timedelta(seconds=resolved_ttl) if resolved_ttl is not None else None
+            )
             self._values[key] = _StoredValue(value=next_value, expires_at=expires_at)
             return next_value
 

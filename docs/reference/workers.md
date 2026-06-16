@@ -35,6 +35,8 @@ workers:
     enabled: true
     prune_interval: 300.0
     terminal_job_state_ttl: 604800
+    terminal_runstate_ttl: 86400
+    active_runstate_ttl: 604800
     redis_event_ttl: 86400
     redis_event_max_entries: 100000
     dead_queue_marker_ttl: 86400
@@ -154,6 +156,8 @@ Retention pruning keeps hot-path stores and archives bounded.
 | `enabled` | `true` | Start pruning inside `skrift workers persister` |
 | `prune_interval` | `300.0` | Seconds between pruning passes |
 | `terminal_job_state_ttl` | `604800` | Age in seconds before completed, failed, cancelled, or dead-lettered Redis job state can be removed |
+| `terminal_runstate_ttl` | `86400` | TTL applied to an agent session's hot `RunState` once it reaches a terminal status (completed, failed, cancelled); the terminal state remains durable in the archive snapshot |
+| `active_runstate_ttl` | `604800` | Sliding TTL refreshed on every write to a non-terminal `RunState`, so a wedged session cannot leak indefinitely |
 | `redis_event_ttl` | `86400` | Minimum age before archived Redis stream events can be removed |
 | `redis_event_max_entries` | `100000` | Maximum Redis stream entries retained per stream after archive cursor safety checks |
 | `dead_queue_marker_ttl` | `86400` | Age before Redis dead queue markers can be removed |
@@ -169,7 +173,7 @@ skrift workers prune --json
 
 Redis lifecycle events are pruned only after the persister cursor shows they have been archived.
 
-The defaults keep Redis hot-path data long enough for fast recent `jobs inspect` and admin views while keeping longer operational history in SQLAlchemy archive and DLQ tables. Individual TTLs cannot be disabled; each TTL field must be a positive number. To disable pruning, set `workers.retention.enabled: false`.
+The defaults keep Redis hot-path data long enough for fast recent `jobs inspect` and admin views while keeping longer operational history in SQLAlchemy archive and DLQ tables. Each TTL field must be a positive number and cannot be disabled, with one exception: `active_runstate_ttl` may be set to `null` to leave non-terminal agent sessions without a sliding TTL (terminal sessions still expire via `terminal_runstate_ttl`). To disable pruning entirely, set `workers.retention.enabled: false`.
 
 ## Dead-Letter Queue
 

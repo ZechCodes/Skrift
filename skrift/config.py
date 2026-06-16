@@ -684,6 +684,8 @@ class WorkerRetentionConfig(BaseModel):
     enabled: bool = True
     prune_interval: float = Field(default=300.0, gt=0)
     terminal_job_state_ttl: float = Field(default=7 * 24 * 60 * 60, gt=0)
+    terminal_runstate_ttl: float = Field(default=24 * 60 * 60, gt=0)
+    active_runstate_ttl: float | None = Field(default=7 * 24 * 60 * 60, gt=0)
     redis_event_ttl: float = Field(default=24 * 60 * 60, gt=0)
     redis_event_max_entries: int = Field(default=100_000, ge=1)
     dead_queue_marker_ttl: float = Field(default=24 * 60 * 60, gt=0)

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from skrift.workers.interfaces import BackendCapabilities, UpdateFn
+from skrift.workers.interfaces import TTL, BackendCapabilities, UpdateFn, resolve_ttl
 from skrift.workers.models import (
     ClaimedJob,
     EventIdConflict,
@@ -131,13 +131,14 @@ class RedisStateStore(_RedisBackend):
     async def get(self, key: str) -> Any:
         return _value_from_json(_json_loads(await self._client.get(self._state_key(key))))
 
-    async def set(self, key: str, value: Any, *, ttl: float | None = None) -> None:
+    async def set(self, key: str, value: Any, *, ttl: TTL = None) -> None:
         redis_key = self._state_key(key)
         payload = _json_dumps(_value_to_json(value))
-        if ttl is None:
+        resolved_ttl = resolve_ttl(ttl, value)
+        if resolved_ttl is None:
             await self._client.set(redis_key, payload)
         else:
-            await self._client.set(redis_key, payload, px=max(1, int(ttl * 1000)))
+            await self._client.set(redis_key, payload, px=max(1, int(resolved_ttl * 1000)))
         await self._client.sadd(self._key("state", "keys"), key)
         if key.startswith("workers:jobs:"):
             await self._index_worker_job_state(key, value)
@@ -149,12 +150,14 @@ class RedisStateStore(_RedisBackend):
             await self._client.zrem(self._key("state", "worker_jobs"), key)
             await self._client.srem(self._key("state", "worker_jobs_active"), key)
 
-    async def update(self, key: str, fn: UpdateFn, *, ttl: float | None = None) -> Any:
+    async def update(self, key: str, fn: UpdateFn, *, ttl: TTL = None) -> Any:
         async with self._client.lock(self._key("state", "locks", key), timeout=10):
             current = await self.get(key)
             next_value = fn(current)
             if inspect.isawaitable(next_value):
                 next_value = await next_value
+            # `set` resolves a callable ttl against next_value, so terminal TTL is
+            # applied based on the post-`fn` state.
             await self.set(key, next_value, ttl=ttl)
             return next_value
 
