@@ -15,6 +15,17 @@ class BackendCapabilities(frozenset[str]):
 
 UpdateFn = Callable[[Any], Any | Awaitable[Any]]
 
+# TTL may be a fixed value, or a callable resolved against the value being written
+# (the post-`fn` value for `update`). The callable form lets callers choose a TTL
+# based on the computed next value — e.g. a shorter TTL once a record is terminal.
+TTL = float | None | Callable[[Any], float | None]
+
+
+def resolve_ttl(ttl: TTL, value: Any) -> float | None:
+    """Resolve a TTL specification against the value being written."""
+
+    return ttl(value) if callable(ttl) else ttl
+
 
 class StateStore(Protocol):
     """Async key/value storage with atomic update semantics."""
@@ -22,9 +33,9 @@ class StateStore(Protocol):
     capabilities: BackendCapabilities
 
     async def get(self, key: str) -> Any: ...
-    async def set(self, key: str, value: Any, *, ttl: float | None = None) -> None: ...
+    async def set(self, key: str, value: Any, *, ttl: TTL = None) -> None: ...
     async def delete(self, key: str) -> None: ...
-    async def update(self, key: str, fn: UpdateFn, *, ttl: float | None = None) -> Any: ...
+    async def update(self, key: str, fn: UpdateFn, *, ttl: TTL = None) -> Any: ...
     async def keys(self, prefix: str = "") -> list[str]: ...
 
 

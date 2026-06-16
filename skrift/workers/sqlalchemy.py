@@ -21,7 +21,7 @@ from skrift.db.models.worker import (
     WorkerQueueRecord,
     WorkerStateRecord,
 )
-from skrift.workers.interfaces import BackendCapabilities, UpdateFn
+from skrift.workers.interfaces import TTL, BackendCapabilities, UpdateFn, resolve_ttl
 from skrift.workers.models import (
     ClaimedJob,
     DeadJobEntry,
@@ -98,8 +98,9 @@ class SQLAlchemyStateStore(_SQLAlchemyBackend):
                 return None
             return _value_from_json(record.value)
 
-    async def set(self, key: str, value: Any, *, ttl: float | None = None) -> None:
-        expires_at = _now() + timedelta(seconds=ttl) if ttl is not None else None
+    async def set(self, key: str, value: Any, *, ttl: TTL = None) -> None:
+        resolved_ttl = resolve_ttl(ttl, value)
+        expires_at = _now() + timedelta(seconds=resolved_ttl) if resolved_ttl is not None else None
         async with self._session_maker() as session:
             result = await session.execute(
                 select(WorkerStateRecord).where(WorkerStateRecord.key == key)
@@ -123,8 +124,7 @@ class SQLAlchemyStateStore(_SQLAlchemyBackend):
             await session.execute(delete(WorkerStateRecord).where(WorkerStateRecord.key == key))
             await session.commit()
 
-    async def update(self, key: str, fn: UpdateFn, *, ttl: float | None = None) -> Any:
-        expires_at = _now() + timedelta(seconds=ttl) if ttl is not None else None
+    async def update(self, key: str, fn: UpdateFn, *, ttl: TTL = None) -> Any:
         async with self._session_maker() as session:
             result = await session.execute(
                 select(WorkerStateRecord)
@@ -140,6 +140,10 @@ class SQLAlchemyStateStore(_SQLAlchemyBackend):
             next_value = fn(current_value)
             if inspect.isawaitable(next_value):
                 next_value = await next_value
+            resolved_ttl = resolve_ttl(ttl, next_value)
+            expires_at = (
+                _now() + timedelta(seconds=resolved_ttl) if resolved_ttl is not None else None
+            )
             if record is None:
                 session.add(
                     WorkerStateRecord(

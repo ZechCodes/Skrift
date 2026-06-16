@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from skrift.config import AgentsConfig
+from skrift.config import AgentsConfig, WorkerRetentionConfig
 
 
 def get_agents_config() -> AgentsConfig:
@@ -17,6 +17,17 @@ def get_agents_config() -> AgentsConfig:
         return get_settings().agents
     except Exception:
         return AgentsConfig()
+
+
+def get_worker_retention_config() -> WorkerRetentionConfig:
+    """Return worker retention settings, falling back to defaults when unavailable."""
+
+    try:
+        from skrift.config import get_settings
+
+        return get_settings().workers.retention
+    except Exception:
+        return WorkerRetentionConfig()
 
 
 def import_from_string(path: str) -> Any:

@@ -423,6 +423,37 @@ async def test_agent_runstate_is_snapshotted_to_archive():
     assert snapshot.session_id == session.id
 
 
+async def test_load_runstate_falls_back_to_archive_after_hot_copy_expires():
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+    session = await agent.run("hi", actor="ada")
+    runtime = skrift.get_runtime()
+
+    # Simulate the bounded terminal TTL lapsing on the hot copy.
+    await runtime.state_store.delete(runstate_key(session.id))
+    assert await runtime.state_store.get(runstate_key(session.id)) is None
+
+    restored = await load_runstate(session.id)
+
+    assert restored is not None
+    assert restored.session_id == session.id
+
+
+def test_runstate_ttl_uses_terminal_vs_active_window(monkeypatch):
+    import skrift.agents.state as agent_state
+    from skrift.agents.models import RunState
+    from skrift.config import WorkerRetentionConfig
+    from skrift.workers.models import utcnow
+
+    retention = WorkerRetentionConfig(terminal_runstate_ttl=60.0, active_runstate_ttl=600.0)
+    monkeypatch.setattr(agent_state, "get_worker_retention_config", lambda: retention)
+
+    active = RunState(session_id="s", agent_name="demo")
+    assert agent_state._runstate_ttl(active) == 600.0
+
+    terminal = RunState(session_id="s", agent_name="demo", terminal_at=utcnow())
+    assert agent_state._runstate_ttl(terminal) == 60.0
+
+
 async def test_configured_blob_backend_is_applied():
     configure_agent_runtime(
         AgentsConfig(blob_backend="skrift.agents.blob:ArchiveBlobStore")
