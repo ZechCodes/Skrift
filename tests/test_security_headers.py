@@ -3,7 +3,66 @@
 import pytest
 
 from skrift.config import SecurityHeadersConfig
-from skrift.middleware.security import SecurityHeadersMiddleware, csp_nonce_var
+from skrift.middleware.security import (
+    SecurityHeadersMiddleware,
+    add_form_action_source,
+    apply_csp_nonce,
+    csp_nonce_var,
+)
+
+
+class TestAddFormActionSource:
+    """Tests for the add_form_action_source helper."""
+
+    def test_appends_to_existing_form_action(self):
+        csp = "default-src 'self'; form-action 'self'; base-uri 'self'"
+        result = add_form_action_source(csp, "https://runhacks.sh")
+        assert "form-action 'self' https://runhacks.sh" in result
+        # Other directives are untouched.
+        assert "base-uri 'self'" in result
+
+    def test_preserves_existing_extra_sources(self):
+        csp = "form-action 'self' https://checkout.stripe.com; base-uri 'self'"
+        result = add_form_action_source(csp, "https://runhacks.sh")
+        assert (
+            "form-action 'self' https://checkout.stripe.com https://runhacks.sh"
+            in result
+        )
+
+    def test_does_not_duplicate_existing_source(self):
+        csp = "form-action 'self' https://runhacks.sh"
+        result = add_form_action_source(csp, "https://runhacks.sh")
+        assert result.count("https://runhacks.sh") == 1
+
+    def test_adds_directive_when_absent(self):
+        csp = "default-src 'self'; script-src 'self'"
+        result = add_form_action_source(csp, "https://runhacks.sh")
+        assert "form-action 'self' https://runhacks.sh" in result
+
+    def test_adds_directive_when_absent_trailing_semicolon(self):
+        csp = "default-src 'self';"
+        result = add_form_action_source(csp, "https://runhacks.sh")
+        assert result == "default-src 'self'; form-action 'self' https://runhacks.sh"
+
+    def test_only_touches_form_action_not_script_src(self):
+        csp = "script-src 'self'; form-action 'self'"
+        result = add_form_action_source(csp, "https://runhacks.sh")
+        assert "script-src 'self';" in result
+        assert "script-src 'self' https://runhacks.sh" not in result
+
+
+class TestApplyCspNonce:
+    """Tests for the apply_csp_nonce helper."""
+
+    def test_appends_nonce_to_script_src(self):
+        csp = "script-src 'self'; style-src 'self' 'unsafe-inline'"
+        result = apply_csp_nonce(csp, "abc123")
+        assert "script-src 'self' 'nonce-abc123'" in result
+
+    def test_leaves_style_src_untouched(self):
+        csp = "script-src 'self'; style-src 'self' 'unsafe-inline'"
+        result = apply_csp_nonce(csp, "abc123")
+        assert "style-src 'self' 'unsafe-inline'" in result
 
 
 class TestSecurityHeadersConfig:

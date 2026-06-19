@@ -8,6 +8,7 @@ import pytest
 from litestar.response import Redirect, Template as TemplateResponse
 
 from skrift.auth.scopes import SCOPE_DEFINITIONS, register_scope, get_scope_definition
+from skrift.config import SecurityHeadersConfig
 from skrift.auth.tokens import create_signed_token, verify_signed_token
 from skrift.controllers.oauth2 import (
     OAuth2Controller,
@@ -27,6 +28,7 @@ def _make_settings():
     """Create a mock settings object."""
     settings = MagicMock()
     settings.secret_key = SECRET
+    settings.security_headers = SecurityHeadersConfig()
     return settings
 
 
@@ -286,13 +288,42 @@ class TestAuthorizeGet:
         db_session = AsyncMock()
         client = _mock_client(redirect_uris=["http://localhost/cb"])
 
-        with patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+        with patch("skrift.controllers.oauth2.oauth2_service") as mock_svc, \
+             patch("skrift.controllers.oauth2.get_settings", return_value=_make_settings()):
             mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
             result = await OAuth2Controller.authorize_get.fn(controller, request, db_session)
 
         assert isinstance(result, TemplateResponse)
         assert result.template_name == "oauth/authorize.html"
         assert session["oauth_authorize"]["client_id"] == "abc"
+
+    @pytest.mark.asyncio
+    async def test_consent_csp_allows_redirect_uri_origin(self):
+        """Consent response CSP widens form-action to the client redirect origin."""
+        controller = OAuth2Controller(owner=MagicMock())
+        request = MagicMock()
+        request.query_params = {
+            "response_type": "code",
+            "client_id": "abc",
+            "redirect_uri": "https://runhacks.sh/auth/callback",
+            "state": "xyz",
+            "scope": "openid profile",
+            "code_challenge": "challenge",
+            "code_challenge_method": "S256",
+        }
+        request.session = {"user_id": "user-123"}
+        db_session = AsyncMock()
+        client = _mock_client(redirect_uris=["https://runhacks.sh/auth/callback"])
+
+        with patch("skrift.controllers.oauth2.oauth2_service") as mock_svc, \
+             patch("skrift.controllers.oauth2.get_settings", return_value=_make_settings()):
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
+            result = await OAuth2Controller.authorize_get.fn(controller, request, db_session)
+
+        csp = dict(result.headers)["content-security-policy"]
+        assert "form-action 'self' https://runhacks.sh" in csp
+        # The client's path must not leak into the origin source.
+        assert "https://runhacks.sh/auth/callback" not in csp
 
 
 class TestAuthorizePost:
