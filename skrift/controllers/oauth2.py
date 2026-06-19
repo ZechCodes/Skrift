@@ -9,7 +9,7 @@ import base64
 import hashlib
 import uuid
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from litestar import Controller, Request, get, post
 from litestar.response import Redirect, Response, Template as TemplateResponse
@@ -22,6 +22,7 @@ from skrift.auth.tokens import create_signed_token, verify_signed_token
 from skrift.config import get_settings
 from skrift.db.services import oauth2_service
 from skrift.forms import verify_csrf
+from skrift.middleware.security import add_form_action_source, apply_csp_nonce, csp_nonce_var
 
 # Token lifetimes
 AUTH_CODE_TTL = 600        # 10 minutes
@@ -148,7 +149,44 @@ class OAuth2Controller(Controller):
                 "scope_descriptions": scope_descriptions,
                 "request": request,
             },
+            headers=self._consent_csp_headers(redirect_uri),
         )
+
+    @staticmethod
+    def _consent_csp_headers(redirect_uri: str) -> dict[str, str]:
+        """Build a per-request CSP that permits the post-consent redirect.
+
+        Browsers enforce ``form-action`` against a form submission's redirect
+        destination, not just the form's ``action`` attribute. Since consent
+        approval redirects the user-agent to the client's ``redirect_uri`` —
+        which is on an arbitrary registered origin — the global
+        ``form-action 'self'`` blocks the final navigation.
+
+        ``redirect_uri`` has already been validated against the client's
+        registered allowlist by the caller, so appending its origin introduces
+        no open-redirect risk: only registered origins can ever appear here. The
+        deployment-configured CSP (including any extra ``form-action`` sources)
+        is preserved; this only widens ``form-action`` for this one response.
+
+        Returns an empty dict when CSP is disabled, leaving the default headers
+        from :class:`SecurityHeadersMiddleware` in place.
+        """
+        security = get_settings().security_headers
+        if not security.enabled or not security.content_security_policy:
+            return {}
+
+        parts = urlsplit(redirect_uri)
+        origin = f"{parts.scheme}://{parts.netloc}"
+        csp = add_form_action_source(security.content_security_policy, origin)
+
+        # The middleware skips its own CSP (and nonce injection) once a response
+        # carries one, so re-apply the nonce here to keep nonced markup working.
+        if security.csp_nonce:
+            nonce = csp_nonce_var.get("")
+            if nonce:
+                csp = apply_csp_nonce(csp, nonce)
+
+        return {"content-security-policy": csp}
 
     @post("/authorize")
     async def authorize_post(self, request: Request, db_session: AsyncSession) -> Redirect | Response:

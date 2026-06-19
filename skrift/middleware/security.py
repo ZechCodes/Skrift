@@ -19,6 +19,37 @@ from litestar.types import ASGIApp, Receive, Scope, Send
 csp_nonce_var: contextvars.ContextVar[str] = contextvars.ContextVar("csp_nonce")
 
 _SCRIPT_SRC = re.compile(r"(script-src\s)([^;]*)")
+_FORM_ACTION = re.compile(r"(form-action\s)([^;]*)")
+
+
+def apply_csp_nonce(csp: str, nonce: str) -> str:
+    """Append ``'nonce-<nonce>'`` to the ``script-src`` directive.
+
+    ``style-src`` is intentionally left untouched because CSP nonces do not
+    cover inline ``style`` attributes.
+    """
+    return _SCRIPT_SRC.sub(rf"\1\2 'nonce-{nonce}'", csp)
+
+
+def add_form_action_source(csp: str, source: str) -> str:
+    """Allow ``source`` as a ``form-action`` destination in ``csp``.
+
+    If a ``form-action`` directive is present, ``source`` is appended unless it
+    is already listed. If absent, a ``form-action 'self' <source>`` directive is
+    added so the new source is allowed without silently relaxing the rest of the
+    policy. Used by the OAuth2 authorize endpoint to permit the post-consent
+    redirect to a validated, registered client ``redirect_uri`` origin.
+    """
+    if _FORM_ACTION.search(csp):
+        def _append(match: re.Match) -> str:
+            existing = match.group(2)
+            if source in existing.split():
+                return match.group(0)
+            return f"{match.group(1)}{existing.rstrip()} {source}"
+
+        return _FORM_ACTION.sub(_append, csp)
+
+    return f"{csp.rstrip().rstrip(';')}; form-action 'self' {source}"
 
 
 class SecurityHeadersMiddleware:
@@ -69,9 +100,7 @@ class SecurityHeadersMiddleware:
             csp_header: tuple[bytes, bytes] | None = None
             if self.csp_value:
                 if nonce:
-                    csp_str = _SCRIPT_SRC.sub(
-                        rf"\1\2 'nonce-{nonce}'", self.csp_value
-                    )
+                    csp_str = apply_csp_nonce(self.csp_value, nonce)
                 else:
                     csp_str = self.csp_value
                 csp_header = (b"content-security-policy", csp_str.encode())
