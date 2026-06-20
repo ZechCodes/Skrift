@@ -120,7 +120,10 @@ class OAuth2Controller(Controller):
                 "code_challenge_method": code_challenge_method,
             })
             next_url = f"/oauth/authorize?{query}"
-            return Redirect(path=f"/auth/login?next={next_url}")
+            # next_url carries its own query string; it must be encoded as a
+            # single value or its `&`-separated params (response_type, ...) leak
+            # out of `next` and are lost across the login round-trip.
+            return Redirect(path=f"/auth/login?{urlencode({'next': next_url})}")
 
         # Store params in session for POST consent
         request.session["oauth_authorize"] = {

@@ -271,6 +271,50 @@ class TestAuthorizeGet:
         assert "/auth/login" in result.url
 
     @pytest.mark.asyncio
+    async def test_login_redirect_preserves_full_authorize_url_in_next(self):
+        """Regression: the authorize URL must be encoded as a single `next`
+        value. If it isn't, its own `&`-separated params (response_type,
+        code_challenge, ...) leak out of `next` and are dropped across the
+        login round-trip, so the post-login bounce back to /oauth/authorize
+        fails with unsupported_response_type."""
+        from urllib.parse import parse_qs, urlsplit
+
+        controller = OAuth2Controller(owner=MagicMock())
+        request = MagicMock()
+        request.query_params = {
+            "response_type": "code",
+            "client_id": "abc",
+            "redirect_uri": "http://localhost/cb",
+            "state": "xyz",
+            "scope": "openid profile email",
+            "code_challenge": "challenge",
+            "code_challenge_method": "S256",
+        }
+        request.session = {}  # No user_id
+        db_session = AsyncMock()
+        client = _mock_client(redirect_uris=["http://localhost/cb"])
+
+        with patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
+            result = await OAuth2Controller.authorize_get.fn(controller, request, db_session)
+
+        assert isinstance(result, Redirect)
+        login = urlsplit(result.url)
+        assert login.path == "/auth/login"
+        # `next` must be the ONLY query param on the login URL — nothing leaked.
+        login_params = parse_qs(login.query)
+        assert set(login_params) == {"next"}
+        # ...and it must round-trip to the complete authorize URL.
+        authorize = urlsplit(login_params["next"][0])
+        assert authorize.path == "/oauth/authorize"
+        authorize_params = parse_qs(authorize.query)
+        assert authorize_params["response_type"] == ["code"]
+        assert authorize_params["redirect_uri"] == ["http://localhost/cb"]
+        assert authorize_params["code_challenge"] == ["challenge"]
+        assert authorize_params["code_challenge_method"] == ["S256"]
+        assert authorize_params["scope"] == ["openid profile email"]
+
+    @pytest.mark.asyncio
     async def test_shows_consent_screen_when_logged_in(self):
         controller = OAuth2Controller(owner=MagicMock())
         request = MagicMock()
