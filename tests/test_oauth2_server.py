@@ -653,9 +653,10 @@ class TestUserInfo:
     @pytest.mark.asyncio
     async def test_valid_access_token_all_scopes(self):
         settings = _make_settings()
+        user_id = "00000000-0000-0000-0000-000000000123"
         access = create_signed_token({
             "type": "access",
-            "user_id": "user-123",
+            "user_id": user_id,
             "email": "test@test.com",
             "name": "Test User",
             "picture_url": "https://pic.url",
@@ -669,14 +670,17 @@ class TestUserInfo:
         db_session = AsyncMock()
 
         with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
-             patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+             patch("skrift.controllers.oauth2.oauth2_service") as mock_svc, \
+             patch("skrift.controllers.oauth2.oauth_service") as mock_oauth_svc:
             mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            mock_oauth_svc.is_email_verified_for_user = AsyncMock(return_value=True)
             result = await OAuth2Controller.userinfo.fn(controller, request, db_session)
 
         assert result.status_code == 200
         body = result.content
-        assert body["sub"] == "user-123"
+        assert body["sub"] == user_id
         assert body["email"] == "test@test.com"
+        assert body["email_verified"] is True
         assert body["name"] == "Test User"
         assert body["picture"] == "https://pic.url"
 
