@@ -9,6 +9,7 @@ import base64
 import hashlib
 import uuid
 from datetime import datetime, timezone
+from uuid import UUID
 from urllib.parse import urlencode, urlsplit
 
 from litestar import Controller, Request, get, post
@@ -20,7 +21,7 @@ from skrift.auth.scopes import SCOPE_DEFINITIONS
 from skrift.auth.session_keys import SESSION_USER_EMAIL, SESSION_USER_ID, SESSION_USER_NAME, SESSION_USER_PICTURE_URL
 from skrift.auth.tokens import create_signed_token, verify_signed_token
 from skrift.config import get_settings
-from skrift.db.services import oauth2_service
+from skrift.db.services import oauth2_service, oauth_service
 from skrift.forms import verify_csrf
 from skrift.middleware.security import add_form_action_source, apply_csp_nonce, csp_nonce_var
 
@@ -491,7 +492,15 @@ class OAuth2Controller(Controller):
         claims: dict = {"sub": payload["user_id"]}
 
         if "email" in allowed_claims:
-            claims["email"] = payload.get("email", "")
+            email = payload.get("email", "")
+            claims["email"] = email
+            # Report verification from this server's own records — never a
+            # blanket true. ``email_verified`` is set only when the user has a
+            # linked identity whose email was attested as verified, mirroring
+            # the gate that protects the email-match auto-link path.
+            claims["email_verified"] = await oauth_service.is_email_verified_for_user(
+                db_session, UUID(payload["user_id"]), email
+            )
         if "name" in allowed_claims:
             claims["name"] = payload.get("name", "")
         if "picture" in allowed_claims:

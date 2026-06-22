@@ -42,4 +42,4 @@ def get_scope_definition(name: str) -> ScopeDefinition | None:
 # Built-in scopes
 register_scope("openid", "Verify your identity", claims=["sub"])
 register_scope("profile", "Access your name and picture", claims=["name", "picture"])
-register_scope("email", "Access your email address", claims=["email"])
+register_scope("email", "Access your email address", claims=["email", "email_verified"])

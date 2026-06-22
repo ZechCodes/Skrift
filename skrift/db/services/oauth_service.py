@@ -3,7 +3,7 @@
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models.oauth_account import OAuthAccount
@@ -50,6 +50,32 @@ async def get_oauth_accounts_by_user(
         select(OAuthAccount).where(OAuthAccount.user_id == user_id)
     )
     return list(result.scalars().all())
+
+
+async def is_email_verified_for_user(
+    db_session: AsyncSession,
+    user_id: UUID,
+    email: str,
+) -> bool:
+    """Return whether this server has verified the user controls ``email``.
+
+    True only when the user has a linked :class:`OAuthAccount` whose
+    ``provider_email`` matches ``email`` (case-insensitively) and was attested
+    as verified at link time. This is the authoritative signal for emitting an
+    ``email_verified`` OIDC claim: a blanket ``true`` would re-open the
+    account-takeover vector that the email-verification challenge closes, since
+    an address may have been recorded from a non-verifying provider.
+    """
+    if not email:
+        return False
+    result = await db_session.execute(
+        select(OAuthAccount.id).where(
+            OAuthAccount.user_id == user_id,
+            OAuthAccount.provider_email_verified.is_(True),
+            func.lower(OAuthAccount.provider_email) == email.lower(),
+        )
+    )
+    return result.first() is not None
 
 
 async def get_provider_metadata(

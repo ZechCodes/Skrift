@@ -14,6 +14,7 @@ from skrift.controllers.oauth2 import ACCESS_TOKEN_TTL, OAuth2Controller
 
 
 SECRET = "test-secret-key"
+USER_ID = "00000000-0000-0000-0000-000000000042"
 
 
 def _settings():
@@ -26,7 +27,7 @@ def _access_token(scope: str) -> str:
     return create_signed_token(
         {
             "type": "access",
-            "user_id": "user-42",
+            "user_id": USER_ID,
             "email": "u@example.com",
             "name": "U User",
             "picture_url": "https://x/p.png",
@@ -38,15 +39,17 @@ def _access_token(scope: str) -> str:
     )
 
 
-async def _userinfo(token: str) -> MagicMock:
+async def _userinfo(token: str, *, email_verified: bool = True) -> MagicMock:
     controller = OAuth2Controller(owner=MagicMock())
     request = MagicMock()
     request.headers = {"authorization": f"Bearer {token}"}
     db_session = AsyncMock()
 
     with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()), \
-         patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+         patch("skrift.controllers.oauth2.oauth2_service") as mock_svc, \
+         patch("skrift.controllers.oauth2.oauth_service") as mock_oauth_svc:
         mock_svc.is_token_revoked = AsyncMock(return_value=False)
+        mock_oauth_svc.is_email_verified_for_user = AsyncMock(return_value=email_verified)
         return await OAuth2Controller.userinfo.fn(controller, request, db_session)
 
 
@@ -56,8 +59,9 @@ async def test_empty_scope_returns_only_sub():
     This is the M6 regression — the prior behavior returned everything."""
     result = await _userinfo(_access_token(""))
     assert result.status_code == 200
-    assert result.content == {"sub": "user-42"}
+    assert result.content == {"sub": USER_ID}
     assert "email" not in result.content
+    assert "email_verified" not in result.content
     assert "name" not in result.content
     assert "picture" not in result.content
 
@@ -65,20 +69,36 @@ async def test_empty_scope_returns_only_sub():
 @pytest.mark.asyncio
 async def test_openid_scope_returns_only_sub():
     result = await _userinfo(_access_token("openid"))
-    assert result.content == {"sub": "user-42"}
+    assert result.content == {"sub": USER_ID}
 
 
 @pytest.mark.asyncio
 async def test_email_scope_returns_sub_and_email():
     result = await _userinfo(_access_token("openid email"))
-    assert result.content == {"sub": "user-42", "email": "u@example.com"}
+    assert result.content == {
+        "sub": USER_ID,
+        "email": "u@example.com",
+        "email_verified": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_email_verified_reflects_server_records():
+    """`email_verified` must mirror this server's own verification state,
+    not a blanket true — issue #151."""
+    result = await _userinfo(_access_token("openid email"), email_verified=False)
+    assert result.content == {
+        "sub": USER_ID,
+        "email": "u@example.com",
+        "email_verified": False,
+    }
 
 
 @pytest.mark.asyncio
 async def test_profile_scope_returns_sub_name_picture():
     result = await _userinfo(_access_token("openid profile"))
     assert result.content == {
-        "sub": "user-42",
+        "sub": USER_ID,
         "name": "U User",
         "picture": "https://x/p.png",
     }
@@ -88,8 +108,9 @@ async def test_profile_scope_returns_sub_name_picture():
 async def test_all_scopes_returns_full_claim_set():
     result = await _userinfo(_access_token("openid profile email"))
     assert result.content == {
-        "sub": "user-42",
+        "sub": USER_ID,
         "email": "u@example.com",
+        "email_verified": True,
         "name": "U User",
         "picture": "https://x/p.png",
     }
