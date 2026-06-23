@@ -1,5 +1,6 @@
 import os
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -488,13 +489,177 @@ class SessionConfig(BaseModel):
     idle_timeout: int = 0
 
 
+# Friendly window-period names → seconds, for rate-limit windows.
+_RATE_LIMIT_PERIODS: dict[str, float] = {
+    "second": 1.0,
+    "minute": 60.0,
+    "hour": 3600.0,
+    "day": 86400.0,
+}
+
+
+def normalize_window(period: str | int | float) -> float:
+    """Resolve a rate-limit window period to seconds.
+
+    Accepts a friendly name (``"second" | "minute" | "hour" | "day"``) or an
+    explicit number of seconds.
+    """
+    if isinstance(period, bool):  # guard: bool is an int subclass
+        raise ValueError(f"Invalid rate-limit period: {period!r}")
+    if isinstance(period, (int, float)):
+        return float(period)
+    try:
+        return _RATE_LIMIT_PERIODS[period]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown rate-limit period {period!r}; "
+            f"use seconds or one of {sorted(_RATE_LIMIT_PERIODS)}"
+        ) from exc
+
+
+@dataclass(frozen=True)
+class ResolvedRateLimit:
+    """The rate-limit policy that applies to one request.
+
+    ``limits`` is a list of ``(limit, window_seconds)`` pairs evaluated with
+    AND-logic; ``name`` namespaces the counter; ``key`` selects the caller
+    identity ("ip" or "api_key").
+    """
+
+    name: str
+    key: str
+    limits: list[tuple[int, float]]
+
+
+class RateLimitWindow(BaseModel):
+    """A single ``(limit, period)`` window."""
+
+    limit: int
+    per: str | int | float = "minute"
+
+    @model_validator(mode="after")
+    def _validate_period(self) -> "RateLimitWindow":
+        normalize_window(self.per)  # raises ValueError on an unknown period
+        return self
+
+    @property
+    def pair(self) -> tuple[int, float]:
+        return (self.limit, normalize_window(self.per))
+
+
+class RateLimitMatch(BaseModel):
+    """Which requests a rule applies to."""
+
+    path: str | None = None
+    method: str | None = None  # e.g. "POST"; None matches any method
+    prefix: bool = False  # match ``path`` as a prefix instead of exact
+
+
+class RateLimitRule(BaseModel):
+    """A declarative rate-limit rule: match → key → one or more windows."""
+
+    match: RateLimitMatch = RateLimitMatch()
+    key: Literal["ip", "api_key"] = "ip"
+    limits: list[RateLimitWindow]
+    name: str | None = None  # explicit counter namespace; derived if omitted
+
+
 class RateLimitConfig(BaseModel):
-    """Rate limiting configuration."""
+    """Rate limiting configuration.
+
+    Supports declarative multi-window rules (``default``/``auth``/``rules``)
+    while keeping the legacy single-per-minute keys
+    (``requests_per_minute``/``auth_requests_per_minute``/``paths``) working as
+    sugar. :meth:`resolve` compiles both into the single policy that applies
+    to a given request.
+    """
 
     enabled: bool = True
+
+    # Declarative (preferred).
+    default: RateLimitWindow | None = None
+    auth: RateLimitWindow | None = None
+    rules: list[RateLimitRule] = []
+
+    # Legacy single-per-minute settings (still supported).
     requests_per_minute: int = 60
     auth_requests_per_minute: int = 10
     paths: dict[str, int] = {}  # per-path-prefix overrides, e.g. {"/api": 120}
+
+    def effective_default(self) -> RateLimitWindow:
+        return self.default or RateLimitWindow(limit=self.requests_per_minute, per="minute")
+
+    def effective_auth(self) -> RateLimitWindow:
+        return self.auth or RateLimitWindow(limit=self.auth_requests_per_minute, per="minute")
+
+    @staticmethod
+    def _rule_name(index: int, rule: RateLimitRule) -> str:
+        if rule.name:
+            return rule.name
+        method = (rule.match.method or "any").lower()
+        return f"{method}:{rule.match.path or '*'}#{index}"
+
+    def resolve(self, path: str, method: str) -> ResolvedRateLimit:
+        """Return the most-specific policy for ``(path, method)``.
+
+        Precedence (highest first): explicit ``rules`` → legacy ``paths``
+        prefixes (longest wins) → the ``/auth`` policy → the default. A
+        matched rule's limits fully replace the default rather than stacking.
+        """
+        method = (method or "").upper()
+        best_spec: tuple | None = None
+        best: ResolvedRateLimit | None = None
+
+        def consider(spec: tuple, resolved: ResolvedRateLimit) -> None:
+            nonlocal best_spec, best
+            if best_spec is None or spec > best_spec:
+                best_spec, best = spec, resolved
+
+        for index, rule in enumerate(self.rules):
+            match = rule.match
+            if match.path is not None:
+                if match.prefix:
+                    if not path.startswith(match.path):
+                        continue
+                elif path != match.path:
+                    continue
+            if match.method is not None and method != match.method.upper():
+                continue
+            spec = (
+                3,
+                1 if match.method else 0,
+                0 if match.prefix else 1,
+                len(match.path or ""),
+            )
+            consider(
+                spec,
+                ResolvedRateLimit(
+                    name=self._rule_name(index, rule),
+                    key=rule.key,
+                    limits=[window.pair for window in rule.limits],
+                ),
+            )
+
+        for prefix, limit in self.paths.items():
+            if path.startswith(prefix):
+                consider(
+                    (2, 0, 0, len(prefix)),
+                    ResolvedRateLimit(f"path:{prefix}", "ip", [(limit, 60.0)]),
+                )
+
+        if path.startswith("/auth"):
+            consider(
+                (1, 0, 0, len("/auth")),
+                ResolvedRateLimit("auth", "ip", [self.effective_auth().pair]),
+            )
+
+        consider(
+            (0, 0, 0, 0),
+            ResolvedRateLimit("default", "ip", [self.effective_default().pair]),
+        )
+
+        assert best is not None  # the default branch always matches
+        return best
 
 
 class TrustedProxySourceConfig(BaseModel):
