@@ -203,6 +203,51 @@ middleware:
 
 `skrift/middleware/security.py` — ASGI middleware injecting CSP, HSTS, X-Frame-Options, etc. CSP nonces are auto-generated per request (see `/skrift-frontend` for usage). HSTS excluded in debug mode.
 
+## Rate Limiting
+
+Per-client sliding-window limits. The backend is chosen once from `redis.url`
+(shared across replicas) vs in-memory (process-local) — the built-in
+middleware, the failed-auth tracker, and any app code all use the same one, so
+setting `redis.url` makes every limiter distributed with no divergence.
+
+Declarative route rules in `app.yaml` (`skrift/config.py:RateLimitConfig`):
+
+```yaml
+rate_limit:
+  enabled: true
+  default: { limit: 120, per: minute }   # unmatched routes
+  auth:    { limit: 5,   per: minute }   # /auth/*
+  rules:
+    - match: { path: /book/inquiry, method: POST }
+      key: ip                              # or api_key (bearer / X-API-Key, IP fallback)
+      limits:                              # AND-logic; denied requests record nothing
+        - { limit: 1, per: minute }
+        - { limit: 6, per: hour }
+```
+
+`per` is `second|minute|hour|day` or a number of seconds. Most-specific rule
+wins (explicit `rules` > legacy `paths` prefixes > `/auth` > `default`); a
+matched rule's limits replace the default. Legacy `requests_per_minute` /
+`auth_requests_per_minute` / `paths` still work. Over-limit → `429` with a
+`Retry-After` for the binding (longest-blocking) window.
+
+Imperative API for dynamic or per-handler limits (`skrift/ratelimit.py`):
+
+```python
+from skrift.ratelimit import get_limiter
+
+verdict = await get_limiter().check(
+    name="inquiry", key=client_ip,
+    limits=[(1, "minute"), (6, "hour")],
+)
+if not verdict.allowed:
+    raise HTTPException(status_code=429, headers={"Retry-After": str(verdict.retry_after)})
+```
+
+`check()` denies if any window is exceeded, records nothing on denial, and
+reports the binding window's `retry_after`. For the lower-level record/count or
+single-window pattern, use `get_limiter().get_counter(window_seconds, name)`.
+
 ## Error Handling
 
 Custom exception handlers in `skrift/lib/exceptions.py`. Templates: `error.html`, `error-404.html`, `error-500.html`.

@@ -127,45 +127,116 @@ security_headers:
 
 ## Rate Limiting
 
-### RateLimitConfig
+Rate limiting supports **declarative multi-window route rules** in config and an
+**imperative limiter API** for dynamic or per-handler limits. Both run through a
+single backend-aware limiter, so the choice of backend is made in exactly one
+place.
 
-Configuration model in `skrift/config.py`:
+### Backend selection
 
-```python
-class RateLimitConfig(BaseModel):
-    enabled: bool = True
-    requests_per_minute: int = 60
-    auth_requests_per_minute: int = 10
-    paths: dict[str, int] = {}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | `bool` | `True` | Enable/disable rate limiting |
-| `requests_per_minute` | `int` | `60` | Default limit for all paths |
-| `auth_requests_per_minute` | `int` | `10` | Stricter limit for `/auth/*` paths |
-| `paths` | `dict[str, int]` | `{}` | Per-path-prefix overrides (e.g., `{"/api": 120}`) |
+The limiter uses **Redis** when `redis.url` is set (counts are shared across all
+replicas) and an **in-memory** counter otherwise (process-local). This applies
+to every limiter — the built-in middleware, the failed-auth tracker, and any app
+code that calls `get_limiter()` — so setting `redis.url` makes them all
+distributed at once, with no silent divergence.
 
 ### How It Works
 
-- **Sliding window**: Uses a 60-second sliding window per IP address
-- **Per-IP isolation**: Each client IP has independent rate counters
-- **Auth auto-detection**: Paths starting with `/auth` automatically use `auth_requests_per_minute`
-- **Longest prefix match**: Custom path overrides use longest-matching prefix
-- **Proxy support**: Reads `X-Forwarded-For` header for client IP when behind a reverse proxy
-- **429 response**: Returns `429 Too Many Requests` with a `Retry-After` header when the limit is exceeded
+- **Sliding window**: per-key sliding windows; multiple windows can apply to one route
+- **Multi-window AND-logic**: a request is denied if *any* window is exceeded
+- **All-or-nothing recording**: a denied request records nothing — being blocked by one window never consumes a slot in another
+- **Per-client isolation**: each client (IP or API key) has independent counters
+- **Auth auto-detection**: paths starting with `/auth` use the stricter auth window
+- **Most-specific rule wins**: explicit rules → legacy path prefixes (longest wins) → `/auth` → default; a matched rule's limits *replace* the default rather than stacking
+- **Proxy support**: uses the resolved client IP (`X-Forwarded-For` honored only behind trusted proxies)
+- **429 response**: returns `429 Too Many Requests` with a `Retry-After` header reflecting the binding (longest-blocking) window
 
-### Example app.yaml Configuration
+### Declarative configuration
 
 ```yaml
 rate_limit:
   enabled: true
+  default: { limit: 120, per: minute }   # applies to unmatched routes
+  auth:    { limit: 5,   per: minute }   # applies to /auth/*
+  rules:
+    # Anonymous lead-capture endpoint: 1/min AND 6/hr per client IP.
+    - match: { path: /book/inquiry, method: POST }
+      key: ip
+      limits:
+        - { limit: 1, per: minute }
+        - { limit: 6, per: hour }
+    # Prefix match (all methods) with an explicit per-second cap.
+    - match: { path: /api/, prefix: true }
+      key: api_key                        # bearer token / X-API-Key, falls back to IP
+      limits:
+        - { limit: 20, per: second }
+```
+
+`per` accepts `second`, `minute`, `hour`, `day`, or an explicit number of
+seconds. `key` is `ip` (default) or `api_key`. `match` selects requests by exact
+`path` (or `prefix: true`) and optional `method`.
+
+### Configuration fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `True` | Enable/disable rate limiting |
+| `default` | window | — | Default window for unmatched routes |
+| `auth` | window | — | Window for `/auth/*` paths |
+| `rules` | list | `[]` | Declarative multi-window route rules |
+| `requests_per_minute` | `int` | `60` | **Legacy** default (used when `default` is unset) |
+| `auth_requests_per_minute` | `int` | `10` | **Legacy** auth limit (used when `auth` is unset) |
+| `paths` | `dict[str, int]` | `{}` | **Legacy** per-prefix per-minute overrides |
+
+### Migration from the legacy keys
+
+The legacy `requests_per_minute`, `auth_requests_per_minute`, and `paths` keys
+still work unchanged — they are treated as single per-minute windows. To adopt
+multiple windows or non-minute periods, move them to `default`/`auth`/`rules`:
+
+```yaml
+# Before
+rate_limit:
   requests_per_minute: 120
   auth_requests_per_minute: 5
   paths:
     /api: 200
-    /webhooks: 30
+
+# After
+rate_limit:
+  default: { limit: 120, per: minute }
+  auth:    { limit: 5,   per: minute }
+  rules:
+    - match: { path: /api, prefix: true }
+      limits: [ { limit: 200, per: minute } ]
 ```
+
+### Imperative limiter API
+
+For limits that can't be expressed as static route config (per-user actions,
+limits enforced inside a handler or guard, background jobs), call the shared
+limiter directly. It uses the same backend as everything else:
+
+```python
+from skrift.ratelimit import get_limiter
+from litestar.exceptions import HTTPException
+
+verdict = await get_limiter().check(
+    name="inquiry",                       # namespace for the counter
+    key=client_ip,                        # caller identity
+    limits=[(1, "minute"), (6, "hour")],  # one or more (limit, window) pairs
+)
+if not verdict.allowed:
+    raise HTTPException(
+        status_code=429,
+        headers={"Retry-After": str(verdict.retry_after)},
+    )
+```
+
+`check()` evaluates every window, denies if any is exceeded, records nothing on
+denial, and reports `retry_after` (seconds) for the binding window. For the
+lower-level `record`/`count` or single-window `check_and_record` pattern (e.g. a
+failed-attempt tracker), use `get_limiter().get_counter(window_seconds, name)`.
 
 ## CSRF Protection
 

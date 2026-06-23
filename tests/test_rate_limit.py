@@ -5,7 +5,12 @@ from litestar import Litestar, get
 from litestar.middleware import DefineMiddleware
 from litestar.testing import TestClient
 
-from skrift.config import RateLimitConfig
+from skrift.config import (
+    RateLimitConfig,
+    RateLimitMatch,
+    RateLimitRule,
+    RateLimitWindow,
+)
 from skrift.middleware.rate_limit import RateLimitMiddleware
 
 
@@ -28,6 +33,104 @@ class TestRateLimitConfig:
         assert config.requests_per_minute == 120
         assert config.auth_requests_per_minute == 20
         assert config.paths == {"/api": 200}
+
+
+class TestRateLimitConfigResolve:
+    """The config compiles legacy + declarative settings into a single rule
+    per request via resolve(path, method)."""
+
+    def test_default_window_from_legacy(self):
+        config = RateLimitConfig(requests_per_minute=60)
+        resolved = config.resolve("/home", "GET")
+        assert resolved.name == "default"
+        assert resolved.key == "ip"
+        assert resolved.limits == [(60, 60.0)]
+
+    def test_auth_window_from_legacy(self):
+        config = RateLimitConfig(auth_requests_per_minute=10)
+        resolved = config.resolve("/auth/login", "POST")
+        assert resolved.name == "auth"
+        assert resolved.limits == [(10, 60.0)]
+
+    def test_legacy_path_prefix_wins_over_default(self):
+        config = RateLimitConfig(requests_per_minute=100, paths={"/api": 2})
+        resolved = config.resolve("/api/data", "GET")
+        assert resolved.limits == [(2, 60.0)]
+        # Non-matching path falls back to default.
+        assert config.resolve("/home", "GET").limits == [(100, 60.0)]
+
+    def test_longest_legacy_prefix_wins(self):
+        config = RateLimitConfig(paths={"/api": 100, "/api/admin": 5})
+        assert config.resolve("/api/admin/x", "GET").limits == [(5, 60.0)]
+
+    def test_new_style_default_and_auth(self):
+        config = RateLimitConfig(
+            default={"limit": 120, "per": "minute"},
+            auth={"limit": 30, "per": "minute"},
+        )
+        assert config.resolve("/x", "GET").limits == [(120, 60.0)]
+        assert config.resolve("/auth/x", "GET").limits == [(30, 60.0)]
+
+    def test_declarative_multi_window_rule(self):
+        config = RateLimitConfig(
+            rules=[
+                {
+                    "match": {"path": "/book/inquiry", "method": "POST"},
+                    "key": "ip",
+                    "limits": [
+                        {"limit": 1, "per": "minute"},
+                        {"limit": 6, "per": "hour"},
+                    ],
+                }
+            ]
+        )
+        resolved = config.resolve("/book/inquiry", "POST")
+        assert resolved.key == "ip"
+        assert resolved.limits == [(1, 60.0), (6, 3600.0)]
+
+    def test_rule_method_mismatch_falls_through_to_default(self):
+        config = RateLimitConfig(
+            requests_per_minute=50,
+            rules=[
+                {
+                    "match": {"path": "/book/inquiry", "method": "POST"},
+                    "limits": [{"limit": 1, "per": "minute"}],
+                }
+            ],
+        )
+        # GET doesn't match the POST-only rule.
+        assert config.resolve("/book/inquiry", "GET").limits == [(50, 60.0)]
+
+    def test_explicit_rule_outranks_legacy_path(self):
+        config = RateLimitConfig(
+            paths={"/api": 100},
+            rules=[
+                {
+                    "match": {"path": "/api/expensive", "method": "POST"},
+                    "limits": [{"limit": 1, "per": "minute"}],
+                }
+            ],
+        )
+        assert config.resolve("/api/expensive", "POST").limits == [(1, 60.0)]
+
+    def test_window_seconds_escape_hatch(self):
+        config = RateLimitConfig(
+            rules=[
+                {
+                    "match": {"path": "/x"},
+                    "limits": [{"limit": 3, "per": 90}],
+                }
+            ]
+        )
+        assert config.resolve("/x", "GET").limits == [(3, 90.0)]
+
+    def test_invalid_period_rejected(self):
+        import pytest as _pytest
+
+        with _pytest.raises(Exception):
+            RateLimitConfig(
+                rules=[{"match": {"path": "/x"}, "limits": [{"limit": 1, "per": "week"}]}]
+            )
 
 
 class TestRateLimitMiddleware:
@@ -338,4 +441,53 @@ class TestRateLimitIntegration:
             # General path should still work
             resp = client.get("/public/test")
             assert resp.status_code == 200
+
+
+class TestDeclarativeMultiWindowRule:
+    """The motivating example from issue #153: a public, anonymous lead-capture
+    endpoint capped at 1/min AND 6/hr per IP — expressed in config alone."""
+
+    def _create_app(self) -> Litestar:
+        from litestar import post
+
+        @post("/book/inquiry")
+        async def inquiry() -> str:
+            return "ok"
+
+        @get("/other")
+        async def other() -> str:
+            return "ok"
+
+        config = RateLimitConfig(
+            requests_per_minute=1000,  # generous default
+            rules=[
+                RateLimitRule(
+                    match=RateLimitMatch(path="/book/inquiry", method="POST"),
+                    key="ip",
+                    limits=[
+                        RateLimitWindow(limit=1, per="minute"),
+                        RateLimitWindow(limit=6, per="hour"),
+                    ],
+                )
+            ],
+        )
+        return Litestar(
+            route_handlers=[inquiry, other],
+            middleware=[DefineMiddleware(RateLimitMiddleware, config=config)],
+        )
+
+    def test_minute_window_enforced(self):
+        app = self._create_app()
+        with TestClient(app) as client:
+            assert client.post("/book/inquiry").status_code == 201
+            resp = client.post("/book/inquiry")
+            assert resp.status_code == 429
+            assert "retry-after" in resp.headers
+
+    def test_other_routes_unaffected(self):
+        app = self._create_app()
+        with TestClient(app) as client:
+            # The default (1000/min) governs unmatched routes.
+            for _ in range(5):
+                assert client.get("/other").status_code == 200
 

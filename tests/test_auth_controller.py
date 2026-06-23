@@ -1,14 +1,20 @@
 """Tests for the authentication controller."""
 
+import contextlib
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+from litestar.response import Redirect
+
 from skrift.controllers.auth import (
+    AuthController,
     _finalize_primary_login,
     _set_login_session,
     _exchange_and_fetch,
 )
+from skrift.auth.oauth_account_service import LoginResult
 from skrift.lib.redirects import (
     get_safe_redirect_url as _get_safe_redirect_url,
     is_safe_redirect_url as _is_safe_redirect_url,
@@ -660,3 +666,99 @@ class TestVerifyMethodPage:
         assert isinstance(result, TemplateResponse)
         assert result.template_name == "auth/verify_passkey.html"
         assert result.context["factor_key"] == "passkey"
+
+
+class TestDummyLoginAdminToggle:
+    """The dummy login's admin toggle assigns or removes the admin role."""
+
+    @staticmethod
+    def _make_request(form_data: dict):
+        request = MagicMock()
+        request.session = {}
+
+        async def _form():
+            return form_data
+
+        request.form = _form
+        return request
+
+    @staticmethod
+    def _patches(login_result, assign_mock, remove_mock):
+        settings = MagicMock()
+        settings.auth.get_method_keys.return_value = ["dummy"]
+
+        async def _valid_csrf(_req):
+            return True
+
+        async def _find_or_create(_db, _identity):
+            return login_result
+
+        async def _finalize(*_args, **_kwargs):
+            return Redirect(path="/")
+
+        return [
+            patch("skrift.controllers.auth.get_settings", return_value=settings),
+            patch("skrift.controllers.auth.verify_csrf", new=_valid_csrf),
+            patch(
+                "skrift.controllers.auth.find_or_create_user_for_identity",
+                new=_find_or_create,
+            ),
+            patch("skrift.controllers.auth._finalize_primary_login", new=_finalize),
+            patch("skrift.controllers.auth.flash_success"),
+            patch("skrift.controllers.auth.assign_role_to_user", new=assign_mock),
+            patch("skrift.controllers.auth.remove_role_from_user", new=remove_mock),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_assigns_admin_role(self):
+        user = MagicMock()
+        user.id = uuid4()
+        login_result = LoginResult(
+            user=user,
+            identity_record=None,
+            is_new_user=True,
+            method_key="dummy",
+            method_type="dummy",
+        )
+
+        assign_mock = AsyncMock(return_value=True)
+        remove_mock = AsyncMock(return_value=True)
+
+        auth = AuthController(owner=MagicMock())
+        request = self._make_request({"email": "admin@example.com", "is_admin": "1"})
+        db_session = AsyncMock()
+
+        with contextlib.ExitStack() as stack:
+            for p in self._patches(login_result, assign_mock, remove_mock):
+                stack.enter_context(p)
+            await AuthController.dummy_login_submit.fn(auth, request, db_session)
+
+        assign_mock.assert_awaited_once_with(db_session, user.id, "admin")
+        remove_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_toggle_off_removes_admin_role(self):
+        user = MagicMock()
+        user.id = uuid4()
+        login_result = LoginResult(
+            user=user,
+            identity_record=None,
+            is_new_user=False,
+            method_key="dummy",
+            method_type="dummy",
+        )
+
+        assign_mock = AsyncMock(return_value=True)
+        remove_mock = AsyncMock(return_value=True)
+
+        auth = AuthController(owner=MagicMock())
+        request = self._make_request({"email": "user@example.com"})
+        db_session = AsyncMock()
+
+        with contextlib.ExitStack() as stack:
+            for p in self._patches(login_result, assign_mock, remove_mock):
+                stack.enter_context(p)
+            await AuthController.dummy_login_submit.fn(auth, request, db_session)
+
+        remove_mock.assert_awaited_once_with(db_session, user.id, "admin")
+        assign_mock.assert_not_awaited()

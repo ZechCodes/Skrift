@@ -53,6 +53,8 @@ from skrift.auth.second_factors.passkey_service import (
     complete_passkey_registration as complete_passkey_registration_flow,
     get_primary_passkey_registration_state,
 )
+from skrift.auth.roles import ADMIN
+from skrift.auth.services import assign_role_to_user, remove_role_from_user
 from skrift.auth.second_factors.registry import get_second_factor_method
 from skrift.auth.second_factors.services import (
     build_second_factor_transition_decision,
@@ -1174,6 +1176,7 @@ class AuthController(Controller):
         form_data = await request.form()
         email = form_data.get("email", "").strip()
         name = form_data.get("name", "").strip()
+        make_admin = bool(form_data.get("is_admin"))
 
         if not email:
             flash_error(request, "Email is required")
@@ -1206,6 +1209,14 @@ class AuthController(Controller):
         # ``email_verified=True`` on the identity.
         assert isinstance(login_result, LoginResult)
         await db_session.commit()
+
+        # The dummy login's admin toggle is a dev convenience: flip the account
+        # between admin and non-admin on every login so testers can switch roles
+        # without touching the admin panel.
+        if make_admin:
+            await assign_role_to_user(db_session, login_result.user.id, ADMIN.name)
+        else:
+            await remove_role_from_user(db_session, login_result.user.id, ADMIN.name)
 
         flash_success(request, "Successfully logged in!")
         return await _finalize_primary_login(

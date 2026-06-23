@@ -2,13 +2,17 @@ import hashlib
 import logging
 from pathlib import Path
 
+from collections.abc import Callable
+
 from litestar import Request, Response
 from litestar.exceptions import HTTPException
 from litestar.status_codes import HTTP_500_INTERNAL_SERVER_ERROR
+from markupsafe import Markup
 
 from skrift.auth.session_keys import SESSION_USER_EMAIL, SESSION_USER_ID, SESSION_USER_NAME, SESSION_USER_PICTURE_URL
 from skrift.config import get_settings
 from skrift.db.services.setting_service import get_cached_site_name
+from skrift.forms.core import CSRF_FIELD_NAME, CSRF_SESSION_KEY
 from skrift.lib import observability
 
 logger = logging.getLogger(__name__)
@@ -113,6 +117,26 @@ class SessionUser:
         self.picture_url = data.get("picture_url")
 
 
+def _csrf_field_from_session(session: dict | None) -> Callable[[], Markup]:
+    """Build a ``csrf_field`` callable for error-page rendering.
+
+    The production ``csrf_field`` template global reads ``request.session``, but
+    exception handlers render outside the session middleware, so that global
+    raises ``KeyError('request')`` and turns any error page into a second 500.
+    This standalone version reads the token straight from the cookie-decoded
+    session (the same dict the handler already uses for the logged-in user),
+    so the masthead's logout form renders with a valid token.
+    """
+
+    def csrf_field() -> Markup:
+        token = (session or {}).get(CSRF_SESSION_KEY, "")
+        return Markup(
+            f'<input type="hidden" name="{CSRF_FIELD_NAME}" value="{token}">'
+        )
+
+    return csrf_field
+
+
 def _render_error_response(
     request: Request, status_code: int, detail: str, json_detail: str | None = None
 ) -> Response:
@@ -129,6 +153,7 @@ def _render_error_response(
             message=detail,
             user=user,
             site_name=get_cached_site_name,
+            csrf_field=_csrf_field_from_session(session),
         )
         return Response(
             content=content,
