@@ -44,6 +44,18 @@
         color: var(--sk-color-muted, #666);
     }
 
+    .admin-toggle label {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        cursor: pointer;
+    }
+
+    .admin-toggle input[type="checkbox"] {
+        width: auto;
+        margin: 0;
+    }
+
     .submit-btn {
         width: 100%;
         padding: 1rem;
@@ -92,6 +104,14 @@
                 <label for="name">Name</label>
                 <input type="text" id="name" name="name" placeholder="Test User">
                 <small>Optional. Defaults to email username if not provided.</small>
+            </div>
+
+            <div class="form-group admin-toggle">
+                <label for="is_admin">
+                    <input type="checkbox" id="is_admin" name="is_admin" value="1">
+                    Make this account an admin
+                </label>
+                <small>Grants the admin role on login. Unchecking removes it.</small>
             </div>
 
             <button type="submit" class="submit-btn">Login</button>

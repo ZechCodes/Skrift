@@ -47,7 +47,12 @@ This makes testing predictable—you can create test users and always log back i
 
 ## Testing Different Roles
 
-To test role-based features:
+The dummy login form has a **"Make this account an admin"** toggle. It's applied
+on every login: checking it grants the admin role, leaving it unchecked removes
+the admin role from the account. This lets you flip an account between admin and
+non-admin without touching the admin panel.
+
+To test other role-based features:
 
 1. Log in as any user via dummy auth
 2. Use the admin panel to assign roles to that user
