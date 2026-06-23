@@ -103,6 +103,127 @@ class TestSharedBehavior:
 
 
 # ---------------------------------------------------------------------------
+# Multi-window check-and-record: AND-logic across several (limit, window) pairs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+class TestMultiWindowSharedBehavior:
+    @pytest.mark.asyncio
+    async def test_allows_when_every_window_under_limit(self, backend):
+        counter, client = await _build_backend(backend)
+        try:
+            allowed, retry_after = await counter.check_and_record_multi(
+                "alice", [(5, 60.0), (10, 3600.0)]
+            )
+            assert allowed is True
+            assert retry_after == 0
+        finally:
+            if client is not None:
+                await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_denied_when_tightest_window_exceeded(self, backend):
+        # 1/min + 6/hr: the second call within the minute is blocked by the
+        # minute window even though the hour window still has room.
+        counter, client = await _build_backend(backend)
+        try:
+            allowed, _ = await counter.check_and_record_multi(
+                "bob", [(1, 60.0), (6, 3600.0)]
+            )
+            assert allowed is True
+            allowed, retry_after = await counter.check_and_record_multi(
+                "bob", [(1, 60.0), (6, 3600.0)]
+            )
+            assert allowed is False
+            assert 1 <= retry_after <= 60
+        finally:
+            if client is not None:
+                await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_retry_after_reports_binding_longest_window(self, backend):
+        # Both windows have limit 1; the second call is blocked by both, and
+        # Retry-After must reflect the longer (hour) window, not the minute.
+        counter, client = await _build_backend(backend)
+        try:
+            await counter.check_and_record_multi("carol", [(1, 60.0), (1, 3600.0)])
+            allowed, retry_after = await counter.check_and_record_multi(
+                "carol", [(1, 60.0), (1, 3600.0)]
+            )
+            assert allowed is False
+            assert retry_after > 60  # bound by the hour window, not the minute
+        finally:
+            if client is not None:
+                await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_keys_isolated(self, backend):
+        counter, client = await _build_backend(backend)
+        try:
+            allowed, _ = await counter.check_and_record_multi("alice", [(1, 60.0)])
+            assert allowed is True
+            allowed, _ = await counter.check_and_record_multi("alice", [(1, 60.0)])
+            assert allowed is False
+            # bob has his own bucket
+            allowed, _ = await counter.check_and_record_multi("bob", [(1, 60.0)])
+            assert allowed is True
+        finally:
+            if client is not None:
+                await client.aclose()
+
+
+class TestMultiWindowAllOrNothingInMemory:
+    """A denied multi-window call must record nothing — being blocked by the
+    hour window must not consume a minute slot."""
+
+    @pytest.mark.asyncio
+    async def test_denied_call_records_nothing(self):
+        counter = InMemorySlidingWindowCounter(window=60.0)
+        # 5/min + 1/hr: first call allowed (records one hit), second call is
+        # blocked by the hour window. It must not add a hit.
+        limits = [(5, 60.0), (1, 3600.0)]
+        allowed, _ = await counter.check_and_record_multi("ip", limits)
+        assert allowed is True
+        allowed, _ = await counter.check_and_record_multi("ip", limits)
+        assert allowed is False
+        # Exactly one hit was ever recorded for this key.
+        assert sum(len(v) for v in counter._multi_buckets.values()) == 1
+
+
+@pytest.mark.skipif(not HAS_FAKEREDIS, reason="fakeredis not installed")
+class TestMultiWindowAllOrNothingRedis:
+    @pytest.mark.asyncio
+    async def test_denied_call_records_nothing(self):
+        client = fake_aioredis.FakeRedis()
+        counter = RedisSlidingWindowCounter(client, window=60.0, prefix="test")
+        try:
+            limits = [(5, 60.0), (1, 3600.0)]
+            allowed, _ = await counter.check_and_record_multi("ip", limits)
+            assert allowed is True
+            allowed, _ = await counter.check_and_record_multi("ip", limits)
+            assert allowed is False
+            # Only the allowed call left a member in the sorted set.
+            assert await client.zcard("test:ip") == 1
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_atomic_multi_window_race(self):
+        client = fake_aioredis.FakeRedis()
+        counter = RedisSlidingWindowCounter(client, window=60.0, prefix="test")
+        try:
+            results = await asyncio.gather(*[
+                counter.check_and_record_multi("contested", [(5, 60.0), (100, 3600.0)])
+                for _ in range(20)
+            ])
+            allowed_count = sum(1 for allowed, _ in results if allowed)
+            assert allowed_count == 5
+        finally:
+            await client.aclose()
+
+
+# ---------------------------------------------------------------------------
 # Redis-specific: shared state across counter instances (the whole point).
 # ---------------------------------------------------------------------------
 

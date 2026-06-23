@@ -24,6 +24,10 @@ class SlidingWindowCounter(Protocol):
 
     async def check_and_record(self, key: str, limit: int) -> tuple[bool, int]: ...
 
+    async def check_and_record_multi(
+        self, key: str, limits: list[tuple[int, float]]
+    ) -> tuple[bool, int]: ...
+
     async def record(self, key: str) -> None: ...
 
     async def count(self, key: str) -> int: ...
@@ -39,6 +43,11 @@ class InMemorySlidingWindowCounter:
     def __init__(self, window: float = 60.0, cleanup_interval: float = 60.0) -> None:
         self.window = window
         self._buckets: dict[str, list[float]] = {}
+        # Multi-window keys hold all hit timestamps in a single list; each
+        # window is evaluated as a count over a different sub-range, so they
+        # can't share the single-window cleanup (which prunes by self.window).
+        self._multi_buckets: dict[str, list[float]] = {}
+        self._max_multi_window = 0.0
         self._last_cleanup = time.monotonic()
         self._cleanup_interval = cleanup_interval
 
@@ -54,6 +63,15 @@ class InMemorySlidingWindowCounter:
                 stale_keys.append(key)
         for key in stale_keys:
             del self._buckets[key]
+
+        multi_cutoff = now - self._max_multi_window
+        stale_multi = []
+        for key, timestamps in self._multi_buckets.items():
+            self._multi_buckets[key] = [t for t in timestamps if t > multi_cutoff]
+            if not self._multi_buckets[key]:
+                stale_multi.append(key)
+        for key in stale_multi:
+            del self._multi_buckets[key]
 
     async def record(self, key: str) -> None:
         """Record a hit for *key*."""
@@ -92,4 +110,44 @@ class InMemorySlidingWindowCounter:
             return False, max(retry_after, 1)
 
         self._buckets[key].append(now)
+        return True, 0
+
+    async def check_and_record_multi(
+        self, key: str, limits: list[tuple[int, float]]
+    ) -> tuple[bool, int]:
+        """Check *key* against every ``(limit, window_seconds)`` pair.
+
+        Denies if *any* window is exceeded; records a hit only when *every*
+        window passes (all-or-nothing — a denied request consumes no slot).
+        Returns ``(allowed, retry_after_seconds)`` where retry_after reflects
+        the binding (longest-blocking) window. Atomic by virtue of running to
+        completion without awaiting between the check and the record.
+        """
+        if not limits:
+            return True, 0
+
+        now = time.monotonic()
+        max_window = max(window for _, window in limits)
+        if max_window > self._max_multi_window:
+            self._max_multi_window = max_window
+        self._cleanup_stale(now)
+
+        timestamps = [t for t in self._multi_buckets.get(key, []) if t > now - max_window]
+        self._multi_buckets[key] = timestamps
+
+        retry_after = 0
+        for limit, window in limits:
+            cutoff = now - window
+            in_window = [t for t in timestamps if t > cutoff]
+            if len(in_window) >= limit:
+                # The (count - limit + 1)-th oldest entry must age out before a
+                # new hit fits; that entry sits at index (count - limit).
+                target = in_window[len(in_window) - limit]
+                window_retry = int(target - cutoff) + 1
+                retry_after = max(retry_after, window_retry)
+
+        if retry_after:
+            return False, max(retry_after, 1)
+
+        timestamps.append(now)
         return True, 0
