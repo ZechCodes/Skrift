@@ -84,3 +84,74 @@ class TestInternalServerErrorHandler:
 
         assert response.status_code == 500
         assert response.content == {"status_code": 500, "detail": "Internal Server Error"}
+
+
+class TestHtmlErrorPageRendering:
+    """The HTML error page extends base.html, whose masthead renders
+    ``{{ csrf_field() }}`` inside the logout form for logged-in users. The
+    production ``csrf_field`` global reads ``context["request"]``, but the
+    exception handler renders the template outside the request/session
+    middleware. The handler must supply a ``csrf_field`` that works without a
+    request, or the error page itself blows up into a second 500."""
+
+    @staticmethod
+    def _request_with_csrf_global_engine(template_src: str):
+        """A request whose template engine mimics production: a ``csrf_field``
+        global that reads ``context["request"]`` (and so raises if ``request``
+        is absent from the render context)."""
+        from jinja2 import DictLoader, Environment, pass_context
+
+        from skrift.forms.core import csrf_field as production_csrf_field
+
+        environment = Environment(
+            loader=DictLoader({"error.html": template_src}), autoescape=True
+        )
+
+        @pass_context
+        def _csrf_field_ctx(context):
+            return production_csrf_field(context["request"])
+
+        environment.globals["csrf_field"] = _csrf_field_ctx
+
+        request = MagicMock()
+        request.headers.get.return_value = "text/html"
+        request.app.template_engine.get_template.return_value = environment.get_template(
+            "error.html"
+        )
+        return request
+
+    def test_logged_in_error_page_renders_csrf_field(self):
+        from skrift.auth.session_keys import SESSION_USER_ID
+        from skrift.forms.core import CSRF_SESSION_KEY
+        from skrift.lib.exceptions import _render_error_response
+
+        template_src = "<nav>{% if user %}{{ csrf_field() }}{% endif %}</nav>"
+        request = self._request_with_csrf_global_engine(template_src)
+        session = {SESSION_USER_ID: "user-1", CSRF_SESSION_KEY: "token-abc"}
+
+        with patch(
+            "skrift.lib.exceptions._get_session_from_cookie", return_value=session
+        ), patch(
+            "skrift.lib.exceptions._resolve_error_template", return_value="error.html"
+        ):
+            response = _render_error_response(request, 401, "Not authorized")
+
+        body = str(response.content)
+        assert response.status_code == 401
+        assert 'name="_csrf"' in body
+        assert "token-abc" in body
+
+    def test_anonymous_error_page_renders_without_request(self):
+        from skrift.lib.exceptions import _render_error_response
+
+        template_src = "<nav>{% if user %}{{ csrf_field() }}{% endif %}</nav>"
+        request = self._request_with_csrf_global_engine(template_src)
+
+        with patch(
+            "skrift.lib.exceptions._get_session_from_cookie", return_value=None
+        ), patch(
+            "skrift.lib.exceptions._resolve_error_template", return_value="error.html"
+        ):
+            response = _render_error_response(request, 404, "Not found")
+
+        assert response.status_code == 404
