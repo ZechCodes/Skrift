@@ -8,44 +8,23 @@ from litestar.response import Response
 from pydantic import BaseModel, Field
 
 from skrift import notifications as _notifications_mod
+from skrift.auth.failed_auth import FailedAuthLimiter
 from skrift.lib.client_ip import get_client_ip
 from skrift.hooks import hooks, WEBHOOK_NOTIFICATION_RECEIVED
 from skrift.notifications import Notification, NotificationMode
-from skrift.lib.sliding_window import InMemorySlidingWindowCounter, SlidingWindowCounter
 
-
-class _FailedAuthLimiter:
-    """Per-IP sliding window that tracks failed auth attempts.
-
-    Only records *failed* attempts; successful requests don't touch it.
-    """
-
-    def __init__(
-        self,
-        max_failures: int = 1,
-        window: float = 60.0,
-        counter: SlidingWindowCounter | None = None,
-    ) -> None:
-        self.max_failures = max_failures
-        self._counter: SlidingWindowCounter = (
-            counter or InMemorySlidingWindowCounter(window=window)
-        )
-
-    async def record_failure(self, ip: str) -> None:
-        await self._counter.record(ip)
-
-    async def is_blocked(self, ip: str) -> bool:
-        return await self._counter.count(ip) >= self.max_failures
+# Backwards-compatible alias; the limiter now lives in skrift.auth.failed_auth.
+_FailedAuthLimiter = FailedAuthLimiter
 
 
 # Module-level fallback used when the app hasn't installed a shared counter.
-_failed_auth_limiter = _FailedAuthLimiter()
+_failed_auth_limiter = FailedAuthLimiter()
 
 
-def _get_limiter(request: Request) -> _FailedAuthLimiter:
+def _get_limiter(request: Request) -> FailedAuthLimiter:
     """Return the app-scoped failed-auth limiter, falling back to module-level."""
     limiter = getattr(request.app.state, "failed_auth_limiter", None)
-    if isinstance(limiter, _FailedAuthLimiter):
+    if isinstance(limiter, FailedAuthLimiter):
         return limiter
     return _failed_auth_limiter
 
