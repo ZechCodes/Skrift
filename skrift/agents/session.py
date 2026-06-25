@@ -7,7 +7,6 @@ from typing import Any, AsyncIterator
 from uuid import uuid4
 
 from pydantic import TypeAdapter
-from pydantic_ai import DeferredToolRequests
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from skrift.agents.audit import audit_export
@@ -456,13 +455,27 @@ def _result_output_type(state: RunState, turn_id: str | None) -> Any | None:
         return None
 
 
+def _is_deferred_tool_requests(candidate: Any) -> bool:
+    """Identify pydantic-ai's DeferredToolRequests sentinel without importing it.
+
+    Reading a session result must not pull ``pydantic_ai`` into the site process,
+    so the sentinel is matched by module/name rather than identity.
+    """
+
+    return (
+        isinstance(candidate, type)
+        and candidate.__module__.startswith("pydantic_ai")
+        and candidate.__name__ == "DeferredToolRequests"
+    )
+
+
 def _rehydrate_result(output: Any, output_type: Any | None) -> Any:
     if output_type is None or output_type is Any:
         return output
     if isinstance(output_type, (list, tuple)):
         last_error: Exception | None = None
         for candidate in output_type:
-            if candidate is DeferredToolRequests:
+            if _is_deferred_tool_requests(candidate):
                 continue
             try:
                 return _rehydrate_result(output, candidate)

@@ -1483,3 +1483,58 @@ async def test_outbox_reconciler_drains_pending_entries():
 
     assert drained == [session.id]
     assert (await load_runstate(session.id)).outbox == []
+
+
+async def test_agent_proxies_system_prompt_and_instructions_decorators():
+    calls: list[str] = []
+    agent = skrift.Agent(TestModel(custom_output_text="ok"), name="demo")
+
+    @agent.system_prompt
+    def static_prompt() -> str:
+        calls.append("system_prompt")
+        return "you are helpful"
+
+    @agent.system_prompt(dynamic=True)
+    def dynamic_prompt() -> str:
+        calls.append("dynamic_system_prompt")
+        return "stay on topic"
+
+    @agent.instructions
+    def how_to_answer() -> str:
+        calls.append("instructions")
+        return "be terse"
+
+    # The decorators return the wrapped function unchanged.
+    assert callable(static_prompt) and static_prompt.__name__ == "static_prompt"
+
+    session = await agent.run("hi", actor="ada")
+    assert await session.result() == "ok"
+
+    # All three registered functions run when the agent executes.
+    assert {"system_prompt", "dynamic_system_prompt", "instructions"} <= set(calls)
+
+    # And they are registered on the materialized Pydantic AI agent.
+    snapshot = agent.definition_snapshot()
+    assert snapshot["system_prompt_functions"]
+    assert snapshot["dynamic_system_prompt_functions"]
+    assert snapshot["instructions"]
+
+
+async def test_agent_proxies_output_validator_decorator():
+    seen: list[str] = []
+    agent = skrift.Agent(TestModel(custom_output_text="raw"), name="demo")
+
+    @agent.output_validator
+    def shout(data: str) -> str:
+        seen.append(data)
+        return data.upper()
+
+    # The decorator returns the wrapped function unchanged.
+    assert shout("x") == "X"
+    seen.clear()
+
+    session = await agent.run("hi", actor="ada")
+
+    # The validator runs and its return value replaces the model output.
+    assert seen == ["raw"]
+    assert await session.result() == "RAW"

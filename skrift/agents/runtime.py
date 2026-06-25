@@ -39,8 +39,7 @@ from skrift.agents.state import (
     update_runstate,
 )
 from skrift.agents.turns import decode_turn_kwargs
-from skrift.workers import DeadLetterCause, PermanentFailure, WorkerContext, handler
-from skrift.workers.registry import registry as worker_registry
+from skrift.workers import DeadLetterCause, PermanentFailure, WorkerContext
 from skrift.workers.models import DeadJobEntry, Pause, utcnow
 
 logger = logging.getLogger(__name__)
@@ -61,7 +60,6 @@ class AgentIterResult:
     response: Any = None
 
 
-@handler("agents.run", queue="agents")
 async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> Any:
     await drain_outbox(payload.session_id)
     state = await load_runstate(payload.session_id)
@@ -380,7 +378,6 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
     return output
 
 
-@agents_run_handler.on_dead
 async def agents_run_dead(entry: DeadJobEntry) -> None:
     session_id = entry.job.payload.get("session_id")
     if not session_id:
@@ -433,7 +430,6 @@ async def agents_run_dead(entry: DeadJobEntry) -> None:
         await _emit_subagent_completed(session_id, "failed")
 
 
-@handler("agents.tool_call", queue="agents")
 async def agents_tool_call_handler(payload: AgentToolCallJob, context: WorkerContext) -> None:
     await drain_outbox(payload.session_id)
     state = await load_runstate(payload.session_id)
@@ -475,7 +471,6 @@ async def agents_tool_call_handler(payload: AgentToolCallJob, context: WorkerCon
     return None
 
 
-@agents_tool_call_handler.on_dead
 async def agents_tool_call_dead(entry: DeadJobEntry) -> None:
     session_id = entry.job.payload.get("session_id")
     tool_call_id = entry.job.payload.get("tool_call_id")
@@ -572,17 +567,21 @@ async def _drive_agent_iter(
 ) -> Any:
     token = set_current_session_id(session_id)
     try:
-        base_output_type = run_kwargs.pop("output_type", getattr(agent, "_output_type", str))
-        if base_output_type is None:
-            base_output_type = getattr(agent, "_output_type", str)
-        output_type = _durable_output_type(base_output_type)
+        # Only pass a per-run output_type when this turn actually overrides it.
+        # The agent is already constructed with the durable (DeferredToolRequests-
+        # wrapped) output type, so for non-overriding turns the run-level type is
+        # redundant — and Pydantic AI rejects a run-level output_type when the
+        # agent registers output validators. Omitting it keeps both working.
+        turn_output_type = run_kwargs.pop("output_type", None)
+        iter_kwargs = dict(run_kwargs)
+        if turn_output_type is not None:
+            iter_kwargs["output_type"] = _durable_output_type(turn_output_type)
         async with agent._iter_pydantic(
             prompt,
             deps=deps,
             message_history=message_history or None,
             deferred_tool_results=deferred_tool_results,
-            output_type=output_type,
-            **run_kwargs,
+            **iter_kwargs,
         ) as run:
             node_index = 0
             streamed_message_count = 0
@@ -1085,26 +1084,8 @@ def _coerce_tool_args(raw: Any) -> dict[str, Any]:
     return {}
 
 
-def register_agent_handlers() -> None:
-    """Re-register agent handlers after tests or hosts clear the worker registry."""
-
-    try:
-        worker_registry.get("agents.run")
-    except KeyError:
-        worker_registry.register(
-            "agents.run",
-            agents_run_handler,
-            payload_model=AgentRunJob,
-            queue="agents",
-        )
-        worker_registry.set_dead_callback("agents.run", agents_run_dead)
-    try:
-        worker_registry.get("agents.tool_call")
-    except KeyError:
-        worker_registry.register(
-            "agents.tool_call",
-            agents_tool_call_handler,
-            payload_model=AgentToolCallJob,
-            queue="agents",
-        )
-        worker_registry.set_dead_callback("agents.tool_call", agents_tool_call_dead)
+# Re-exported so existing imports (`from skrift.agents.runtime import
+# register_agent_handlers`) keep working. The implementation lives in the
+# pydantic-ai-free handlers module so the site can register handlers without
+# importing this module.
+from skrift.agents.handlers import register_agent_handlers  # noqa: E402

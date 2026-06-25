@@ -14,7 +14,48 @@ agent = skrift.Agent(
 )
 ```
 
-`Agent` subclasses Pydantic AI's `Agent` and registers itself with the Skrift agent runtime.
+`Agent` is a lightweight definition object that registers itself with the Skrift agent runtime. It mirrors the Pydantic AI `Agent` construction signature and proxies the familiar definition surface — `tool`, `tool_plain`, `system_prompt`, `instructions`, `output_validator` — and the `run` entry point, but it does **not** subclass `pydantic_ai.Agent`; it composes one. Defining an agent is free of Pydantic AI (importing it and constructing `skrift.Agent` never imports `pydantic_ai`); the proxied decorators record their functions and the underlying `pydantic_ai.Agent` is built lazily the first time the agent runs, in the process that executes it (the worker). See [Adapting Pydantic AI Agents](../guides/pydantic-ai-agents.md) for what this means in practice.
+
+Because it is not a subclass, the rest of the Pydantic AI agent API is **not** available on `skrift.Agent` — for example `run_sync`, `run_stream`, `iter`, and `isinstance(agent, pydantic_ai.Agent)` checks. Use the durable `run()` / `chat()` / `Session` surface instead. The process that runs agents must install the runtime (`skrift[agents]` plus a provider, e.g. `skrift[agents-google]`); processes that only define and dispatch agents need only `skrift`.
+
+### Registering prompts
+
+`@agent.system_prompt` and `@agent.instructions` work as they do in Pydantic AI — bare or called, sync or async, optionally taking `RunContext`:
+
+```python
+@agent.system_prompt
+def base_prompt() -> str:
+    return "You are a support assistant."
+
+
+@agent.system_prompt(dynamic=True)
+def tenant_prompt(ctx: RunContext[AppDeps]) -> str:
+    return f"Answer for tenant {ctx.deps.tenant_id}."
+
+
+@agent.instructions
+def style() -> str:
+    return "Be concise."
+```
+
+Static prompts can also be passed straight to the constructor (`system_prompt=...`, `instructions=...`).
+
+### Validating output
+
+`@agent.output_validator` proxies `pydantic_ai.Agent.output_validator`. The validator may take `RunContext` and raise `ModelRetry` to ask the model to try again:
+
+```python
+from pydantic_ai import ModelRetry
+
+
+@agent.output_validator
+def reject_pii(text: str) -> str:
+    if contains_pii(text):
+        raise ModelRetry("Remove personal data and try again.")
+    return text
+```
+
+Output validators and a **per-turn** `output_type` override are mutually exclusive (a Pydantic AI constraint): an agent that registers validators cannot also pass `output_type=` to an individual `run()` / `chat.send_typed()` call. Declare the output type on the constructor instead.
 
 | Parameter | Description |
 | --- | --- |

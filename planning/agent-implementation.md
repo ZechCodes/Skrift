@@ -79,7 +79,7 @@ The agent runner is registered as a worker handler under `agents.run`. Calling `
 
 ## 2. The Agent class
 
-`skrift.Agent` subclasses `pydantic_ai.Agent`. It adds:
+`skrift.Agent` is a facade over `pydantic_ai.Agent` (it originally subclassed it; it now composes one so that defining an agent does not import Pydantic AI — see [issue #155](https://github.com/ZechCodes/Skrift/issues/155)). It mirrors the Pydantic AI construction signature and tool decorators, and adds:
 
 - A required `name` for routing — global agent registry maps name → definition. Modules listed in `workers.imports`.
 - Tool decorator overrides that capture **policy metadata** (§3) at registration time.

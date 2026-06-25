@@ -11,25 +11,8 @@ skrift.push, skrift.flash, skrift.template, skrift.markdown, skrift.seo,
 skrift.storage, skrift.workers, skrift.agents, skrift.webhooks.
 """
 
-from skrift.agents import (
-    Agent,
-    ApprovalContext,
-    ApprovalRejection,
-    BlobRef,
-    Chat,
-    ReasoningLevel,
-    ResumeContext,
-    Session,
-    Steer,
-    attach_artifact,
-    audit_export,
-    replay,
-    record_artifact,
-    require_approval,
-    session,
-    set_actor,
-    set_blob_store,
-)
+import importlib
+
 from skrift.auth.guards import Permission, Role, auth_guard
 from skrift.config import get_settings, register_config_section
 from skrift.flash import (
@@ -77,6 +60,43 @@ from skrift.webhooks import (
     enqueue as enqueue_webhook,
     enqueue_standalone as enqueue_webhook_standalone,
 )
+
+# The agents subpackage transitively materializes pydantic-ai only when an agent
+# runs, but importing it eagerly here would still pull it into the import graph.
+# Expose its public symbols lazily so `import skrift` (and non-agent submodules)
+# stay free of the agent stack until an agent symbol is actually used.
+_LAZY_AGENT_EXPORTS = {
+    "Agent",
+    "ApprovalContext",
+    "ApprovalRejection",
+    "BlobRef",
+    "Chat",
+    "ReasoningLevel",
+    "ResumeContext",
+    "Session",
+    "Steer",
+    "attach_artifact",
+    "audit_export",
+    "replay",
+    "record_artifact",
+    "require_approval",
+    "session",
+    "set_actor",
+    "set_blob_store",
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_AGENT_EXPORTS:
+        value = getattr(importlib.import_module("skrift.agents"), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_LAZY_AGENT_EXPORTS})
+
 
 __all__ = [
     "Agent",
