@@ -1,19 +1,20 @@
-"""Skrift Agent wrapper around Pydantic AI."""
+"""Skrift Agent facade — a Pydantic AI-free agent definition.
+
+Defining an agent (``skrift.Agent(...)``) records configuration and tool specs
+without importing ``pydantic_ai``. The real :class:`pydantic_ai.Agent` is built
+lazily, on first run, via :mod:`skrift.agents._materialize` — i.e. only in the
+process that actually executes the agent (the worker, or inline in tests).
+"""
 
 from __future__ import annotations
 
-import functools
-import inspect
-from dataclasses import dataclass
-from typing import Any, Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
-from pydantic_ai import Agent as PydanticAgent, DeferredToolRequests, RunContext
-from pydantic_ai.exceptions import ApprovalRequired, CallDeferred
-
-from skrift.agents.approval import ApprovalContext, _record_tool_approval_decision
 from skrift.agents.config import get_agents_config
 from skrift.agents.context import current_session_id, resolve_actor
+from skrift.agents.helpers import callable_name
 from skrift.agents.models import ResumeContext, RunState, ToolDisplayContext, ToolPolicy
 from skrift.agents.registry import AgentDefinition, registry
 from skrift.agents.session import AgentSessionError, Session
@@ -28,7 +29,9 @@ from skrift.agents.state import (
     update_runstate,
 )
 from skrift.agents.turns import normalize_turn_kwargs
-from skrift.workers.models import utcnow
+
+if TYPE_CHECKING:
+    from skrift.agents._materialize import MaterializedAgent
 
 ToolDisplayFormatter = Callable[[ToolDisplayContext], Any]
 
@@ -40,11 +43,38 @@ class ToolFormatters:
     errored: ToolDisplayFormatter | None = None
 
 
-class Agent(PydanticAgent):
-    """Durable Skrift agent.
+@dataclass
+class ToolSpec:
+    """A deferred tool registration, replayed at materialization time."""
 
-    The public `run` method queues a worker-backed run and returns a `Session`.
-    The worker calls `_run_pydantic` to execute the underlying Pydantic AI agent.
+    plain: bool
+    func: Callable[..., Any]
+    kwargs: dict[str, Any] = field(default_factory=dict)
+    approval_gate: Callable[..., Any] | None = None
+    detached: bool = False
+
+
+@dataclass
+class CallbackSpec:
+    """A deferred decorator registration (system prompt, instructions, output validator).
+
+    Captured when the agent is defined and replayed onto the Pydantic AI agent at
+    materialization time.
+    """
+
+    kind: str  # "system_prompt" | "instructions" | "output_validator"
+    func: Callable[..., Any]
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+class Agent:
+    """Durable Skrift agent definition.
+
+    Constructing an ``Agent`` is free of ``pydantic_ai``: it stores the
+    constructor arguments and tool specs and registers an
+    :class:`~skrift.agents.registry.AgentDefinition`. The public ``run`` method
+    queues a worker-backed run and returns a :class:`~skrift.agents.session.Session`;
+    the worker materializes the underlying Pydantic AI agent and executes it.
     """
 
     def __init__(
@@ -57,16 +87,20 @@ class Agent(PydanticAgent):
         deps_type = kwargs.get("deps_type")
         if deps_type not in (None, type(None)) and deps_factory is None:
             raise TypeError("Skrift Agent requires deps_factory when deps_type is set")
-        kwargs["output_type"] = _durable_registration_output_type(
-            kwargs.get("output_type", str)
-        )
-        super().__init__(*args, name=name, **kwargs)
+        self._init_args = args
+        self._init_kwargs = kwargs
         self.skrift_name = name
         self.deps_factory = deps_factory
+        # The declared output type (without the durable DeferredToolRequests
+        # sentinel pydantic-ai needs); used to rehydrate persisted results.
+        self._output_type = kwargs.get("output_type", str)
         self._tool_policies: dict[str, ToolPolicy] = {}
         self._approval_gates: dict[str, Callable[..., Any]] = {}
         self._detached_tools: dict[str, Callable[..., Any]] = {}
         self._tool_formatters: dict[str, ToolFormatters] = {}
+        self._tool_specs: list[ToolSpec] = []
+        self._callback_specs: list[CallbackSpec] = []
+        self._materialized: MaterializedAgent | None = None
         registry.register(
             AgentDefinition(
                 name=name,
@@ -98,62 +132,18 @@ class Agent(PydanticAgent):
                 "restructure it as a plain tool that takes identifying args and "
                 "looks up resources internally, or wait for the context rehydration path."
             )
-        metadata = dict(kwargs.pop("metadata", {}) or {})
-        policy_approval, approval_mode, approval_callable_name, approval_gate = (
-            self._configure_approval(approval, kwargs)
-        )
-        metadata["skrift_policy"] = ToolPolicy(
-            approval=policy_approval,
-            approval_mode=approval_mode,
-            approval_callable_name=approval_callable_name,
+        return self._register_tool(
+            func,
+            plain=False,
+            approval=approval,
             idempotent=idempotent,
             detached=detached,
             approval_on_retry=approval_on_retry,
             policy_description=policy_description,
-            format_called_name=_callable_name(format_called) if format_called else None,
-            format_returned_name=_callable_name(format_returned) if format_returned else None,
-            format_errored_name=_callable_name(format_errored) if format_errored else None,
-        ).model_dump(mode="json")
-        formatters = ToolFormatters(
-            called=format_called,
-            returned=format_returned,
-            errored=format_errored,
-        )
-        original_func = func
-        if func is not None:
-            if approval_gate is not None:
-                func = self._approval_gate_wrapper(func, approval_gate, plain=False)
-            elif detached:
-                func = self._deferred_tool_wrapper(func)
-        decorator = super().tool(func, metadata=metadata, **kwargs)
-        if func is not None:
-            self._record_tool_policy(
-                kwargs.get("name") or getattr(original_func, "__name__", ""),
-                metadata["skrift_policy"],
-            )
-            self._record_tool_formatters(
-                kwargs.get("name") or getattr(original_func, "__name__", ""),
-                formatters,
-            )
-            if approval_gate is not None:
-                self._record_approval_gate(
-                    kwargs.get("name") or getattr(original_func, "__name__", ""),
-                    approval_gate,
-                )
-            if detached and original_func is not None:
-                self._record_detached_tool(
-                    kwargs.get("name") or getattr(original_func, "__name__", ""),
-                    original_func,
-                )
-            return decorator
-        return self._wrap_tool_decorator(
-            decorator,
-            kwargs.get("name"),
-            metadata["skrift_policy"],
-            formatters,
-            approval_gate=approval_gate,
-            detached=detached,
-            plain=False,
+            format_called=format_called,
+            format_returned=format_returned,
+            format_errored=format_errored,
+            kwargs=kwargs,
         )
 
     def tool_plain(
@@ -171,6 +161,85 @@ class Agent(PydanticAgent):
         format_errored: ToolDisplayFormatter | None = None,
         **kwargs: Any,
     ) -> Any:
+        return self._register_tool(
+            func,
+            plain=True,
+            approval=approval,
+            idempotent=idempotent,
+            detached=detached,
+            approval_on_retry=approval_on_retry,
+            policy_description=policy_description,
+            format_called=format_called,
+            format_returned=format_returned,
+            format_errored=format_errored,
+            kwargs=kwargs,
+        )
+
+    def system_prompt(
+        self,
+        func: Any = None,
+        /,
+        *,
+        dynamic: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Register a system prompt function (proxies ``pydantic_ai.Agent.system_prompt``).
+
+        Usable bare (``@agent.system_prompt``) or called (``@agent.system_prompt(dynamic=True)``).
+        The function is registered with the underlying Pydantic AI agent at run time.
+        """
+
+        return self._register_callback(func, kind="system_prompt", kwargs={"dynamic": dynamic, **kwargs})
+
+    def instructions(
+        self,
+        func: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> Any:
+        """Register an instructions function (proxies ``pydantic_ai.Agent.instructions``).
+
+        Usable bare (``@agent.instructions``) or called (``@agent.instructions()``).
+        The function is registered with the underlying Pydantic AI agent at run time.
+        """
+
+        return self._register_callback(func, kind="instructions", kwargs=kwargs)
+
+    def output_validator(self, func: Any = None, /) -> Any:
+        """Register an output validator (proxies ``pydantic_ai.Agent.output_validator``).
+
+        Usable bare (``@agent.output_validator``). The validator may take
+        ``RunContext`` as its first argument and raise ``ModelRetry`` to ask the
+        model to try again. It is registered with the underlying Pydantic AI agent
+        at run time.
+        """
+
+        return self._register_callback(func, kind="output_validator", kwargs={})
+
+    def _register_callback(self, func: Any, *, kind: str, kwargs: dict[str, Any]) -> Any:
+        def record(resolved_func: Any) -> Any:
+            self._callback_specs.append(CallbackSpec(kind=kind, func=resolved_func, kwargs=kwargs))
+            return resolved_func
+
+        if func is not None:
+            return record(func)
+        return record
+
+    def _register_tool(
+        self,
+        func: Any,
+        *,
+        plain: bool,
+        approval: bool | Callable[..., bool],
+        idempotent: bool,
+        detached: bool,
+        approval_on_retry: bool,
+        policy_description: str | None,
+        format_called: ToolDisplayFormatter | None,
+        format_returned: ToolDisplayFormatter | None,
+        format_errored: ToolDisplayFormatter | None,
+        kwargs: dict[str, Any],
+    ) -> Any:
         metadata = dict(kwargs.pop("metadata", {}) or {})
         policy_approval, approval_mode, approval_callable_name, approval_gate = (
             self._configure_approval(approval, kwargs)
@@ -183,57 +252,39 @@ class Agent(PydanticAgent):
             detached=detached,
             approval_on_retry=approval_on_retry,
             policy_description=policy_description,
-            format_called_name=_callable_name(format_called) if format_called else None,
-            format_returned_name=_callable_name(format_returned) if format_returned else None,
-            format_errored_name=_callable_name(format_errored) if format_errored else None,
+            format_called_name=callable_name(format_called) if format_called else None,
+            format_returned_name=callable_name(format_returned) if format_returned else None,
+            format_errored_name=callable_name(format_errored) if format_errored else None,
         ).model_dump(mode="json")
         formatters = ToolFormatters(
             called=format_called,
             returned=format_returned,
             errored=format_errored,
         )
-        original_func = func
-        if func is not None:
+        tool_kwargs = {**kwargs, "metadata": metadata}
+
+        def record(resolved_func: Any) -> Any:
+            name = kwargs.get("name") or getattr(resolved_func, "__name__", "")
+            self._record_tool_policy(name, metadata["skrift_policy"])
+            self._record_tool_formatters(name, formatters)
             if approval_gate is not None:
-                func = self._approval_gate_wrapper(
-                    func,
-                    approval_gate,
-                    plain=True,
+                self._record_approval_gate(name, approval_gate)
+            if detached:
+                self._record_detached_tool(name, resolved_func)
+            self._tool_specs.append(
+                ToolSpec(
+                    plain=plain,
+                    func=resolved_func,
+                    kwargs=tool_kwargs,
+                    approval_gate=approval_gate,
                     detached=detached,
                 )
-            elif detached:
-                func = self._deferred_tool_wrapper(func)
-        register_tool = super().tool if approval_gate is not None else super().tool_plain
-        decorator = register_tool(func, metadata=metadata, **kwargs)
+            )
+            return resolved_func
+
         if func is not None:
-            self._record_tool_policy(
-                kwargs.get("name") or getattr(original_func, "__name__", ""),
-                metadata["skrift_policy"],
-            )
-            self._record_tool_formatters(
-                kwargs.get("name") or getattr(original_func, "__name__", ""),
-                formatters,
-            )
-            if approval_gate is not None:
-                self._record_approval_gate(
-                    kwargs.get("name") or getattr(original_func, "__name__", ""),
-                    approval_gate,
-                )
-            if detached and original_func is not None:
-                self._record_detached_tool(
-                    kwargs.get("name") or getattr(original_func, "__name__", ""),
-                    original_func,
-                )
-            return decorator
-        return self._wrap_tool_decorator(
-            decorator,
-            kwargs.get("name"),
-            metadata["skrift_policy"],
-            formatters,
-            approval_gate=approval_gate,
-            detached=detached,
-            plain=True,
-        )
+            return record(func)
+        return record
 
     def _configure_approval(
         self,
@@ -243,45 +294,10 @@ class Agent(PydanticAgent):
         if callable(approval):
             gate = approval
             kwargs["requires_approval"] = False
-            return False, "callable", _callable_name(gate), gate
+            return False, "callable", callable_name(gate), gate
         if approval and "requires_approval" not in kwargs:
             kwargs["requires_approval"] = True
         return bool(approval), "static" if approval else "none", None, None
-
-    def _wrap_tool_decorator(
-        self,
-        decorator: Any,
-        explicit_name: str | None,
-        policy: dict[str, Any],
-        formatters: ToolFormatters,
-        *,
-        approval_gate: Callable[..., Any] | None = None,
-        detached: bool = False,
-        plain: bool = False,
-    ) -> Any:
-        if not callable(decorator):
-            return decorator
-
-        def wrapped(func: Any) -> Any:
-            name = explicit_name or getattr(func, "__name__", "")
-            self._record_tool_policy(name, policy)
-            self._record_tool_formatters(name, formatters)
-            if approval_gate is not None:
-                self._record_approval_gate(name, approval_gate)
-                return decorator(
-                    self._approval_gate_wrapper(
-                        func,
-                        approval_gate,
-                        plain=plain,
-                        detached=detached,
-                    )
-                )
-            if detached:
-                self._record_detached_tool(name, func)
-                return decorator(self._deferred_tool_wrapper(func))
-            return decorator(func)
-
-        return wrapped
 
     def _record_tool_policy(self, name: str, policy: dict[str, Any]) -> None:
         if name:
@@ -299,88 +315,40 @@ class Agent(PydanticAgent):
         if name:
             self._approval_gates[name] = gate
 
-    def _approval_gate_wrapper(
-        self,
-        func: Callable[..., Any],
-        gate: Callable[..., Any],
-        *,
-        plain: bool,
-        detached: bool = False,
-    ) -> Callable[..., Any]:
-        call_func = self._deferred_tool_wrapper(func) if detached else func
+    @property
+    def model(self) -> Any:
+        """The configured model, as passed at definition (positional or ``model=``)."""
 
-        if plain:
-            signature = inspect.signature(func)
-            context_param = inspect.Parameter(
-                "ctx",
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                annotation=RunContext[Any],
-            )
+        if self._init_args:
+            return self._init_args[0]
+        return self._init_kwargs.get("model")
 
-            @functools.wraps(func)
-            async def plain_wrapper(ctx: RunContext[Any], *args: Any, **kwargs: Any) -> Any:
-                await self._apply_dynamic_approval(ctx, gate, kwargs)
-                result = call_func(*args, **kwargs)
-                if inspect.isawaitable(result):
-                    return await result
-                return result
+    @property
+    def materialized(self) -> MaterializedAgent:
+        """The live Pydantic AI agent, built lazily on first access."""
 
-            plain_wrapper.__signature__ = signature.replace(  # type: ignore[attr-defined]
-                parameters=[context_param, *signature.parameters.values()]
-            )
-            plain_wrapper.__annotations__ = {
-                **getattr(func, "__annotations__", {}),
-                "ctx": RunContext[Any],
-            }
-            return plain_wrapper
+        if self._materialized is None:
+            try:
+                from skrift.agents._materialize import materialize
+            except ModuleNotFoundError as exc:
+                if exc.name != "pydantic_ai" and not (exc.name or "").startswith("pydantic_ai"):
+                    raise
+                raise ModuleNotFoundError(
+                    "Running a Skrift agent requires the agent runtime. Install the "
+                    "'agents' extra (e.g. `pip install skrift[agents]`) in the process "
+                    "that executes agents (the worker)."
+                ) from exc
+            self._materialized = materialize(self)
+        return self._materialized
 
-        @functools.wraps(func)
-        async def context_wrapper(ctx: RunContext[Any], *args: Any, **kwargs: Any) -> Any:
-            await self._apply_dynamic_approval(ctx, gate, kwargs)
-            result = call_func(ctx, *args, **kwargs)
-            if inspect.isawaitable(result):
-                return await result
-            return result
+    async def _run_pydantic(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.materialized._run_pydantic(*args, **kwargs)
 
-        return context_wrapper
+    def _iter_pydantic(self, *args: Any, **kwargs: Any) -> Any:
+        return self.materialized._iter_pydantic(*args, **kwargs)
 
-    async def _apply_dynamic_approval(
-        self,
-        ctx: RunContext[Any],
-        gate: Callable[..., Any],
-        args: dict[str, Any],
-    ) -> None:
-        if ctx.tool_call_approved:
-            return
-        gate_kwargs = dict(args)
-        if _accepts_approval_context(gate):
-            gate_kwargs["ctx"] = ApprovalContext(
-                session_id=current_session_id(),
-                tool_call_id=ctx.tool_call_id,
-                tool_name=ctx.tool_name,
-                deps=ctx.deps,
-                metadata=dict(ctx.metadata or {}),
-            )
-        gate_result = gate(**gate_kwargs)
-        if inspect.isawaitable(gate_result):
-            gate_result = await gate_result
-        gated = bool(gate_result)
-        decision = {
-            "gated": gated,
-            "policy": "callable",
-            "callable_name": _callable_name(gate),
-        }
-        await _record_tool_approval_decision(ctx, args, decision)
-        if gated:
-            raise ApprovalRequired({"skrift_approval_decision": decision})
-
-    @staticmethod
-    def _deferred_tool_wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            raise CallDeferred({"skrift_detached": True})
-
-        return wrapper
+    def definition_snapshot(self) -> dict[str, Any]:
+        return self.materialized.definition_snapshot()
 
     async def run(
         self,
@@ -400,7 +368,7 @@ class Agent(PydanticAgent):
             raise ValueError(
                 "dispatch must be 'queued', 'inline', 'inline_then_queued', or 'same_worker'"
             )
-        from skrift.agents.runtime import register_agent_handlers
+        from skrift.agents.handlers import register_agent_handlers
 
         register_agent_handlers()
         resolved = resolve_actor(actor)
@@ -501,108 +469,3 @@ class Agent(PydanticAgent):
         from skrift.agents.chat import Chat
 
         return Chat(self, key=key, actor=actor, deps_ref=deps_ref, defaults=defaults)
-
-    async def _run_pydantic(self, *args: Any, **kwargs: Any) -> Any:
-        return await super().run(*args, **kwargs)
-
-    def _iter_pydantic(self, *args: Any, **kwargs: Any) -> Any:
-        return super().iter(*args, **kwargs)
-
-    def definition_snapshot(self) -> dict[str, Any]:
-        return {
-            "model_id": str(getattr(self, "model", "")),
-            "system_prompt": "\n\n".join(str(prompt) for prompt in getattr(self, "_system_prompts", ())),
-            "system_prompts": [str(prompt) for prompt in getattr(self, "_system_prompts", ())],
-            "instructions": _snapshot_callables(getattr(self, "_instructions", None)),
-            "system_prompt_functions": _snapshot_callables(
-                getattr(self, "_system_prompt_functions", ())
-            ),
-            "dynamic_system_prompt_functions": _snapshot_callables(
-                getattr(self, "_system_prompt_dynamic_functions", {})
-            ),
-            "output_type": _safe_name(getattr(self, "_output_type", None)),
-            "output_type_schema": _output_schema_snapshot(getattr(self, "_output_schema", None)),
-            "tools": [
-                {"name": name, "policy": policy.model_dump(mode="json")}
-                for name, policy in sorted(self._tool_policies.items())
-            ],
-            "snapshot_at": utcnow().isoformat(),
-        }
-
-
-def _safe_name(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, type):
-        return f"{value.__module__}.{value.__qualname__}"
-    return repr(value)
-
-
-def _callable_name(value: Callable[..., Any]) -> str:
-    return getattr(value, "__name__", None) or repr(value)
-
-
-def _accepts_approval_context(value: Callable[..., Any]) -> bool:
-    try:
-        return "ctx" in inspect.signature(value).parameters
-    except (TypeError, ValueError):
-        return False
-
-
-def _snapshot_callables(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, dict):
-        items = value.values()
-    elif isinstance(value, (list, tuple, set)):
-        items = value
-    else:
-        items = (value,)
-    return [_safe_name(item) or "" for item in items]
-
-
-def _output_schema_snapshot(schema: Any) -> dict[str, Any]:
-    if schema is None:
-        return {}
-    text_processor = getattr(schema, "text_processor", None)
-    object_def = getattr(text_processor, "object_def", None)
-    toolset = getattr(schema, "toolset", None)
-    tools = []
-    for definition in getattr(toolset, "_tool_defs", ()) or ():
-        tools.append(
-            {
-                "name": getattr(definition, "name", None),
-                "description": getattr(definition, "description", None),
-                "parameters_json_schema": getattr(definition, "parameters_json_schema", None),
-                "kind": getattr(definition, "kind", None),
-            }
-        )
-    return {
-        "schema_kind": type(schema).__name__,
-        "allows_none": getattr(schema, "allows_none", None),
-        "allows_deferred_tools": getattr(schema, "allows_deferred_tools", None),
-        "allows_image": getattr(schema, "allows_image", None),
-        "object": {
-            "name": getattr(object_def, "name", None),
-            "description": getattr(object_def, "description", None),
-            "strict": getattr(object_def, "strict", None),
-            "json_schema": getattr(object_def, "json_schema", None),
-        }
-        if object_def is not None
-        else None,
-        "tools": tools,
-    }
-
-
-def _durable_registration_output_type(output_type: Any) -> Any:
-    if output_type is None:
-        output_types = []
-    elif isinstance(output_type, list):
-        output_types = list(output_type)
-    elif isinstance(output_type, tuple):
-        output_types = list(output_type)
-    else:
-        output_types = [output_type]
-    if not any(item is DeferredToolRequests for item in output_types):
-        output_types.append(DeferredToolRequests)
-    return output_types

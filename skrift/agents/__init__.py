@@ -26,8 +26,12 @@ from skrift.agents.registry import registry
 from skrift.agents.session import AgentSessionError, Session, session
 from skrift.agents.turns import ReasoningLevel
 
-# Import registers worker handlers.
-from skrift.agents import runtime as _runtime  # noqa: F401
+# Register worker handlers so agent jobs can be dispatched. This is
+# pydantic-ai-free: the real (pydantic-ai-backed) runtime is imported lazily
+# only when a job actually executes.
+from skrift.agents.handlers import register_agent_handlers
+
+register_agent_handlers()
 
 __all__ = [
     "Agent",

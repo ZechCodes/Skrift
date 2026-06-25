@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pydantic_ai import RunContext
-from pydantic_ai.exceptions import ApprovalRequired
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from skrift.agents.context import current_session_id
 from skrift.agents.state import append_event, update_runstate
+
+if TYPE_CHECKING:
+    from pydantic_ai import RunContext
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ async def require_approval(
         "skrift_approval_decision": decision,
     }
     await _record_tool_approval_decision(ctx, {}, decision)
+    from pydantic_ai.exceptions import ApprovalRequired
+
     raise ApprovalRequired(metadata)
 
 

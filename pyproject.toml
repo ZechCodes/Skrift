@@ -1,6 +1,6 @@
 [project]
 name = "skrift"
-version = "0.2.0a6"
+version = "0.2.0a7"
 description = "A lightweight async Python CMS for crafting modern websites"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -22,7 +22,6 @@ dependencies = [
     "mdit-py-plugins>=0.4.0",
     "pillow>=10.0.0",
     "aiosmtplib>=3.0.0",
-    "pydantic-ai-slim[google]>=1.89.1,<2.0.0",
 ]
 
 [project.scripts]
@@ -41,6 +40,9 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "redis>=5.0.0",
     "fakeredis[lua]>=2.21.0",
+    # The test suite exercises the agent runtime, and the bundled demo app uses
+    # Gemini, so dev pulls in the agent runtime plus the Google provider.
+    "skrift[agents-google]",
 ]
 docs = [
     "zensical>=0.0.19",
@@ -65,6 +67,18 @@ exclude = [
 ]
 
 [project.optional-dependencies]
+# The agent runtime. Processes that only define and dispatch agents install
+# plain `skrift`; worker processes that execute them install `skrift[agents]`
+# plus a provider. This enforces the web/worker split at build time so the agent
+# stack can't leak into a web/CMS pod via a stray import.
+#
+# `agents` is provider-agnostic (Pydantic AI core only). Add the provider your
+# models use — e.g. a worker for Anthropic models installs
+# `skrift[agents-anthropic]`, which pulls in `agents` plus that provider's SDK.
+agents = ["pydantic-ai-slim>=1.89.1,<2.0.0"]
+agents-google = ["skrift[agents]", "pydantic-ai-slim[google]>=1.89.1,<2.0.0"]
+agents-openai = ["skrift[agents]", "pydantic-ai-slim[openai]>=1.89.1,<2.0.0"]
+agents-anthropic = ["skrift[agents]", "pydantic-ai-slim[anthropic]>=1.89.1,<2.0.0"]
 docs = ["zensical>=0.0.19"]
 redis = ["redis>=5.0.0"]
 logfire = ["logfire[asgi,sqlalchemy,httpx]>=3.0.0"]

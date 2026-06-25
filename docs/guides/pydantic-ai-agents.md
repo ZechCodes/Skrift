@@ -1,6 +1,8 @@
 # Adapting Pydantic AI Agents
 
-Skrift agents subclass Pydantic AI agents and keep the familiar tool and run concepts, but add durable sessions, worker execution, audit events, queued turns, and chat helpers.
+Skrift agents present an interface modeled on Pydantic AI agents — the same construction signature and the familiar `tool` and `run` concepts — but they are a separate facade rather than a `pydantic_ai.Agent` subclass. They add durable sessions, worker execution, audit events, queued turns, and chat helpers.
+
+Defining an agent is free of Pydantic AI: `skrift.Agent(...)` records configuration and tool definitions without importing `pydantic_ai`, so web/CMS processes that only define and dispatch agents stay lean. The real `pydantic_ai.Agent` is materialized the first time the agent runs — in the worker that executes it. Because it is a facade and not a subclass, the parts of the Pydantic AI API that Skrift does not proxy (see [Limitations](#limitations)) are not available on `skrift.Agent`.
 
 Use this guide when moving an existing Pydantic AI agent into Skrift.
 
@@ -179,10 +181,48 @@ def lookup(record_id: str) -> dict:
 
 Formatter output is stored as `payload.display` on tool audit events. Raw tool arguments, results, and errors remain available in the structured event payload.
 
+## System prompts and instructions
+
+Dynamic system prompts and instructions port over unchanged. `@agent.system_prompt` (bare or `@agent.system_prompt(dynamic=True)`) and `@agent.instructions` are proxied onto the underlying Pydantic AI agent at run time:
+
+```python
+@assistant.system_prompt
+def base_prompt() -> str:
+    return "Answer support questions."
+
+
+@assistant.system_prompt(dynamic=True)
+def tenant_prompt(ctx: RunContext[AppDeps]) -> str:
+    return f"You are helping tenant {ctx.deps.tenant_id}."
+
+
+@assistant.instructions
+def style() -> str:
+    return "Be concise."
+```
+
+Static prompts can also stay on the constructor (`system_prompt="..."`, `instructions="..."`).
+
+Output validators port over too, with one caveat — see [Limitations](#limitations):
+
+```python
+from pydantic_ai import ModelRetry
+
+
+@assistant.output_validator
+def reject_pii(text: str) -> str:
+    if contains_pii(text):
+        raise ModelRetry("Remove personal data and try again.")
+    return text
+```
+
 ## Limitations
 
 Skrift preview support intentionally avoids a few unsafe or unresolved areas:
 
+- `skrift.Agent` is a facade, not a `pydantic_ai.Agent` subclass. It proxies construction, `tool`/`tool_plain`, `system_prompt`/`instructions`/`output_validator`, and durable `run()`/`chat()`, but the rest of the Pydantic AI agent API is not exposed on it — for example `run_sync`, `run_stream`, `iter`, and `isinstance(agent, pydantic_ai.Agent)`. Drive runs through the Skrift session surface.
+- Output validators and a per-turn `output_type` override cannot be combined (a Pydantic AI constraint). An agent with `@agent.output_validator` must declare its output type on the constructor rather than passing `output_type=` to an individual `run()` / `chat.send_typed()` call.
+- The agent runtime is an optional install. The process that executes agents needs `skrift[agents]` plus a provider (for example `skrift[agents-google]`, `skrift[agents-openai]`, or `skrift[agents-anthropic]`); a process that only defines and dispatches agents needs only `skrift`. Running an agent without the runtime installed raises a `ModuleNotFoundError` pointing at the extra.
 - Detached context tools are not supported yet. Use `tool_plain(detached=True)` with serializable arguments and look up resources inside the tool.
 - Resume is boundary-based. Skrift resumes from committed messages, deferred tool results, approval decisions, queued user turns, and stored run kwargs. It does not resume arbitrary internal Pydantic AI graph nodes.
 - Compatibility with Pydantic AI run kwargs is broad but not exhaustive. Provider-specific options should be tested in the workflow that uses them.

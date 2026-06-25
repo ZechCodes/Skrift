@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pydantic_ai import RunContext
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from skrift.agents.context import current_session_id
 from skrift.agents.state import append_event, update_runstate
+
+if TYPE_CHECKING:
+    from pydantic_ai import RunContext
 
 
 async def record_artifact(ctx: RunContext[Any], value: Any, *, kind: str) -> None:
