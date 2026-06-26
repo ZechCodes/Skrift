@@ -111,7 +111,9 @@ def create_public_page_type_controller(
                     "seo_meta": render_ctx.seo_meta,
                     "og_meta": render_ctx.og_meta,
                     "featured_image_url": render_ctx.featured_image_url,
+                    "featured_cover_url": render_ctx.featured_cover_url,
                     "asset_urls": render_ctx.asset_urls,
+                    "asset_image_urls": render_ctx.asset_image_urls,
                 },
             )
             return template.render(

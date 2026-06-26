@@ -20,6 +20,7 @@ from skrift.hooks import (
     BEFORE_ASSET_UPLOAD,
     hooks,
 )
+from skrift.lib.imaging import IMAGE_SIZES, variant_filename
 from skrift.storage.manager import StorageManager
 
 
@@ -137,6 +138,54 @@ async def get_asset_url(storage: StorageManager, asset: Asset) -> str:
     """Return the public/signed URL for an asset."""
     backend = await storage.get(asset.store)
     return await backend.get_url(asset.key)
+
+
+def internal_asset_url(store: str, key: str) -> str:
+    """Return the Skrift-internal storage URL for a key.
+
+    This always routes through ``StorageFilesMiddleware`` regardless of the
+    backend, so it is used for sized requests whose variants may not exist yet
+    and for crawler-facing tags that must resolve on any backend.
+    """
+    return f"/storage/{store}/{key}"
+
+
+async def image_url(
+    storage: StorageManager,
+    asset_or_key: Asset | str,
+    size: str | None = None,
+    store: str | None = None,
+) -> str:
+    """Resolve an asset URL, optionally at a named size.
+
+    Resolution is lazy and backend-agnostic:
+
+    * No size (or an unknown size) returns the backend's direct URL for the
+      original.
+    * When the sized variant already exists, returns the backend's direct URL
+      for that variant — for remote backends this is the CDN URL, so warm
+      requests skip Skrift entirely (no redirect).
+    * When the variant is missing, returns the internal ``/storage`` URL. The
+      first request generates and caches the variant, then redirects to the
+      backend URL, keeping generation off the hot path.
+    """
+    if isinstance(asset_or_key, Asset):
+        store_name = asset_or_key.store
+        key = asset_or_key.key
+    else:
+        store_name = store or storage.default_store
+        key = asset_or_key
+
+    backend = await storage.get(store_name)
+
+    if not size or size not in IMAGE_SIZES:
+        return await backend.get_url(key)
+
+    variant_key = variant_filename(key, size)
+    if await backend.exists(variant_key):
+        return await backend.get_url(variant_key)
+
+    return f"{internal_asset_url(store_name, key)}?size={size}"
 
 
 async def list_assets(

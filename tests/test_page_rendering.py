@@ -28,10 +28,12 @@ class TestWantsMarkdownResponse:
 
 class TestBuildPublicPageRenderContext:
     @pytest.mark.asyncio
-    async def test_reuses_asset_urls_for_featured_image(self):
+    async def test_featured_image_uses_internal_url_and_preresolved_cover(self):
         from skrift.controllers.page_rendering import build_public_page_render_context
 
-        featured_asset = SimpleNamespace(id="asset-1", store="default", key="featured")
+        featured_asset = SimpleNamespace(
+            id="asset-1", store="default", key="featured", content_type="image/jpeg"
+        )
         page = SimpleNamespace(
             assets=[featured_asset],
             featured_asset=featured_asset,
@@ -59,6 +61,11 @@ class TestBuildPublicPageRenderContext:
                 return_value="https://cdn.example.com/featured.jpg",
             ) as mock_get_asset_url,
             patch(
+                "skrift.controllers.page_rendering.image_url",
+                new_callable=AsyncMock,
+                side_effect=lambda _s, _a, size: f"https://cdn.example.com/featured.{size}",
+            ),
+            patch(
                 "skrift.controllers.page_rendering.get_page_seo_meta",
                 new_callable=AsyncMock,
                 return_value={"title": "SEO"},
@@ -84,9 +91,16 @@ class TestBuildPublicPageRenderContext:
         assert render_ctx.asset_urls == {
             "asset-1": "https://cdn.example.com/featured.jpg"
         }
-        assert render_ctx.featured_image_url == "https://cdn.example.com/featured.jpg"
+        # Gallery thumbnails and the cover are pre-resolved through ``image_url``.
+        assert render_ctx.asset_image_urls == {
+            "asset-1": "https://cdn.example.com/featured.medium"
+        }
+        assert render_ctx.featured_cover_url == "https://cdn.example.com/featured.cover"
+        # The featured image stays an internal URL so og:image sizing works on
+        # any backend, including remote/CDN-backed stores.
+        assert render_ctx.featured_image_url == "/storage/default/featured"
         assert request.session == {}
         assert mock_get_asset_url.await_count == 1
         assert mock_get_og_meta.await_args.kwargs["featured_image_url"] == (
-            "https://cdn.example.com/featured.jpg"
+            "/storage/default/featured"
         )

@@ -46,9 +46,12 @@ Without a theme, tiers 2 and 3 apply.
 | `themes_available()` | bool | Whether `themes/` has valid themes |
 | `static_url(path)` | str | Cache-busted static URL |
 | `theme_url(path)` | str | Theme-aware static URL |
+| `favicon_url()` | str | Cached site favicon URL (internal `/storage` URL) |
 | `csp_nonce()` | str | Current request's CSP nonce |
 
-Filter: `markdown` — renders markdown to HTML.
+Filters: `markdown` — renders markdown to HTML; `sized('name')` — appends
+`?size=name` for on-demand image sizing (see [Asset URLs & Image
+Sizing](#asset-urls-image-sizing)).
 
 ## Themes
 
@@ -130,6 +133,65 @@ Static files follow the same three-tier resolution as templates: theme → proje
 
 `theme_url(path)` resolves via the active theme's `static/` directory.
 
+## Asset URLs & Image Sizing
+
+Uploaded assets are served at `/storage/{store}/{key}` by `StorageFilesMiddleware`,
+which works across any storage backend (local, S3, custom). Images can be
+requested at a named size with `?size=<name>`; variants are generated lazily,
+cached back into the backend, and served from there (inline for local, `302` to
+the CDN for remote). Sizes live in `skrift.lib.imaging.IMAGE_SIZES`: `icon`
+(64×64), `thumb` (200×200), `small` (400w), `medium` (800w), `cover` (1200w),
+`og` (1200×630). Resizing never upscales and preserves the original format.
+
+### Async helpers are code-side, not template-side
+
+Templates render **synchronously**, so the async URL helpers cannot be awaited
+in a template (they return a coroutine). Resolve in the controller, pass strings
+into the context:
+
+```python
+from skrift.db.services.asset_service import get_asset_url, image_url, internal_asset_url
+
+storage = request.app.state.storage_manager
+original = await get_asset_url(storage, asset)        # backend-native (CDN/local) URL
+thumb = await image_url(storage, asset, "thumb")      # lazy, backend-aware sized URL
+internal = internal_asset_url(asset.store, asset.key) # always-internal /storage URL
+```
+
+`image_url` returns the backend's direct URL when no size is given or the variant
+already exists (warm path → straight to the CDN, no Skrift round-trip), and the
+internal `/storage/{store}/{key}?size=…` URL when the variant is missing (cold
+path → generate + redirect on first hit).
+
+### In templates: precomputed context + the `sized` filter
+
+Public page templates receive pre-resolved strings:
+
+| Context variable | Contents |
+|------------------|----------|
+| `asset_urls` | `{asset_id: original_url}` for every attached asset |
+| `asset_image_urls` | `{asset_id: medium_url}` for image assets (via `image_url`) |
+| `featured_image_url` | Internal `/storage` URL for the featured asset (sized for og:image) |
+| `featured_cover_url` | Pre-resolved `cover` URL for on-page display |
+
+```html
+<img src="{{ asset_image_urls[asset.id | string] }}" alt="{{ asset.alt_text }}">
+<img src="{{ featured_cover_url }}" alt="{{ page.title }}">
+<a href="{{ asset_urls[asset.id | string] }}">Open original</a>
+```
+
+The `sized('name')` filter is for URLs sized directly in-template (favicon,
+og:image). It only appends `?size=`, so it triggers resizing **only** on an
+internal `/storage` URL — appending to a CDN URL does nothing. Built-in
+controllers pass internal URLs for the favicon and og:image for this reason:
+
+```html
+<link rel="icon" href="{{ favicon_url() | sized('icon') }}">
+<meta property="og:image" content="{{ og_meta.image | sized('og') }}">
+```
+
+Full reference: [Media & Storage guide](../../../docs/guides/media-and-storage.md).
+
 ## CSP Nonces
 
 The `SecurityHeadersMiddleware` generates a per-request nonce and injects it into the CSP header. Use nonces for inline scripts and styles:
@@ -181,6 +243,9 @@ For form rendering and CSRF tokens, see `/skrift-forms`.
 | `skrift/lib/theme.py` | Theme discovery, `ThemeInfo` dataclass, metadata parsing |
 | `skrift/app_factory.py` | Directory builders, `create_static_hasher()`, template config |
 | `skrift/middleware/security.py` | `SecurityHeadersMiddleware`, `csp_nonce_var` |
+| `skrift/middleware/storage.py` | `StorageFilesMiddleware` — asset serving + on-demand sizing |
+| `skrift/lib/imaging.py` | `IMAGE_SIZES`, `resize_image()`, variant helpers |
+| `skrift/db/services/asset_service.py` | `get_asset_url`, `image_url`, `internal_asset_url` |
 | `skrift/db/services/setting_service.py` | `SITE_THEME_KEY`, `get_cached_site_theme()` |
 | `skrift/lib/hooks.py` | `RESOLVE_THEME` filter hook constant |
 | `skrift/controllers/web.py` | Per-request theme resolution |
