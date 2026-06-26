@@ -167,6 +167,7 @@ def load_controllers() -> list:
             for sub_name in (
                 "UserAdminController",
                 "SettingsAdminController",
+                "ContentAdminController",
                 "MediaAdminController",
                 "OAuth2ClientAdminController",
                 "APIKeyAdminController",

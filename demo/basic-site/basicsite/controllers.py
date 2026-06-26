@@ -10,8 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from skrift.content import get_content_area, hydrate
 from skrift.db.models.user import User
-from skrift.db.services import page_service
+from skrift.db.services import content_service, page_service
 from skrift.db.services.setting_service import get_cached_site_name, get_cached_site_base_url
 from skrift.seo import get_page_seo_meta, get_page_og_meta
 from skrift.storage import StorageManager
@@ -45,9 +46,22 @@ class SiteController(Controller):
         flash = request.session.pop("flash", None)
         nav_pages = await self._get_nav_pages(db_session)
 
+        # Hydrate the admin-editable "home" content area declared in code.
+        schema = get_content_area("home")
+        saved = await content_service.get_content_data(db_session, "home")
+        try:
+            content = hydrate(schema, saved)
+        except Exception:
+            content = schema()
+
         return TemplateResponse(
             "index.html",
-            context={"user": user, "flash": flash, "nav_pages": nav_pages},
+            context={
+                "user": user,
+                "flash": flash,
+                "nav_pages": nav_pages,
+                "content": content,
+            },
         )
 
     @get("/{path:path}")

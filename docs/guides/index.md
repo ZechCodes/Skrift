@@ -74,6 +74,14 @@ Step-by-step guides for building and customizing your Skrift site.
 
     [:octicons-arrow-right-24: Forms](forms.md)
 
+-   :material-pencil-box-multiple:{ .lg .middle } **Content Fields**
+
+    ---
+
+    Declare editable fields in code and let non-developers edit them in the admin.
+
+    [:octicons-arrow-right-24: Content Fields](content-fields.md)
+
 -   :material-layers-triple:{ .lg .middle } **Custom Middleware**
 
     ---
@@ -167,6 +175,7 @@ Step-by-step guides for building and customizing your Skrift site.
 | [Hooks and Filters](hooks-and-filters.md) | Extensibility | Python basics |
 | [Custom Controllers](custom-controllers.md) | New routes | Python, async |
 | [Forms](forms.md) | Form handling | Python basics |
+| [Content Fields](content-fields.md) | Admin-editable page content | Python basics |
 | [Custom Middleware](custom-middleware.md) | Request processing | Python, ASGI |
 | [Protecting Routes](protecting-routes.md) | Security | Python basics |
 | [Observability](observability.md) | Tracing & logging | None |

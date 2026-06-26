@@ -1,5 +1,6 @@
 from skrift.db.models.api_key import APIKey
 from skrift.db.models.asset import Asset
+from skrift.db.models.content_area import ContentAreaRecord
 from skrift.db.models.notification import DismissedNotification, StoredNotification
 from skrift.db.models.oauth2_client import OAuth2Client
 from skrift.db.models.oauth_account import OAuthAccount
@@ -28,6 +29,7 @@ from skrift.db.models.worker import (
 __all__ = [
     "APIKey",
     "Asset",
+    "ContentAreaRecord",
     "DismissedNotification",
     "OAuth2Client",
     "OAuthAccount",

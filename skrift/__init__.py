@@ -15,6 +15,13 @@ import importlib
 
 from skrift.auth.guards import Permission, Role, auth_guard
 from skrift.config import get_settings, register_config_section
+from skrift.content import (
+    ContentArea,
+    ContentModel,
+    content_area,
+    get_content_area,
+    list_content_areas,
+)
 from skrift.flash import (
     flash_error,
     flash_info,
@@ -104,6 +111,8 @@ __all__ = [
     "ApprovalRejection",
     "BlobRef",
     "Chat",
+    "ContentArea",
+    "ContentModel",
     "Form",
     "FormModel",
     "Job",
@@ -129,6 +138,7 @@ __all__ = [
     "auth_guard",
     "configure_webhooks",
     "configure_workers",
+    "content_area",
     "do_action",
     "enqueue_webhook",
     "enqueue_webhook_standalone",
@@ -138,10 +148,12 @@ __all__ = [
     "flash_success",
     "flash_warning",
     "form",
+    "get_content_area",
     "get_flash_messages",
     "get_handle",
     "get_runtime",
     "get_settings",
+    "list_content_areas",
     "handler",
     "hooks",
     "local_executor",

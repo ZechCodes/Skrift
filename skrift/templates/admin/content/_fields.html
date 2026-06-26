@@ -1,0 +1,65 @@
+{# Recursive renderers for content-area field nodes. Imported by edit.html. #}
+
+{% macro render_field(node) %}
+<label>
+    {{ node.label }}
+    {% if node.widget == "textarea" %}
+    <textarea name="{{ node.name }}" rows="{{ node.rows }}"{% if node.placeholder %} placeholder="{{ node.placeholder }}"{% endif %}>{{ node.value }}</textarea>
+    {% elif node.widget == "select" %}
+    <select name="{{ node.name }}">
+        {% for value, display in node.choices %}
+        <option value="{{ value }}"{% if value == node.value %} selected{% endif %}>{{ display }}</option>
+        {% endfor %}
+    </select>
+    {% elif node.widget == "checkbox" %}
+    <input type="checkbox" name="{{ node.name }}" value="true"{% if node.value %} checked{% endif %}>
+    {% else %}
+    <input type="{{ node.input_type }}" name="{{ node.name }}" value="{{ node.value }}"{% if node.placeholder %} placeholder="{{ node.placeholder }}"{% endif %}>
+    {% endif %}
+</label>
+{% if node.help_text %}<small class="sk-text-muted sk-field-help">{{ node.help_text }}</small>{% endif %}
+{% endmacro %}
+
+{% macro render_nodes(nodes) %}
+{% for node in nodes %}
+    {% if node.kind == "field" %}
+    {{ render_field(node) }}
+    {% elif node.kind == "group" %}
+    <fieldset class="sk-content-group">
+        <legend>{{ node.label }}</legend>
+        {% if node.help_text %}<small class="sk-text-muted sk-field-help">{{ node.help_text }}</small>{% endif %}
+        {{ render_nodes(node.children) }}
+    </fieldset>
+    {% elif node.kind == "repeater" %}
+    {{ render_repeater(node) }}
+    {% endif %}
+{% endfor %}
+{% endmacro %}
+
+{% macro render_repeater(node) %}
+<fieldset class="sk-repeater" data-repeater="{{ node.name }}"{% if node.max_items is not none %} data-max="{{ node.max_items }}"{% endif %}>
+    <legend>{{ node.label }}</legend>
+    {% if node.help_text %}<small class="sk-text-muted sk-field-help">{{ node.help_text }}</small>{% endif %}
+    <div class="sk-repeater-rows" data-rows>
+        {% for row in node.rows %}
+        <div class="sk-repeater-row" data-row>
+            <div class="sk-repeater-row-header">
+                <span class="sk-repeater-row-label">{{ node.item_label }}</span>
+                <button type="button" class="sk-btn-outline sk-btn-small sk-btn-danger" data-remove>Remove</button>
+            </div>
+            {{ render_nodes(row) }}
+        </div>
+        {% endfor %}
+    </div>
+    <template data-template>
+        <div class="sk-repeater-row" data-row>
+            <div class="sk-repeater-row-header">
+                <span class="sk-repeater-row-label">{{ node.item_label }}</span>
+                <button type="button" class="sk-btn-outline sk-btn-small sk-btn-danger" data-remove>Remove</button>
+            </div>
+            {{ render_nodes(node.template_nodes) }}
+        </div>
+    </template>
+    <button type="button" class="sk-btn-outline sk-btn-small" data-add>Add {{ node.item_label }}</button>
+</fieldset>
+{% endmacro %}
