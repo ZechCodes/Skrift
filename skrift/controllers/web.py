@@ -6,12 +6,13 @@ from litestar.response import Response, Template as TemplateResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.session_keys import SESSION_USER_ID
+from skrift.content import get_content_area, hydrate
 from skrift.controllers.helpers import get_user_context
 from skrift.controllers.page_rendering import (
     build_public_page_render_context,
     wants_markdown_response,
 )
-from skrift.db.services import page_service
+from skrift.db.services import content_service, page_service
 from skrift.template import Template
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "templates"
@@ -24,13 +25,21 @@ class WebController(Controller):
     async def index(
         self, request: "Request", db_session: AsyncSession
     ) -> TemplateResponse:
-        """Home page."""
+        """Home page rendered from the admin-editable ``home`` content area."""
         user_ctx = await get_user_context(request, db_session)
         flash = request.session.pop("flash", None)
 
+        schema = get_content_area("home")
+        saved = await content_service.get_content_data(db_session, "home")
+        try:
+            content = hydrate(schema, saved)
+        except Exception:
+            # Never let stale content break the landing page; fall back to defaults.
+            content = schema()
+
         return TemplateResponse(
             "index.html",
-            context={"flash": flash, **user_ctx},
+            context={"flash": flash, "content": content, **user_ctx},
         )
 
     @get("/{path:path}")

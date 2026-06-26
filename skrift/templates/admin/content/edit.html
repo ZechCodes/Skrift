@@ -1,0 +1,95 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Edit {{ content_label }} - Admin - {{ site_name() }}{% endblock %}
+
+{% block head %}
+<style nonce="{{ csp_nonce() }}">
+    .sk-content-group, .sk-repeater {
+        border: 1px solid var(--sk-color-border);
+        border-radius: var(--sk-radius-lg);
+        padding: var(--sk-space-md);
+        margin: var(--sk-space-md) 0;
+    }
+    .sk-content-group > legend, .sk-repeater > legend {
+        font-weight: 600;
+        padding: 0 var(--sk-space-xs);
+    }
+    .sk-repeater-row {
+        border: 1px solid var(--sk-color-border);
+        border-radius: var(--sk-radius-md);
+        padding: var(--sk-space-md);
+        margin: var(--sk-space-sm) 0;
+        background: var(--sk-color-surface);
+    }
+    .sk-repeater-row-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: var(--sk-space-sm);
+    }
+    .sk-repeater-row-label {
+        font-size: .8rem;
+        font-weight: 600;
+        color: var(--sk-color-muted);
+        text-transform: uppercase;
+        letter-spacing: .04em;
+    }
+    .sk-field-help { display: block; margin-top: -0.25rem; }
+</style>
+{% endblock %}
+
+{% import "admin/content/_fields.html" as fields %}
+
+{% block admin_content %}
+<hgroup>
+    <h1>{{ content_label }}</h1>
+    {% if content_description %}<p>{{ content_description }}</p>{% endif %}
+</hgroup>
+
+<form method="post" action="/admin/content/{{ content_key }}/edit">
+    {{ csrf_field() }}
+    {{ fields.render_nodes(nodes) }}
+
+    <div class="sk-form-actions">
+        <button type="submit">Save</button>
+        <a href="/admin/content" role="button" class="sk-btn-outline">Cancel</a>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+(function() {
+    document.querySelectorAll("[data-repeater]").forEach(function(rep) {
+        const rows = rep.querySelector("[data-rows]");
+        const tmpl = rep.querySelector("[data-template]");
+        const addBtn = rep.querySelector("[data-add]");
+        const max = rep.dataset.max ? parseInt(rep.dataset.max, 10) : null;
+        let nextIndex = rows.querySelectorAll("[data-row]").length;
+
+        function refreshAdd() {
+            if (max === null) return;
+            const count = rows.querySelectorAll("[data-row]").length;
+            addBtn.style.display = count >= max ? "none" : "";
+        }
+
+        addBtn.addEventListener("click", function() {
+            const html = tmpl.innerHTML.replaceAll("__INDEX__", String(nextIndex++));
+            const holder = document.createElement("div");
+            holder.innerHTML = html.trim();
+            rows.appendChild(holder.firstElementChild);
+            refreshAdd();
+        });
+
+        rows.addEventListener("click", function(event) {
+            const btn = event.target.closest("[data-remove]");
+            if (!btn) return;
+            btn.closest("[data-row]").remove();
+            refreshAdd();
+        });
+
+        refreshAdd();
+    });
+})();
+</script>
+{% endblock %}

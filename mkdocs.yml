@@ -65,6 +65,7 @@ nav:
     - Custom Templates: guides/custom-templates.md
     - Custom Controllers: guides/custom-controllers.md
     - Forms: guides/forms.md
+    - Content Fields: guides/content-fields.md
     - Hooks and Filters: guides/hooks-and-filters.md
     - SEO Metadata: guides/seo-metadata.md
     - Custom Middleware: guides/custom-middleware.md

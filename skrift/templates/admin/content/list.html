@@ -1,0 +1,37 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Content - Admin - {{ site_name() }}{% endblock %}
+
+{% block admin_content %}
+<div class="sk-admin-header">
+    <hgroup>
+        <h1>Content</h1>
+        <p>Edit the content areas declared by your templates</p>
+    </hgroup>
+</div>
+
+<table class="sk-admin-table">
+    <thead>
+        <tr>
+            <th>Area</th>
+            <th>Description</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for area in areas %}
+        <tr>
+            <td><a href="/admin/content/{{ area.key }}/edit">{{ area.label }}</a></td>
+            <td class="sk-text-muted">{{ area.description }}</td>
+            <td class="sk-actions-cell">
+                <a href="/admin/content/{{ area.key }}/edit" role="button" class="sk-btn-outline sk-btn-small">Edit</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not areas %}
+<p class="sk-no-items">No content areas are registered.</p>
+{% endif %}
+{% endblock %}

@@ -23,6 +23,7 @@ Skrift is a lightweight async Python CMS built on Litestar, featuring WordPress-
 - **Config**: YAML (app.yaml) + environment variables (.env)
 - **Auth**: OAuth providers + role-based permissions (see `/skrift-auth`)
 - **Forms**: Pydantic-backed with CSRF (see `/skrift-forms`)
+- **Content Fields**: code-declared, admin-editable page content (see `/skrift-content`)
 - **Events**: Hooks/filters + SSE notifications (see `/skrift-events`)
 - **Web Push**: Browser push with SSE fallback (see `/skrift-push`)
 - **Multisite**: Multi-subdomain architecture (see `/skrift-multisite`)
@@ -133,11 +134,12 @@ from skrift import (
     notify_user, notify_session, ensure_nid,  # notifications
     get_settings, register_config_section,    # config
     Template, render_markdown,            # rendering
+    ContentArea, ContentModel, content_area,  # content fields
     handler, submit, Job,                 # workers
 )
 ```
 
-Subsystem modules live at guessable top-level paths: `skrift.hooks`, `skrift.forms`, `skrift.notifications`, `skrift.push`, `skrift.flash`, `skrift.template`, `skrift.markdown`, `skrift.seo`, `skrift.storage`. `skrift.lib` is internal — never import from it in downstream code.
+Subsystem modules live at guessable top-level paths: `skrift.hooks`, `skrift.forms`, `skrift.content`, `skrift.notifications`, `skrift.push`, `skrift.flash`, `skrift.template`, `skrift.markdown`, `skrift.seo`, `skrift.storage`. `skrift.lib` is internal — never import from it in downstream code.
 
 ## CLI Commands
 
@@ -282,5 +284,6 @@ async def test_list_items(client, db_session):
 - **`/skrift-events`** — Hooks/filters, SSE notifications, backends
 - **`/skrift-push`** — Web Push notifications, service worker
 - **`/skrift-forms`** — Form system, CSRF, field customization
+- **`/skrift-content`** — Content fields: code-declared, admin-editable page content
 - **`/skrift-frontend`** — Templates, themes, static assets, CSP nonces
 - **`/skrift-multisite`** — Multi-subdomain architecture

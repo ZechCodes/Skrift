@@ -13,6 +13,7 @@ A modern Litestar-powered content management framework with multi-provider OAuth
 - **Setup Wizard**: Guided first-time configuration without manual file editing
 - **Admin Interface**: Web-based management for users, pages, and site settings
 - **WordPress-like Templates**: Hierarchical template resolution for content pages
+- **Content Fields**: Declare editable fields in code; non-developers edit them in the admin
 - **Dynamic Controllers**: Load controllers from `app.yaml` configuration
 - **SQLAlchemy Integration**: Async database support with SQLite/PostgreSQL
 - **Client-Side Sessions**: Encrypted cookie sessions for horizontal scalability

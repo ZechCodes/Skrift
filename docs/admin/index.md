@@ -47,6 +47,14 @@ The admin interface is available to authenticated users with the admin role.
 
     Configure site name, tagline, and other settings.
 
+-   :material-pencil-box-multiple:{ .lg .middle } **Content**
+
+    ---
+
+    Edit page content for code-declared content areas (hero, sections, etc.).
+
+    [:octicons-arrow-right-24: Content Fields](../guides/content-fields.md)
+
 -   :material-puzzle:{ .lg .middle } **Custom Admin Pages**
 
     ---
@@ -64,6 +72,7 @@ The admin interface is available to authenticated users with the admin role.
 | `/admin` | Admin dashboard |
 | `/admin/users` | User list and role management |
 | `/admin/pages` | Page management |
+| `/admin/content` | Edit code-declared content areas |
 | `/admin/settings` | Site settings |
 
 ## Roles and Permissions

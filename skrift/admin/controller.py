@@ -14,6 +14,7 @@ from skrift.flash import get_flash_messages
 # Re-export split controllers for convenient registration
 from skrift.admin.users import UserAdminController  # noqa: F401
 from skrift.admin.settings import SettingsAdminController  # noqa: F401
+from skrift.admin.content import ContentAdminController  # noqa: F401
 from skrift.admin.media import MediaAdminController  # noqa: F401
 from skrift.admin.oauth2_clients import OAuth2ClientAdminController  # noqa: F401
 from skrift.admin.api_keys import APIKeyAdminController  # noqa: F401
