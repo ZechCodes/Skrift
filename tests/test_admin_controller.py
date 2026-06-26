@@ -527,30 +527,29 @@ class TestPageMutationErrors:
 
 class TestSettingsController:
     @pytest.mark.asyncio
-    async def test_favicon_preview_failure_logs_and_renders(self):
+    async def test_favicon_preview_uses_internal_url(self):
         from skrift.admin.settings import SettingsAdminController
 
         controller = SettingsAdminController(owner=MagicMock())
         request = MagicMock()
         request.query_params = {}
         request.app.state.storage_manager = MagicMock()
+        request.app.state.storage_manager.default_store = "default"
         db_session = AsyncMock()
-
-        request.app.state.storage_manager.get = AsyncMock(side_effect=RuntimeError("boom"))
 
         with patch("skrift.admin.settings.get_admin_context", new_callable=AsyncMock, return_value={}), \
              patch("skrift.admin.settings.get_flash_messages", return_value=[]), \
              patch("skrift.admin.settings.setting_service.get_site_settings", new_callable=AsyncMock, return_value={"site_favicon_key": "favicon-key"}), \
              patch("skrift.admin.settings.importlib.metadata.version", return_value="0.1.0"), \
-             patch("skrift.config.get_settings", return_value=MagicMock(sites={}, domain="")), \
-             patch("skrift.admin.settings.logger.warning") as mock_log:
+             patch("skrift.config.get_settings", return_value=MagicMock(sites={}, domain="")):
             result = await SettingsAdminController.site_settings.fn(
                 controller, request, db_session
             )
 
         assert result.template_name == "admin/settings/site.html"
-        assert result.context["current_favicon_url"] == ""
-        mock_log.assert_called_once()
+        # Internal URL so the in-template ``sized('icon')`` request routes
+        # through the storage middleware and works on any backend.
+        assert result.context["current_favicon_url"] == "/storage/default/favicon-key"
 
 
 class TestAdminNavHelper:

@@ -70,6 +70,7 @@ class WebController(Controller):
                 "seo_meta": render_ctx.seo_meta,
                 "og_meta": render_ctx.og_meta,
                 "featured_image_url": render_ctx.featured_image_url,
+                "featured_cover_url": render_ctx.featured_cover_url,
             }
         )
         return template.render(

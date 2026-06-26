@@ -1,37 +1,39 @@
-"""ASGI middleware for serving locally-stored assets."""
+"""ASGI middleware for serving stored assets across any storage backend."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
-from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs
 
 from litestar.types import ASGIApp, Receive, Scope, Send
 
 from skrift.lib.imaging import IMAGE_SIZES, detect_image_content_type, resize_image, variant_filename
-from skrift.middleware.helpers import send_not_found
+from skrift.middleware.helpers import send_file, send_not_found, send_redirect
 
 if TYPE_CHECKING:
-    from skrift.config import StorageConfig
+    from skrift.storage.base import StorageBackend
+    from skrift.storage.manager import StorageManager
 
 logger = logging.getLogger(__name__)
 
 
 class StorageFilesMiddleware:
-    """Serve files from local storage backends at ``/storage/{store}/{key}``.
+    """Serve stored assets at ``/storage/{store}/{key}`` through any backend.
 
-    Only handles stores configured with ``backend = "local"``.  Remote backends
-    (S3, etc.) serve via their own URLs and are not intercepted here.
-
-    Supports ``?size=name`` query parameter for on-demand image resizing.
-    Resized variants are cached alongside originals for subsequent requests.
+    Resolves the request through the configured :class:`StorageManager`, so it
+    works for local, S3, and custom backends alike. Supports ``?size=name`` for
+    on-demand image resizing: the variant is generated once, cached in the same
+    backend under a ``{key}.{size}`` key, then served inline (for backends with
+    Skrift-internal URLs) or redirected to (for backends with external/CDN URLs)
+    so subsequent warm requests bypass Skrift entirely.
     """
 
-    def __init__(self, app: ASGIApp, storage_config: StorageConfig) -> None:
+    def __init__(self, app: ASGIApp, storage_manager: StorageManager) -> None:
         self.app = app
-        self._storage_config = storage_config
+        self._storage = storage_manager
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not scope["path"].startswith("/storage/"):
@@ -41,104 +43,77 @@ class StorageFilesMiddleware:
         # Parse /storage/{store_name}/{key...}
         rest = scope["path"][len("/storage/"):]
         slash_idx = rest.find("/")
-        if slash_idx == -1 or not rest[:slash_idx]:
+        if slash_idx <= 0:
             await send_not_found(send)
             return
 
         store_name = rest[:slash_idx]
         key = rest[slash_idx + 1:]
 
-        if not key:
+        # Security: reject empty keys, traversal, and null bytes
+        if not key or ".." in key.split("/") or "\x00" in key:
             await send_not_found(send)
             return
-
-        # Only serve local backends
-        store_cfg = self._storage_config.stores.get(store_name)
-        if store_cfg is None or store_cfg.backend != "local":
-            await send_not_found(send)
-            return
-
-        # Security: reject traversal and null bytes
-        if ".." in key.split("/") or "\x00" in key:
-            await send_not_found(send)
-            return
-
-        base_path = Path(store_cfg.local_path).resolve()
-
-        # Reconstruct the on-disk path through LocalStorageBackend's layout
-        if len(key) >= 4:
-            candidate = base_path / key[:2] / key[2:4] / key
-        else:
-            candidate = base_path / key
 
         try:
-            resolved = candidate.resolve()
-        except (OSError, ValueError):
+            backend = await self._storage.get(store_name)
+        except KeyError:
             await send_not_found(send)
             return
 
-        if not resolved.is_relative_to(base_path):
+        size_name = self._requested_size(scope)
+        serve_key = key
+        if size_name in IMAGE_SIZES:
+            variant_key = await self._ensure_variant(backend, key, size_name)
+            if variant_key is not None:
+                serve_key = variant_key
+
+        target_url = await backend.get_url(serve_key)
+        if target_url.startswith(("http://", "https://")):
+            await send_redirect(send, target_url)
+            return
+
+        if not await backend.exists(serve_key):
             await send_not_found(send)
             return
 
-        if not resolved.is_file():
-            await send_not_found(send)
-            return
-
-        # Check for ?size=name variant request
-        qs = scope.get("query_string", b"")
-        params = parse_qs(qs.decode("latin-1") if isinstance(qs, bytes) else qs)
-        size_name = params.get("size", [None])[0]
-
-        result = None
-        if size_name and size_name in IMAGE_SIZES:
-            result = self._get_or_create_variant(resolved, size_name)
-
-        if result is not None:
-            content, media_type = result
-        else:
-            content = resolved.read_bytes()
-            media_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
-
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [
-                (b"content-type", media_type.encode()),
-                (b"content-length", str(len(content)).encode()),
-            ],
-        })
-        await send({"type": "http.response.body", "body": content})
+        content = await backend.get(serve_key)
+        media_type = (
+            detect_image_content_type(content)
+            or mimetypes.guess_type(serve_key)[0]
+            or "application/octet-stream"
+        )
+        await send_file(send, content, media_type)
 
     @staticmethod
-    def _get_or_create_variant(original: Path, size_name: str) -> tuple[bytes, str] | None:
-        """Return cached variant bytes or generate and cache them.
+    def _requested_size(scope: Scope) -> str | None:
+        qs = scope.get("query_string", b"")
+        params = parse_qs(qs.decode("latin-1") if isinstance(qs, bytes) else qs)
+        return params.get("size", [None])[0]
 
-        The variant file is stored alongside the original with a ``.{size_name}``
-        suffix (e.g. ``abc123def456.thumb``).
+    @staticmethod
+    async def _ensure_variant(
+        backend: StorageBackend, key: str, size_name: str
+    ) -> str | None:
+        """Return the variant key, generating and caching it on first request.
 
-        Returns ``None`` if the original is not a recognized image format.
+        Returns ``None`` when the original is missing or is not a recognized
+        image, signalling the caller to fall back to the original key.
         """
-        variant_name = variant_filename(original.name, size_name)
-        variant_path = original.parent / variant_name
+        variant_key = variant_filename(key, size_name)
+        if await backend.exists(variant_key):
+            return variant_key
 
-        if variant_path.is_file():
-            content = variant_path.read_bytes()
-            ct = detect_image_content_type(content) or "application/octet-stream"
-            return content, ct
-
-        original_bytes = original.read_bytes()
-
-        # Skip non-image files
-        if detect_image_content_type(original_bytes) is None:
+        if not await backend.exists(key):
             return None
 
-        max_w, max_h = IMAGE_SIZES[size_name]
-        resized_bytes, content_type = resize_image(original_bytes, max_w, max_h)
+        original = await backend.get(key)
+        if detect_image_content_type(original) is None:
+            return None
 
-        try:
-            variant_path.write_bytes(resized_bytes)
-        except OSError:
-            logger.warning("Failed to cache variant %s", variant_path, exc_info=True)
-
-        return resized_bytes, content_type
+        max_width, max_height = IMAGE_SIZES[size_name]
+        resized, content_type = await asyncio.to_thread(
+            resize_image, original, max_width, max_height
+        )
+        await backend.put(variant_key, resized, content_type)
+        return variant_key

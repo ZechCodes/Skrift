@@ -341,7 +341,7 @@
 
     {% if featured_image_url %}
     <figure class="sk-cover-image">
-        <img src="{{ featured_image_url | sized('cover') }}" alt="{{ page.featured_asset.alt_text or page.title }}">
+        <img src="{{ featured_cover_url or featured_image_url | sized('cover') }}" alt="{{ page.featured_asset.alt_text or page.title }}">
     </figure>
     {% endif %}
 
@@ -371,7 +371,7 @@
                     <video src="{{ asset_urls[asset.id | string] }}" preload="metadata" muted loop playsinline></video>
                     <span class="sk-gallery-play"></span>
                     {% else %}
-                    <img src="{{ asset_urls[asset.id | string] | sized('medium') }}" alt="{{ asset.alt_text or asset.filename }}" loading="lazy">
+                    <img src="{{ asset_image_urls[asset.id | string] }}" alt="{{ asset.alt_text or asset.filename }}" loading="lazy">
                     {% endif %}
                     <span class="sk-gallery-overlay"><span class="sk-gallery-caption">{{ asset.alt_text or asset.filename }}</span></span>
                 </a>

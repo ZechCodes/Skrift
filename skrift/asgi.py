@@ -43,6 +43,7 @@ from skrift.app_factory import (
     update_template_directories,
 )
 from skrift.config import DatabaseConfig, get_config_path, get_settings, is_config_valid
+from skrift.db.services.asset_service import internal_asset_url
 from skrift.ratelimit import RateLimiter, set_limiter
 from skrift.lib.trusted_proxy import TrustedProxyManager
 from skrift.middleware.client_ip import ClientIPMiddleware
@@ -877,14 +878,16 @@ def create_app() -> ASGIApp:
         return await backend.get_url(key_or_asset)
 
     async def _resolve_favicon_url():
-        """Resolve the favicon storage key to a URL and cache it."""
+        """Resolve the favicon storage key to a URL and cache it.
+
+        Uses the Skrift-internal URL so the ``sized('icon')`` request routes
+        through the storage middleware and resolves on any backend.
+        """
         key = get_cached_site_favicon_key()
         if not key:
             set_cached_favicon_url("")
             return
-        backend = await storage_manager.get()
-        url = await backend.get_url(key)
-        set_cached_favicon_url(url)
+        set_cached_favicon_url(internal_asset_url(storage_manager.default_store, key))
 
     # Template configuration
     from jinja2 import pass_context
@@ -1189,7 +1192,7 @@ def create_app() -> ASGIApp:
             site_static_dir=site_static_dir,
             package_static_dir=package_static_dir,
         ),
-        storage_config=settings.storage,
+        storage_manager=storage_manager,
     )
 
     # Build subdomain → page_types mapping from config

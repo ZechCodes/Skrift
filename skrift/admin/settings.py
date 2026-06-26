@@ -18,6 +18,7 @@ from skrift.auth.guards import auth_guard, Permission
 from skrift.admin.helpers import get_admin_context
 from skrift.admin.navigation import ADMIN_NAV_TAG
 from skrift.db.services import setting_service
+from skrift.db.services.asset_service import internal_asset_url
 from skrift.flash import flash_success, get_flash_messages
 
 logger = logging.getLogger(__name__)
@@ -73,21 +74,14 @@ class SettingsAdminController(Controller):
                 "active": current_settings.get(setting_service.SITE_THEME_KEY, ""),
             }
 
-        # Resolve current favicon URL for preview
+        # Resolve current favicon URL for preview. Use the Skrift-internal URL so
+        # the ``sized('icon')`` request routes through the storage middleware and
+        # resolves on any backend.
         current_favicon_url = ""
         favicon_key = current_settings.get(setting_service.SITE_FAVICON_KEY, "")
         if favicon_key and not selected_site:
-            try:
-                from skrift.storage import StorageManager
-                storage: StorageManager = request.app.state.storage_manager
-                backend = await storage.get()
-                current_favicon_url = await backend.get_url(favicon_key)
-            except Exception:
-                logger.warning(
-                    "Failed to resolve favicon preview URL for key '%s'",
-                    favicon_key,
-                    exc_info=True,
-                )
+            storage = request.app.state.storage_manager
+            current_favicon_url = internal_asset_url(storage.default_store, favicon_key)
 
         flash_messages = get_flash_messages(request)
         return TemplateResponse(

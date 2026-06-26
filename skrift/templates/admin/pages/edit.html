@@ -238,7 +238,7 @@
                 {% for asset in page_assets %}
                 <div class="sk-attachment-item" data-asset-id="{{ asset.id }}">
                     {% if asset.content_type.startswith("image/") %}
-                    <img src="{{ asset_urls[asset.id | string] | sized('thumb') }}" alt="{{ asset.filename }}" class="sk-attachment-thumb" loading="lazy">
+                    <img src="{{ asset_image_urls[asset.id | string] }}" alt="{{ asset.filename }}" class="sk-attachment-thumb" loading="lazy">
                     {% endif %}
                     {% if not asset.content_type.startswith("image/") %}
                     <span class="sk-attachment-badge">{{ asset.filename.rsplit(".", 1)[-1] | upper if "." in asset.filename else "FILE" }}</span>

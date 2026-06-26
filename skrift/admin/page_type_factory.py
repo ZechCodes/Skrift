@@ -29,7 +29,7 @@ from skrift.auth.guards import OwnerOrPermission, Permission, auth_guard
 from skrift.auth.roles import permissions_for_type
 from skrift.config import PageTypeConfig
 from skrift.db.services import page_service, revision_service
-from skrift.db.services.asset_service import get_asset_url
+from skrift.db.services.asset_service import get_asset_url, image_url
 from skrift.flash import flash_error, flash_success, get_flash_messages
 from skrift.hooks import PAGE_ADMIN_CAN_MUTATE, PAGE_ADMIN_PAGE_STATE, hooks
 from skrift.storage import StorageManager
@@ -214,6 +214,11 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                 str(asset.id): await get_asset_url(storage, asset)
                 for asset in page.assets
             }
+            asset_image_urls = {
+                str(asset.id): await image_url(storage, asset, "thumb")
+                for asset in page.assets
+                if asset.content_type.startswith("image/")
+            }
 
             flash_messages = get_flash_messages(request)
             return TemplateResponse(
@@ -223,6 +228,7 @@ def create_page_type_controller(page_type: PageTypeConfig) -> type[Controller]:
                     "page": page,
                     "page_assets": page.assets,
                     "asset_urls": asset_urls,
+                    "asset_image_urls": asset_image_urls,
                     **page_type_ctx,
                     **ctx,
                 },
