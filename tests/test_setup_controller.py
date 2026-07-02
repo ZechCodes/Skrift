@@ -562,3 +562,40 @@ class TestResolveEnvVar:
         from skrift.setup.controller import _resolve_env_var
 
         assert _resolve_env_var("$NONEXISTENT_SKRIFT_VAR_12345") == ""
+
+
+class TestSetupAppTemplateEnvironment:
+    """The setup app renders setup/* templates and, through its error handlers,
+    the shared error templates (which extend base.html). Every global and filter
+    those templates reference must be registered on the setup app's engine."""
+
+    def _setup_engine(self):
+        from skrift.asgi import create_setup_app
+
+        app = create_setup_app()
+        litestar_app = app.app  # unwrap StaticFilesMiddleware
+        return litestar_app.template_engine.engine
+
+    def test_globals_used_by_setup_and_error_templates_are_registered(self):
+        env = self._setup_engine()
+        required = (
+            "csp_nonce",
+            "csrf_field",
+            "favicon_url",
+            "now",
+            "site_copyright_holder",
+            "site_copyright_start_year",
+            "site_name",
+            "static_url",
+        )
+        missing = [name for name in required if name not in env.globals]
+        assert not missing, f"setup app engine is missing template globals: {missing}"
+
+    def test_filters_used_by_base_template_are_registered(self):
+        env = self._setup_engine()
+        assert "sized" in env.filters, "setup app engine is missing the 'sized' filter"
+
+    def test_setup_and_error_templates_compile_in_the_setup_environment(self):
+        env = self._setup_engine()
+        for template_name in ("setup/passkey_login.html", "error-500.html", "error-404.html", "error.html"):
+            env.get_template(template_name)

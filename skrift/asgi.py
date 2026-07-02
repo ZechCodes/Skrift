@@ -1311,6 +1311,20 @@ def create_setup_app() -> Litestar:
     # Template configuration (setup app never uses themes)
     from skrift.app_factory import get_template_directories_for_theme
     setup_template_dirs = get_template_directories_for_theme("")
+    from jinja2 import pass_context
+    from skrift.forms import csrf_field as _csrf_field
+
+    @pass_context
+    def _csrf_field_ctx(context):
+        return _csrf_field(context["request"])
+
+    def _sized_url(url: str, size: str) -> str:
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}size={size}"
+
+    # The setup app renders setup/* templates (passkey_login uses csrf_field)
+    # and, via its error handlers, the shared error templates, which extend
+    # base.html (favicon_url + the sized filter). All of them must exist here.
     engine_callback = build_template_engine_callback(
         extra_globals={
             "site_name": lambda: "Skrift",
@@ -1318,7 +1332,10 @@ def create_setup_app() -> Litestar:
             "site_copyright_holder": lambda: "",
             "site_copyright_start_year": lambda: None,
             "static_url": static_url,
+            "csrf_field": _csrf_field_ctx,
+            "favicon_url": get_cached_favicon_url,
         },
+        extra_filters={"sized": _sized_url},
     )
     template_config = create_template_config(setup_template_dirs, engine_callback)
 
