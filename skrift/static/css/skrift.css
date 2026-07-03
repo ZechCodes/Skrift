@@ -881,11 +881,17 @@ hr {
 /* Form actions */
 .sk-form-actions {
     display: flex;
+    align-items: center;
     gap: var(--sk-space-md);
     margin-top: var(--sk-space-lg);
 }
 
+/* Zero the submit-button top margin (form button[type=submit] adds one) so the
+   action buttons line up instead of the submit floating below its siblings. */
 .sk-form-actions button,
+.sk-form-actions button[type="submit"],
+.sk-form-actions input[type="submit"],
+.sk-form-actions input[type="button"],
 .sk-form-actions [role="button"] {
     margin-top: 0;
 }
