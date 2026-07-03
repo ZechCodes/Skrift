@@ -162,19 +162,32 @@ def load_controllers() -> list:
             from skrift.controllers.push import service_worker
             controllers.append(service_worker)
 
-        # Auto-expand AdminController to include split sub-controllers
+        # Auto-expand AdminController to include split sub-controllers.
+        # Sub-controllers tied to a config-gated feature are only registered
+        # when that feature is enabled; when it's off their routes are never
+        # added, so the pages 404 and drop out of the admin nav automatically.
         if class_name == "AdminController" and module_path == "skrift.admin.controller":
-            for sub_name in (
-                "UserAdminController",
-                "SettingsAdminController",
-                "ContentAdminController",
-                "MediaAdminController",
-                "OAuth2ClientAdminController",
-                "APIKeyAdminController",
-                "WorkersAdminController",
-                "AgentUsageAdminController",
-                "WebhooksAdminController",
-            ):
+            # Read feature flags straight from the raw config (defaults mirror
+            # the config models). Avoids building the full Settings — which
+            # requires secret_key — just to gate admin registration.
+            workers_cfg = config.get("workers") or {}
+            webhooks_cfg = config.get("webhooks") or {}
+            api_keys_cfg = config.get("api_keys") or {}
+            workers_enabled = bool(workers_cfg.get("enabled", False))
+            admin_subcontrollers = (
+                ("UserAdminController", True),
+                ("SettingsAdminController", True),
+                ("ContentAdminController", True),
+                ("MediaAdminController", True),
+                ("OAuth2ClientAdminController", bool(config.get("oauth2_enabled", False))),
+                ("APIKeyAdminController", bool(api_keys_cfg.get("enabled", True))),
+                ("WorkersAdminController", workers_enabled),
+                ("AgentUsageAdminController", workers_enabled),
+                ("WebhooksAdminController", bool(webhooks_cfg.get("enabled", False))),
+            )
+            for sub_name, feature_enabled in admin_subcontrollers:
+                if not feature_enabled:
+                    continue
                 sub_class = getattr(module, sub_name, None)
                 if sub_class and sub_class not in controllers:
                     controllers.append(sub_class)
