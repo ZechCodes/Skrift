@@ -4,52 +4,71 @@
 
 {% block head %}
 <style>
-    .sk-hero {
+    .sk-landing {
         max-width: 760px;
-        margin: 4rem auto 2rem;
+        margin: 0 auto;
+        padding: 5rem 1.5rem 2rem;
         text-align: center;
     }
-    .sk-hero h1 {
-        font-size: clamp(2rem, 5vw, 3.25rem);
-        line-height: 1.1;
-        margin: 0 0 1rem;
+    .sk-landing .sk-eyebrow {
+        display: block;
+        margin-bottom: 1.25rem;
     }
-    .sk-hero p {
-        font-size: 1.15rem;
-        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.7));
-        margin: 0 auto 1.75rem;
-        max-width: 38rem;
+    .sk-landing h1 {
+        font-family: var(--sk-font-display);
+        font-size: clamp(2.25rem, 5vw, 3.4rem);
+        font-weight: 500;
+        line-height: 1.08;
+        letter-spacing: -0.01em;
+        margin: 0 0 1.25rem;
     }
-    .sk-hero .sk-cta {
+    .sk-landing .sk-lead {
+        font-size: 1.2rem;
+        line-height: 1.6;
+        color: var(--sk-color-text-secondary);
+        margin: 0 auto 2rem;
+        max-width: 40rem;
+    }
+    .sk-cta {
         display: inline-block;
-        padding: 0.75rem 1.75rem;
-        border-radius: 999px;
-        background: var(--sk-color-accent, #34D399);
-        color: #06251a;
+        padding: 0.7rem 1.6rem;
+        border-radius: var(--sk-radius-md);
+        background: var(--sk-color-accent);
+        color: var(--sk-color-on-accent);
         font-weight: 600;
+        font-size: 0.95rem;
         text-decoration: none;
+        transition: background var(--sk-transition-fast);
+    }
+    .sk-cta:hover {
+        background: var(--sk-color-accent-hover);
+        color: var(--sk-color-on-accent);
     }
     .sk-sections {
-        max-width: 960px;
-        margin: 2rem auto 4rem;
+        max-width: 1000px;
+        margin: 2.5rem auto 4rem;
         display: grid;
         gap: 1.5rem;
         grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        padding: 0 1rem;
+        padding: 0 1.5rem;
     }
     .sk-section-card {
-        padding: 1.5rem 1.75rem;
-        border-radius: 1rem;
-        border: 1px solid var(--sk-color-border, rgba(255, 255, 255, 0.08));
-        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+        margin: 0;
+        padding: 1.6rem 1.75rem;
+        border-radius: var(--sk-radius-lg);
+        border: 1px solid var(--sk-color-border);
+        background: var(--sk-color-surface);
     }
     .sk-section-card h2 {
+        font-family: var(--sk-font-display);
         margin: 0 0 0.5rem;
-        font-size: 1.25rem;
+        font-size: 1.3rem;
+        font-weight: 600;
     }
     .sk-section-card p {
         margin: 0;
-        color: var(--sk-color-text-secondary, rgba(255, 255, 255, 0.7));
+        color: var(--sk-color-text-secondary);
+        line-height: 1.6;
         white-space: pre-line;
     }
 </style>
@@ -57,9 +76,10 @@
 
 {% block content %}
 {% if content %}
-<section class="sk-hero">
+<section class="sk-landing">
+    <span class="sk-eyebrow">{{ site_name() }}</span>
     <h1>{{ content.hero_title }}</h1>
-    {% if content.hero_subtitle %}<p>{{ content.hero_subtitle }}</p>{% endif %}
+    {% if content.hero_subtitle %}<p class="sk-lead">{{ content.hero_subtitle }}</p>{% endif %}
     {% if content.cta.label %}
     <a class="sk-cta" href="{{ content.cta.url }}">{{ content.cta.label }}</a>
     {% endif %}
@@ -76,8 +96,8 @@
 </div>
 {% endif %}
 {% else %}
-<hgroup>
+<div class="sk-landing">
     <h1>{{ site_tagline() }}</h1>
-</hgroup>
+</div>
 {% endif %}
 {% endblock %}

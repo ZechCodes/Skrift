@@ -6,15 +6,15 @@
    ======================================== */
 
 :root {
-    --sk-admin-sidebar-bg: #080D18;
+    --sk-admin-sidebar-bg: var(--sk-color-surface-sunken);
     --sk-admin-sidebar-width: 15.5rem;
-    --sk-admin-sidebar-text: #fff;
-    --sk-admin-sidebar-muted: rgba(255, 255, 255, 0.3);
-    --sk-admin-sidebar-border: rgba(255, 255, 255, 0.08);
-    --sk-admin-sidebar-link: rgba(255, 255, 255, 0.45);
-    --sk-admin-sidebar-link-hover: rgba(255, 255, 255, 0.8);
-    --sk-admin-sidebar-link-hover-bg: var(--sk-color-surface, rgba(255, 255, 255, 0.03));
-    --sk-admin-sidebar-active-bg: rgba(52, 211, 153, 0.06);
+    --sk-admin-sidebar-text: var(--sk-color-text);
+    --sk-admin-sidebar-muted: var(--sk-color-faint);
+    --sk-admin-sidebar-border: var(--sk-color-border);
+    --sk-admin-sidebar-link: var(--sk-color-text-secondary);
+    --sk-admin-sidebar-link-hover: var(--sk-color-text);
+    --sk-admin-sidebar-link-hover-bg: var(--sk-color-surface-hover);
+    --sk-admin-sidebar-active-bg: var(--sk-color-surface);
 }
 
 /* ========================================
@@ -73,14 +73,11 @@
 
 .sk-sidebar-brand h1 {
     font-family: var(--sk-font-display);
-    font-size: 1.25rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
     margin-bottom: 0;
-    background: var(--sk-gradient-brand);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--sk-color-text);
 }
 
 .sk-sidebar-brand .sk-sidebar-sub {
@@ -91,12 +88,13 @@
 
 /* Sidebar Section Labels */
 .sk-sidebar-section {
-    font-size: 0.62rem;
-    font-weight: 600;
+    font-family: var(--sk-font-mono);
+    font-size: 0.64rem;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     color: var(--sk-admin-sidebar-muted);
-    padding: 0.75rem 1.5rem 0.5rem;
+    padding: 0.9rem 1.5rem 0.5rem;
 }
 
 /* Sidebar Nav */
@@ -120,9 +118,10 @@
 }
 
 .sk-sidebar-link.active {
-    color: #fff;
+    color: var(--sk-color-text);
+    font-weight: 600;
     background: var(--sk-admin-sidebar-active-bg);
-    border-left-color: var(--sk-color-accent, var(--sk-emerald));
+    border-left-color: var(--sk-color-accent);
 }
 
 /* Sidebar Footer */
@@ -138,9 +137,9 @@
 .sk-sidebar-avatar {
     width: 2rem;
     height: 2rem;
-    border-radius: 0.625rem;
-    background: var(--sk-gradient-brand);
-    color: #fff;
+    border-radius: 0.5rem;
+    background: var(--sk-color-accent);
+    color: var(--sk-color-on-accent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -158,7 +157,7 @@
 
 .sk-sidebar-user .sk-sidebar-name {
     font-size: 1rem;
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--sk-color-text);
     font-weight: 600;
 }
 
@@ -254,7 +253,7 @@
     left: 0;
     right: 0;
     height: 3px;
-    background: var(--sk-gradient-brand);
+    background: var(--sk-color-accent);
     opacity: 0.8;
     transition: height 0.3s, opacity 0.3s;
 }
@@ -378,7 +377,7 @@
 }
 
 .sk-pill-published {
-    background: rgba(52, 211, 153, 0.1);
+    background: var(--sk-color-success-soft);
     color: var(--sk-color-success);
 }
 
@@ -388,7 +387,7 @@
 }
 
 .sk-pill-review {
-    background: rgba(139, 92, 246, 0.1);
+    background: var(--sk-color-warm);
     color: var(--sk-violet);
 }
 
@@ -673,7 +672,7 @@
 
 .sk-worker-dot-claimed,
 .sk-worker-bar-claimed {
-    background: #2563eb;
+    background: var(--sk-color-accent);
 }
 
 .sk-worker-dot-dead,
@@ -796,7 +795,7 @@
 }
 
 .sk-worker-chart-claimed {
-    stroke: #2563eb;
+    stroke: var(--sk-color-accent);
 }
 
 .sk-worker-chart-dead {
@@ -1015,8 +1014,8 @@
 }
 
 .sk-webhook-live {
-    background: rgba(52, 211, 153, 0.12);
-    border: 1px solid rgba(52, 211, 153, 0.32);
+    background: var(--sk-color-success-soft);
+    border: 1px solid var(--sk-color-success-soft);
     border-radius: 999px;
     color: var(--sk-color-success);
     display: inline-flex;
@@ -1028,8 +1027,8 @@
 }
 
 .sk-webhook-live-stale {
-    background: rgba(245, 158, 11, 0.14);
-    border-color: rgba(245, 158, 11, 0.32);
+    background: var(--sk-color-warning-soft);
+    border-color: var(--sk-color-warning-soft);
     color: var(--sk-color-warning);
 }
 
@@ -1102,7 +1101,7 @@
 
 .sk-webhook-status-succeeded,
 .sk-webhook-status-success {
-    background: rgba(52, 211, 153, 0.12);
+    background: var(--sk-color-success-soft);
     color: var(--sk-color-success);
 }
 
@@ -1110,13 +1109,13 @@
 .sk-webhook-status-queued,
 .sk-webhook-status-sending,
 .sk-webhook-status-retry {
-    background: rgba(245, 158, 11, 0.14);
+    background: var(--sk-color-warning-soft);
     color: var(--sk-color-warning);
 }
 
 .sk-webhook-status-dead,
 .sk-webhook-status-cancelled {
-    background: rgba(239, 68, 68, 0.14);
+    background: var(--sk-color-error-soft);
     color: var(--sk-color-error);
 }
 
@@ -1137,9 +1136,4 @@
    Light Theme Overrides
    ======================================== */
 
-@media (prefers-color-scheme: light) {
-    :root {
-        --sk-admin-sidebar-bg: #0f172a;
-        --sk-admin-sidebar-active-bg: rgba(5, 150, 105, 0.1);
-    }
-}
+/* Sidebar adapts to light/dark via the shared theme tokens. */

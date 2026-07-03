@@ -9,7 +9,7 @@
     position: sticky;
     top: 0;
     z-index: 100;
-    background: rgba(7, 11, 20, 0.75);
+    background: var(--sk-color-nav-bg);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid var(--sk-color-border);
@@ -28,13 +28,10 @@
 
 .sk-nav-logo {
     font-family: var(--sk-font-display);
-    font-size: 1.35rem;
-    font-weight: 700;
-    background: var(--sk-gradient-brand);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    letter-spacing: -0.02em;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--sk-color-text);
+    letter-spacing: -0.01em;
     text-decoration: none;
 }
 
@@ -67,8 +64,8 @@
 .sk-nav-cta {
     font-size: 0.8rem;
     font-weight: 500;
-    color: var(--sk-color-bg);
-    background: var(--sk-gradient-accent);
+    color: var(--sk-color-on-accent);
+    background: var(--sk-color-accent);
     padding: 0.5rem 1.1rem;
     border-radius: var(--sk-radius-md);
     transition: all 0.25s;
@@ -79,10 +76,9 @@
 }
 
 .sk-nav-cta:hover {
-    opacity: 0.9;
+    background: var(--sk-color-accent-hover);
     transform: translateY(-1px);
-    box-shadow: 0 4px 20px rgba(52, 211, 153, 0.3);
-    color: var(--sk-color-bg);
+    color: var(--sk-color-on-accent);
 }
 
 /* ========================================
@@ -129,7 +125,7 @@
     font-weight: 500;
     color: var(--sk-color-accent);
     background: var(--sk-color-accent-soft);
-    border: 1px solid rgba(52, 211, 153, 0.15);
+    border: 1px solid var(--sk-color-accent-soft);
     padding: 0.4rem 1rem;
     border-radius: var(--sk-radius-pill);
     margin-bottom: 1.5rem;
@@ -137,10 +133,10 @@
 
 .sk-hero h1 {
     font-family: var(--sk-font-display);
-    font-size: clamp(2.5rem, 5vw, 3.8rem);
-    font-weight: 700;
-    line-height: 1.1;
-    letter-spacing: -0.03em;
+    font-size: clamp(2.5rem, 5vw, 3.6rem);
+    font-weight: 500;
+    line-height: 1.08;
+    letter-spacing: -0.01em;
     margin-bottom: 1rem;
 }
 
@@ -179,11 +175,11 @@
    ======================================== */
 
 .sk-section-label {
-    font-family: var(--sk-font-display);
-    font-size: 1rem;
-    font-weight: 600;
+    font-family: var(--sk-font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     color: var(--sk-color-muted);
     margin-bottom: 1.25rem;
 }
@@ -218,8 +214,8 @@
 }
 
 .sk-filter-pill.active {
-    color: var(--sk-color-bg);
-    background: var(--sk-gradient-accent);
+    color: var(--sk-color-on-accent);
+    background: var(--sk-color-accent);
     border-color: transparent;
     font-weight: 500;
 }
@@ -248,7 +244,7 @@
     position: relative;
     background: var(--sk-color-surface);
     border: 1px solid var(--sk-color-border);
-    border-radius: var(--sk-radius-xl);
+    border-radius: var(--sk-radius-lg);
     overflow: hidden;
     transition: all 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
@@ -265,14 +261,13 @@
 }
 
 .sk-post-card:hover::before {
-    opacity: 1;
+    opacity: 0;
 }
 
 .sk-post-card:hover {
-    border-color: transparent;
-    transform: translateY(-4px);
-    box-shadow: 0 12px 40px rgba(52, 211, 153, 0.08),
-                0 4px 16px rgba(139, 92, 246, 0.06);
+    border-color: var(--sk-color-border-hover);
+    transform: translateY(-3px);
+    box-shadow: var(--sk-shadow-md);
 }
 
 .sk-post-card-inner {
@@ -290,11 +285,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.2);
-    font-family: var(--sk-font-display);
-    font-size: 2rem;
-    font-weight: 600;
-    background: linear-gradient(135deg, var(--sk-color-accent), var(--sk-violet));
+    color: var(--sk-color-faint);
+    font-family: var(--sk-font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: repeating-linear-gradient(135deg, var(--sk-color-warm) 0 11px, transparent 11px 22px), var(--sk-color-surface-hover);
     overflow: hidden;
     aspect-ratio: 16 / 9;
 }
@@ -381,8 +377,8 @@
 }
 
 .sk-page-btn.active {
-    background: var(--sk-gradient-accent);
-    color: var(--sk-color-bg);
+    background: var(--sk-color-accent);
+    color: var(--sk-color-on-accent);
     border-color: transparent;
     font-weight: 600;
 }
@@ -407,8 +403,8 @@
 
 .sk-footer-brand {
     font-family: var(--sk-font-display);
-    font-size: 1.2rem;
-    font-weight: 700;
+    font-size: 1.3rem;
+    font-weight: 600;
     color: var(--sk-color-text);
     margin-bottom: 0.75rem;
     display: inline-block;
@@ -522,11 +518,11 @@ article footer {
 
 @media (prefers-color-scheme: light) {
     .sk-nav {
-        background: rgba(248, 250, 252, 0.85);
+        background: var(--sk-color-nav-bg);
     }
 
     .sk-nav-cta {
-        color: #fff;
+        color: var(--sk-color-on-accent);
     }
 
     .sk-post-card-inner {

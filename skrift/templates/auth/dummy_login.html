@@ -52,17 +52,21 @@
     }
 
     .admin-toggle input[type="checkbox"] {
-        width: auto;
+        width: 1.25rem;
+        height: 1.25rem;
+        padding: 0;
         margin: 0;
+        border-radius: var(--sk-radius-sm);
+        flex: none;
     }
 
     .submit-btn {
         width: 100%;
         padding: 1rem;
-        background: #6b7280;
-        color: white;
+        background: var(--sk-color-accent);
+        color: var(--sk-color-on-accent);
         border: none;
-        border-radius: 0.5rem;
+        border-radius: var(--sk-radius-md);
         font-size: 1rem;
         font-weight: 600;
         cursor: pointer;
@@ -70,7 +74,7 @@
     }
 
     .submit-btn:hover {
-        background: #4b5563;
+        background: var(--sk-color-accent-hover);
     }
 
     .back-link {

@@ -6,43 +6,51 @@
    ======================================== */
 
 :root {
-    /* Primitive palette */
-    --sk-emerald: #34D399;
-    --sk-teal: #2DD4BF;
-    --sk-violet: #8B5CF6;
-    --sk-rose: #F43F5E;
-    --sk-amber: #F59E0B;
+    /* Primitive palette — Editorial (warm ink-on-paper) */
+    --sk-terracotta: #b25438;
+    --sk-terracotta-soft: #d99a7e;
+    --sk-green: #5fa877;
+    --sk-amber: #c79a4f;
 
-    /* Core palette (Aurora dark default) */
-    --sk-color-bg: #070B14;
-    --sk-color-text: #E8ECF4;
-    --sk-color-text-secondary: rgba(255, 255, 255, 0.5);
-    --sk-color-muted: rgba(255, 255, 255, 0.4);
-    --sk-color-accent: var(--sk-emerald);
-    --sk-color-accent-hover: var(--sk-teal);
-    --sk-color-accent-soft: rgba(52, 211, 153, 0.08);
-    --sk-color-border: rgba(255, 255, 255, 0.08);
-    --sk-color-border-hover: rgba(255, 255, 255, 0.14);
-    --sk-color-surface: rgba(255, 255, 255, 0.04);
-    --sk-color-surface-hover: rgba(255, 255, 255, 0.07);
-    --sk-color-warm: rgba(255, 255, 255, 0.06);
+    /* Core palette (dark default) */
+    --sk-color-bg: #1a1917;
+    --sk-color-text: #ece9e3;
+    --sk-color-text-secondary: #bdb7ac;
+    --sk-color-muted: #948d81;
+    --sk-color-faint: #6b655b;
+    --sk-color-accent: var(--sk-terracotta);
+    --sk-color-accent-hover: #c9694c;
+    --sk-color-accent-text: #d99a7e;
+    --sk-color-accent-soft: rgba(178, 84, 56, 0.18);
+    --sk-color-on-accent: #ffffff;
+    --sk-color-border: rgba(235, 232, 226, 0.10);
+    --sk-color-border-hover: rgba(235, 232, 226, 0.18);
+    --sk-color-surface: #201f1d;
+    --sk-color-surface-hover: #292824;
+    --sk-color-surface-sunken: #141311;
+    --sk-color-warm: rgba(235, 232, 226, 0.06);
+    --sk-color-nav-bg: rgba(26, 25, 23, 0.82);
 
-    /* Gradient tokens */
-    --sk-gradient-brand: linear-gradient(135deg, var(--sk-emerald), var(--sk-teal), var(--sk-violet));
-    --sk-gradient-accent: linear-gradient(135deg, var(--sk-emerald), var(--sk-teal));
+    /* Gradient tokens (flat, editorial) */
+    --sk-gradient-brand: var(--sk-color-text);
+    --sk-gradient-accent: var(--sk-color-accent);
 
     /* Semantic colors */
-    --sk-color-success: var(--sk-emerald);
+    --sk-color-success: var(--sk-green);
+    --sk-color-success-soft: rgba(95, 168, 119, 0.14);
     --sk-color-warning: var(--sk-amber);
-    --sk-color-error: var(--sk-rose);
-    --sk-color-info: var(--sk-teal);
+    --sk-color-warning-soft: rgba(199, 154, 79, 0.16);
+    --sk-color-error: #d06a52;
+    --sk-color-error-soft: rgba(208, 106, 82, 0.16);
+    --sk-color-info: var(--sk-terracotta-soft);
 
     /* Typography */
-    --sk-font-body: 'Lexend', sans-serif;
-    --sk-font-display: 'Bricolage Grotesque', sans-serif;
-    --sk-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-    --sk-line-height: 1.6;
-    --sk-line-height-tight: 1.3;
+    --sk-font-body: 'Public Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    --sk-font-display: 'Newsreader', Georgia, 'Times New Roman', serif;
+    --sk-font-serif: var(--sk-font-display);
+    --sk-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sk-line-height: 1.65;
+    --sk-line-height-tight: 1.2;
 
     /* Spacing scale */
     --sk-space-xs: 0.25rem;
@@ -53,23 +61,23 @@
     --sk-space-2xl: 3rem;
 
     /* Borders & radii */
-    --sk-radius-sm: 4px;
-    --sk-radius-md: 8px;
-    --sk-radius-lg: 12px;
-    --sk-radius-xl: 16px;
+    --sk-radius-sm: 3px;
+    --sk-radius-md: 6px;
+    --sk-radius-lg: 10px;
+    --sk-radius-xl: 14px;
     --sk-radius-pill: 999px;
 
-    /* Shadows (deeper for dark bg) */
-    --sk-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
-    --sk-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
-    --sk-shadow-lg: 0 4px 24px rgba(0, 0, 0, 0.5);
+    /* Shadows */
+    --sk-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --sk-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+    --sk-shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.55);
 
     /* Transitions */
     --sk-transition-fast: 150ms ease;
     --sk-transition-normal: 200ms ease;
 
     /* Aurora toggle (1 = on, 0 = off) */
-    --sk-aurora: 1;
+    --sk-aurora: 0;
 }
 
 /* ========================================
@@ -106,18 +114,12 @@ body {
    ======================================== */
 
 h1, h2, h3, h4, h5, h6 {
+    font-family: var(--sk-font-display);
     line-height: var(--sk-line-height-tight);
     font-weight: 600;
+    letter-spacing: -0.01em;
     margin-bottom: var(--sk-space-md);
-}
-
-h1, h2 {
-    font-family: var(--sk-font-display);
-    letter-spacing: -0.02em;
-}
-
-h3, h4, h5, h6 {
-    letter-spacing: -0.025em;
+    color: var(--sk-color-text);
 }
 
 h1 { font-size: clamp(2rem, 4vw, 2.5rem); }
@@ -251,8 +253,8 @@ input:focus,
 textarea:focus,
 select:focus {
     outline: none;
-    border-color: rgba(52, 211, 153, 0.3);
-    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.08);
+    border-color: var(--sk-color-accent);
+    box-shadow: 0 0 0 3px var(--sk-color-accent-soft);
 }
 
 input:disabled,
@@ -382,20 +384,20 @@ input[type="reset"] {
     justify-content: center;
     gap: var(--sk-space-sm);
     font-family: inherit;
-    font-size: 1rem;
+    font-size: 0.9rem;
     font-weight: 600;
     line-height: 1;
-    padding: 0.625rem 1.25rem;
+    padding: 0.625rem 1.15rem;
     border: 1px solid transparent;
-    border-radius: var(--sk-radius-pill);
-    background: var(--sk-gradient-accent);
-    color: var(--sk-color-bg);
+    border-radius: var(--sk-radius-md);
+    background: var(--sk-color-accent);
+    color: var(--sk-color-on-accent);
     cursor: pointer;
     text-decoration: none;
     transition: background-color var(--sk-transition-fast),
                 box-shadow var(--sk-transition-fast),
                 transform var(--sk-transition-fast);
-    box-shadow: var(--sk-shadow-sm);
+    box-shadow: none;
 }
 
 button:hover,
@@ -403,9 +405,8 @@ button:hover,
 input[type="submit"]:hover,
 input[type="button"]:hover,
 input[type="reset"]:hover {
-    opacity: 0.9;
-    color: var(--sk-color-bg);
-    box-shadow: 0 4px 20px rgba(52, 211, 153, 0.3);
+    background: var(--sk-color-accent-hover);
+    color: var(--sk-color-on-accent);
 }
 
 button:active,
@@ -460,8 +461,8 @@ button.sk-btn-outline:hover,
     font-size: 12px;
     padding: 7px 18px;
     border-radius: var(--sk-radius-md);
-    background: var(--sk-gradient-accent);
-    color: var(--sk-color-bg);
+    background: var(--sk-color-accent);
+    color: var(--sk-color-on-accent);
     font-weight: 600;
 }
 
@@ -1088,32 +1089,40 @@ hr {
 
 @media (prefers-color-scheme: light) {
     :root {
-        --sk-color-bg: #f8fafc;
-        --sk-color-text: #0f172a;
-        --sk-color-text-secondary: rgba(0, 0, 0, 0.5);
-        --sk-color-muted: #64748b;
-        --sk-color-accent: #059669;
-        --sk-color-accent-hover: #047857;
-        --sk-color-accent-soft: rgba(5, 150, 105, 0.08);
-        --sk-color-border: #e2e8f0;
-        --sk-color-border-hover: #cbd5e1;
+        --sk-color-bg: #f6f2ea;
+        --sk-color-text: #211e1a;
+        --sk-color-text-secondary: #534c42;
+        --sk-color-muted: #6b6358;
+        --sk-color-faint: #9b9183;
+        --sk-color-accent: #b25438;
+        --sk-color-accent-hover: #9a4630;
+        --sk-color-accent-text: #b25438;
+        --sk-color-accent-soft: rgba(178, 84, 56, 0.12);
+        --sk-color-on-accent: #ffffff;
+        --sk-color-border: rgba(33, 30, 26, 0.10);
+        --sk-color-border-hover: rgba(33, 30, 26, 0.18);
         --sk-color-surface: #ffffff;
-        --sk-color-surface-hover: #f1f5f9;
-        --sk-color-warm: #f1f5f9;
+        --sk-color-surface-hover: #efe8db;
+        --sk-color-surface-sunken: #efe8db;
+        --sk-color-warm: rgba(33, 30, 26, 0.05);
+        --sk-color-nav-bg: rgba(246, 242, 234, 0.82);
 
-        --sk-color-success: #059669;
-        --sk-color-warning: #d97706;
-        --sk-color-error: #dc2626;
-        --sk-color-info: #0891b2;
+        --sk-color-success: #3f7d52;
+        --sk-color-success-soft: rgba(63, 125, 82, 0.12);
+        --sk-color-warning: #9a6a1e;
+        --sk-color-warning-soft: rgba(154, 106, 30, 0.14);
+        --sk-color-error: #b03a2e;
+        --sk-color-error-soft: rgba(176, 58, 46, 0.12);
+        --sk-color-info: #b25438;
 
-        --sk-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-        --sk-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
-        --sk-shadow-lg: 0 4px 24px rgba(0, 0, 0, 0.1);
+        --sk-shadow-sm: 0 1px 3px rgba(33, 30, 26, 0.08);
+        --sk-shadow-md: 0 4px 14px rgba(33, 30, 26, 0.10);
+        --sk-shadow-lg: 0 10px 40px rgba(33, 30, 26, 0.14);
     }
 
     .sk-dialog {
-        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.15),
-                    0 0 0 1px rgba(0, 0, 0, 0.05);
+        box-shadow: 0 24px 80px rgba(33, 30, 26, 0.18),
+                    0 0 0 1px rgba(33, 30, 26, 0.06);
     }
 }
 
@@ -1140,4 +1149,64 @@ hr {
 
 .sk-nav-link.sk-linklike {
     text-decoration: none;
+    margin-top: 0;
+}
+
+/* Logout sits in a <form> inside the nav — neutralize the form-submit spacing
+   and button chrome so it aligns with the other nav links. */
+.sk-inline-logout {
+    display: inline-flex;
+    align-items: center;
+}
+
+.sk-inline-logout button {
+    margin-top: 0;
+}
+
+/* ========================================
+   Editorial additions
+   ======================================== */
+
+/* Flat paper background — the aurora orbs are off-brand for the editorial theme */
+.sk-aurora-bg { display: none; }
+
+/* Mono eyebrow / kicker label */
+.sk-eyebrow,
+.sk-kicker {
+    font-family: var(--sk-font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--sk-color-accent-text);
+}
+
+.sk-kicker-muted {
+    color: var(--sk-color-muted);
+}
+
+/* Dark/ink button (inverts per mode) — e.g. Subscribe, primary CTA on paper */
+.sk-btn-dark,
+button.sk-btn-dark,
+[role="button"].sk-btn-dark {
+    background: var(--sk-color-text);
+    color: var(--sk-color-bg);
+    border-color: transparent;
+}
+
+.sk-btn-dark:hover,
+button.sk-btn-dark:hover,
+[role="button"].sk-btn-dark:hover {
+    background: var(--sk-color-text);
+    color: var(--sk-color-bg);
+    opacity: 0.88;
+}
+
+/* Serif utility */
+.sk-serif { font-family: var(--sk-font-display); }
+
+/* Links inside prose/markdown use the readable accent-text tone */
+.page-content a,
+.page-body a {
+    color: var(--sk-color-accent-text);
+    text-underline-offset: 2px;
 }

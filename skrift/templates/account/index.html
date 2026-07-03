@@ -6,55 +6,105 @@
 <style nonce="{{ csp_nonce() }}">
     .account-shell {
         max-width: 880px;
-        margin: 2rem auto;
+        margin: 2.5rem auto;
         display: grid;
         gap: 1.25rem;
     }
 
-    .account-header {
+    .account-intro {
+        margin-bottom: 0.5rem;
+    }
+    .account-intro .sk-eyebrow {
+        display: block;
+        margin-bottom: 0.6rem;
+    }
+    .account-intro h1 {
+        font-family: var(--sk-font-display);
+        font-size: 2rem;
+        font-weight: 600;
+        margin: 0 0 0.35rem;
+    }
+    .account-intro p {
+        color: var(--sk-color-muted);
+        margin: 0;
+    }
+
+    .account-profile {
         display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 1rem;
+        align-items: center;
+        gap: 1.15rem;
+        padding: 1.25rem 1.5rem;
+        border: 1px solid var(--sk-color-border);
+        border-radius: var(--sk-radius-lg);
+        background: var(--sk-color-surface);
+    }
+    .account-avatar {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        object-fit: cover;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--sk-color-accent);
+        color: var(--sk-color-on-accent);
+        font-family: var(--sk-font-display);
+        font-size: 1.4rem;
+        font-weight: 600;
+    }
+    .account-identity { flex: 1; min-width: 0; }
+    .account-identity .account-name {
+        font-family: var(--sk-font-display);
+        font-size: 1.35rem;
+        font-weight: 600;
+        line-height: 1.2;
+    }
+    .account-identity .account-sub {
+        color: var(--sk-color-muted);
+        font-size: 0.9rem;
+        margin-top: 0.2rem;
+    }
+    .account-actions {
+        display: flex;
+        gap: 0.6rem;
         flex-wrap: wrap;
     }
 
     .account-panel {
-        padding: 1.25rem;
-        border: 1px solid var(--sk-color-border, #e5e7eb);
-        border-radius: var(--sk-radius-lg, 0.75rem);
-        background: var(--sk-color-surface, rgba(255, 255, 255, 0.04));
+        padding: 1.4rem 1.5rem;
+        border: 1px solid var(--sk-color-border);
+        border-radius: var(--sk-radius-lg);
+        background: var(--sk-color-surface);
     }
-
     .account-panel h2,
     .account-panel h3 {
         margin-top: 0;
+        font-size: 1.05rem;
     }
 
     .account-detail-list {
         display: grid;
-        gap: 0.65rem;
+        gap: 0.75rem;
         margin: 0;
     }
-
     .account-detail-row {
         display: grid;
         grid-template-columns: minmax(8rem, 12rem) 1fr;
         gap: 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--sk-color-border);
     }
-
+    .account-detail-row:last-child {
+        padding-bottom: 0;
+        border-bottom: none;
+    }
     .account-detail-row dt {
-        color: var(--sk-color-muted, #6b7280);
-    }
-
-    .account-actions {
-        display: flex;
-        gap: 0.75rem;
-        flex-wrap: wrap;
+        color: var(--sk-color-muted);
     }
 
     .account-empty {
-        color: var(--sk-color-muted, #6b7280);
+        color: var(--sk-color-muted);
         margin-bottom: 0;
     }
 </style>
@@ -62,16 +112,30 @@
 
 {% block content %}
 <div class="account-shell">
-    <div class="account-header">
-        <hgroup>
-            <h1>Account</h1>
-            <p>Signed in as {{ user.email or user.name or user.id }}.</p>
-        </hgroup>
+    <div class="account-intro">
+        <span class="sk-eyebrow">Account</span>
+        <h1>Your account</h1>
+        <p>Manage your profile, sign-in &amp; security.</p>
+    </div>
+
+    <section class="account-profile">
+        {% if user.picture_url %}
+        <img class="account-avatar" src="{{ user.picture_url }}" alt="">
+        {% else %}
+        <span class="account-avatar">{{ (user.name or user.email or "?")[:1] | upper }}</span>
+        {% endif %}
+        <div class="account-identity">
+            <div class="account-name">{{ user.name or user.email or "Your profile" }}</div>
+            <div class="account-sub">
+                {{ user.email or user.id }}
+                {% if user.last_login_at %} · Last login {{ user.last_login_at.strftime('%b %d, %Y') }}{% endif %}
+            </div>
+        </div>
         <div class="account-actions">
             <a href="/auth/passkeys" role="button" class="sk-btn-outline">Passkeys</a>
             <a href="/admin" role="button" class="sk-btn-outline">Dashboard</a>
         </div>
-    </div>
+    </section>
 
     <section class="account-panel">
         <h2>Profile</h2>
