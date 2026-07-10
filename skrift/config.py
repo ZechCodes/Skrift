@@ -286,6 +286,8 @@ class DatabaseConfig(BaseModel):
     pool_recycle: int | None = None  # Seconds before recycling pooled connections
     echo: bool = False
     db_schema: str | None = Field(default=None, validation_alias="schema")
+    statement_cache_size: int | None = None  # asyncpg statement cache size; 0 disables prepared statements
+    pgbouncer_transaction_mode: bool = False  # Disable prepared statements + pooling for pgbouncer transaction mode
 
 
 class OAuthProviderConfig(BaseModel):
@@ -868,7 +870,10 @@ class WorkersConfig(BaseModel):
     queues: list[str] = ["default"]
     concurrency: int = Field(default=1, ge=1)
     poll_interval: float = Field(default=0.05, gt=0)
+    max_poll_interval: float = Field(default=2.0, gt=0)
+    poll_backoff_factor: float = Field(default=2.0, ge=1.0)
     visibility_timeout: float = Field(default=30.0, gt=0)
+    reaper_interval: float = Field(default=5.0, gt=0)
     max_reclaims: int = Field(default=3, ge=0)
     imports: list[str] = []
     backends: WorkerBackendConfig = WorkerBackendConfig()

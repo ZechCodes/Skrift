@@ -99,6 +99,8 @@ db:
   pool_overflow: 10                   # Extra connections allowed
   pool_recycle: 1800                  # Recycle pooled connections after 30 minutes
   schema: myschema                    # PostgreSQL schema (optional)
+  pgbouncer_transaction_mode: false   # Set true when running behind pgbouncer in transaction mode
+  statement_cache_size: null          # asyncpg statement cache size; 0 disables prepared statements
 ```
 
 | Option | Description | Default |
@@ -111,10 +113,22 @@ db:
 | `pool_pre_ping` | Validate connections before use | `true` |
 | `pool_recycle` | Seconds before recycling pooled connections (`null` disables explicit recycle) | `null` |
 | `schema` | PostgreSQL schema for all tables | `null` (default schema) |
+| `pgbouncer_transaction_mode` | Disable asyncpg prepared statements and use `NullPool` so Skrift can run behind pgbouncer in transaction pooling mode | `false` |
+| `statement_cache_size` | asyncpg statement cache size. `0` disables prepared statements (and switches to `NullPool`); a positive integer sets the cache size; `null` leaves the asyncpg default | `null` |
 
 For asyncio PostgreSQL deployments where request cancellation is common, consider
 `pool_pre_ping: false` with `pool_recycle: 1800` so stale connection handling is
 based on connection age instead of a pre-ping during checkout.
+
+#### Running behind pgbouncer (transaction mode)
+
+In transaction pooling mode, pgbouncer hands each transaction a different server
+connection, so server-side prepared statements and asyncpg's type cache are
+invalidated constantly — asyncpg ends up re-introspecting `pg_type` on nearly
+every statement. Set `pgbouncer_transaction_mode: true` (or `statement_cache_size: 0`)
+so Skrift disables prepared statements and lets pgbouncer own pooling via
+`NullPool`. Leave both at their defaults when connecting directly to Postgres or
+through a session-mode pooler.
 
 #### Database Schemas
 

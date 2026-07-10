@@ -17,7 +17,10 @@ workers:
     - slow
   concurrency: 4
   poll_interval: 0.1
+  max_poll_interval: 2.0
+  poll_backoff_factor: 2.0
   visibility_timeout: 30.0
+  reaper_interval: 5.0
   max_reclaims: 3
   imports:
     - myapp.jobs
@@ -54,10 +57,19 @@ workers:
 | `execution` | `inline` | Execution mode: `inline`, `in_process`, `out_of_process` |
 | `queues` | `["default"]` | Queues served by the in-process runtime and used by operator views |
 | `concurrency` | `1` | Number of in-process worker tasks or default standalone worker concurrency |
-| `poll_interval` | `0.05` | Seconds a worker waits after an empty claim |
+| `poll_interval` | `0.05` | Base seconds a worker waits after an empty claim; the floor an idle worker collapses back to the moment a claim succeeds |
+| `max_poll_interval` | `2.0` | Ceiling for the idle poll backoff. After each empty claim the wait grows by `poll_backoff_factor` up to this value, so idle queues stop polling the database at full frequency |
+| `poll_backoff_factor` | `2.0` | Growth factor applied to the poll interval on each consecutive empty claim. `1.0` disables backoff and keeps polling at `poll_interval` |
 | `visibility_timeout` | `30.0` | Seconds before an unacked claim can be reclaimed |
+| `reaper_interval` | `5.0` | Seconds between runs of the standalone reaper that reclaims expired claims and sweeps expired state, decoupled from poll frequency |
 | `max_reclaims` | `3` | Number of claim timeouts allowed before dead-lettering as a reclaim loop |
 | `imports` | `[]` | Modules imported by standalone worker processes and app startup to register handlers |
+
+#### Idle poll backoff
+
+An idle worker no longer polls at a flat `poll_interval`. After each empty claim it multiplies its wait by `poll_backoff_factor` up to `max_poll_interval`, then collapses straight back to `poll_interval` the moment a claim succeeds. This trades a little pickup latency on the first job after an idle stretch (up to `max_poll_interval`) for a large drop in database query volume while queues are empty. Lower `max_poll_interval` if you need snappier pickup on quiet queues; raise it to quiesce the database further. The reaper that reclaims expired claims runs on its own `reaper_interval` cadence, so backing off polling never delays reclaims.
+
+If you are on an older release and need to blunt idle query volume immediately, raising `poll_interval` (for example to `1.0`) cuts the spin without deploying, at the cost of uniform pickup latency; the backoff above makes that stopgap unnecessary.
 
 ### Execution Modes
 

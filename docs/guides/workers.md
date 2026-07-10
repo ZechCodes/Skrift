@@ -382,3 +382,5 @@ Configured `workers.imports` are imported at startup. If one of those modules ra
 | Jobs repeat after worker crash | Increase `visibility_timeout` for long-running handlers or make handlers idempotent |
 | Jobs end up in DLQ quickly | Check `max_attempts`, handler exceptions, poison payloads, and `PermanentFailure` usage |
 | Redis hot-path data grows | Run `skrift workers persister` and keep `workers.retention.enabled` true |
+| Idle workers generate constant database queries | Idle poll backoff is on by default; lower `max_poll_interval` for snappier pickup or raise it to quiesce further. Behind pgbouncer transaction mode, also set `db.pgbouncer_transaction_mode: true` |
+| First job after an idle stretch is slow to start | Lower `workers.max_poll_interval` (pickup latency after idle is capped by this value) |
