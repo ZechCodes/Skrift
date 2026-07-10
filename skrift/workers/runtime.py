@@ -71,7 +71,10 @@ class WorkerConfig:
     queues: tuple[str, ...] = ("default",)
     concurrency: int = 1
     poll_interval: float = 0.05
+    max_poll_interval: float = 2.0
+    poll_backoff_factor: float = 2.0
     visibility_timeout: float = 30.0
+    reaper_interval: float = 5.0
     max_reclaims: int = 3
 
 
@@ -131,11 +134,15 @@ class WorkerPool:
         queues: list[str],
         concurrency: int = 1,
         poll_interval: float = 0.05,
+        max_poll_interval: float = 2.0,
+        poll_backoff_factor: float = 2.0,
     ) -> None:
         self._runtime = runtime
         self._queues = queues
         self._concurrency = concurrency
         self._poll_interval = poll_interval
+        self._max_poll_interval = max_poll_interval
+        self._poll_backoff_factor = poll_backoff_factor
         self._tasks: list[asyncio.Task] = []
         self._stopping = asyncio.Event()
 
@@ -157,14 +164,20 @@ class WorkerPool:
         self._tasks = []
 
     async def _run_worker(self) -> None:
+        current_interval = self._poll_interval
         while not self._stopping.is_set():
             try:
                 claimed = await self._runtime.queue.claim(
                     self._queues, visibility_timeout=self._runtime.default_visibility_timeout
                 )
                 if claimed is None:
-                    await asyncio.sleep(self._poll_interval)
+                    await asyncio.sleep(current_interval)
+                    current_interval = min(
+                        current_interval * self._poll_backoff_factor,
+                        self._max_poll_interval,
+                    )
                     continue
+                current_interval = self._poll_interval
                 await self._runtime.execute_claim(claimed)
             except asyncio.CancelledError:
                 raise
@@ -212,7 +225,10 @@ class WorkerRuntime:
         )
         self._queue_history_lock = asyncio.Lock()
         self._queue_history_task: asyncio.Task | None = None
+        self._reaper_task: asyncio.Task | None = None
         self._queue_history_interval = 2.0
+        self._queue_history_idle_interval = 30.0
+        self._queue_history_current_interval = self._queue_history_interval
         self._queue_trend_bucket_seconds = self._queue_history_interval
 
     async def start(self) -> None:
@@ -224,6 +240,8 @@ class WorkerRuntime:
             queues=list(self.config.queues),
             concurrency=self.config.concurrency,
             poll_interval=self.config.poll_interval,
+            max_poll_interval=self.config.max_poll_interval,
+            poll_backoff_factor=self.config.poll_backoff_factor,
         )
         await self._pool.start()
         if self._queue_history_task is None:
@@ -231,8 +249,17 @@ class WorkerRuntime:
                 self._record_queue_history_loop(),
                 name="skrift-worker-queue-history",
             )
+        if self._reaper_task is None and hasattr(self.queue, "_release_expired_claims"):
+            self._reaper_task = asyncio.create_task(
+                self._release_expired_claims_loop(),
+                name="skrift-worker-reaper",
+            )
 
     async def stop(self) -> None:
+        if self._reaper_task is not None:
+            self._reaper_task.cancel()
+            await asyncio.gather(self._reaper_task, return_exceptions=True)
+            self._reaper_task = None
         if self._queue_history_task is not None:
             self._queue_history_task.cancel()
             await asyncio.gather(self._queue_history_task, return_exceptions=True)
@@ -661,8 +688,12 @@ class WorkerRuntime:
         self,
         *,
         queue_stats: list[Any] | None = None,
-    ) -> None:
-        """Store one compressed oldest-ready wait bucket for all known queues."""
+    ) -> bool:
+        """Store one compressed oldest-ready wait bucket for all known queues.
+
+        Returns whether any queue was carrying work (ready, delayed, or claimed
+        jobs) so callers such as the recording loop can back off while idle.
+        """
         timestamp = utcnow()
 
         if queue_stats is None:
@@ -671,6 +702,10 @@ class WorkerRuntime:
                 await self.queue.stats(queue)
                 for queue in self._queue_names(states)
             ]
+
+        had_activity = any(
+            stats.ready or stats.delayed or stats.claimed for stats in queue_stats
+        )
 
         bucket_start = self._queue_history_bucket_start(timestamp)
         sample = {
@@ -710,10 +745,11 @@ class WorkerRuntime:
                     )
                     await self._persist_queue_history_locked()
                     await self._persist_queue_trend_history_locked()
-                    return
+                    return had_activity
             self._queue_history.append(sample)
             await self._persist_queue_history_locked()
             await self._persist_queue_trend_history_locked()
+        return had_activity
 
     async def execute_claim(self, claimed: ClaimedJob, *, inline: bool = False) -> None:
         job = claimed.job
@@ -1005,8 +1041,37 @@ class WorkerRuntime:
 
     async def _record_queue_history_loop(self) -> None:
         while True:
-            await asyncio.sleep(self._queue_history_interval)
-            await self.record_queue_history()
+            await asyncio.sleep(self._queue_history_current_interval)
+            had_activity = await self.record_queue_history()
+            self._queue_history_current_interval = self._next_queue_history_interval(
+                had_activity=had_activity,
+                current_interval=self._queue_history_current_interval,
+            )
+
+    def _next_queue_history_interval(
+        self, *, had_activity: bool, current_interval: float
+    ) -> float:
+        """Poll fast while work is flowing; back off geometrically while idle."""
+        if had_activity:
+            return self._queue_history_interval
+        return min(current_interval * 2, self._queue_history_idle_interval)
+
+    async def _release_expired_claims_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.config.reaper_interval)
+            try:
+                await self.queue._release_expired_claims(utcnow())
+                await self._sweep_expired_state()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Reaper loop error; continuing", exc_info=True)
+
+    async def _sweep_expired_state(self) -> None:
+        """Prune expired state rows on the reaper timer instead of on every read."""
+        sweep_expired = getattr(self.state_store, "sweep_expired", None)
+        if callable(sweep_expired):
+            await sweep_expired()
 
     async def _job_states(self) -> list[JobState]:
         states, _ = await self._job_states_with_total()
@@ -1397,7 +1462,10 @@ def configure_workers(
     queues: tuple[str, ...] = ("default",),
     concurrency: int = 1,
     poll_interval: float = 0.05,
+    max_poll_interval: float = 2.0,
+    poll_backoff_factor: float = 2.0,
     visibility_timeout: float = 30.0,
+    reaper_interval: float = 5.0,
     max_reclaims: int = 3,
     backend_imports: WorkerBackendConfig | Mapping[str, str] | Any | None = None,
     settings: Any | None = None,
@@ -1418,7 +1486,10 @@ def configure_workers(
             queues=queues,
             concurrency=concurrency,
             poll_interval=poll_interval,
+            max_poll_interval=max_poll_interval,
+            poll_backoff_factor=poll_backoff_factor,
             visibility_timeout=visibility_timeout,
+            reaper_interval=reaper_interval,
             max_reclaims=max_reclaims,
         ),
         state_store=state_store

@@ -34,9 +34,19 @@ from skrift.workers.models import (
     QueueStats,
 )
 
+RECLAIM_BATCH_SIZE = 200
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _unexpired_condition() -> Any:
+    """SQL predicate matching rows whose TTL has not yet elapsed."""
+    return or_(
+        WorkerStateRecord.expires_at.is_(None),
+        WorkerStateRecord.expires_at > _now(),
+    )
 
 
 def _utc(value: datetime) -> datetime:
@@ -174,25 +184,37 @@ class SQLAlchemyStateStore(_SQLAlchemyBackend):
             )
             return list(result.scalars().all())
 
-    async def worker_job_states(self, *, limit: int | None = None) -> tuple[list[JobState], int]:
-        """Return recent worker job states without scanning every persisted key."""
-        prefix = "workers:jobs:"
+    async def sweep_expired(self) -> int:
+        """Delete every expired state row and report how many were removed.
+
+        The read paths deliberately stay read-only and simply skip expired rows;
+        this dedicated sweep is what physically reclaims their storage and is
+        meant to be driven by the periodic reaper timer rather than by reads.
+        """
         async with self._session_maker() as session:
-            await session.execute(
+            result = await session.execute(
                 delete(WorkerStateRecord).where(
                     WorkerStateRecord.expires_at.is_not(None),
                     WorkerStateRecord.expires_at <= _now(),
                 )
             )
             await session.commit()
+            return int(result.rowcount or 0)
+
+    async def worker_job_states(self, *, limit: int | None = None) -> tuple[list[JobState], int]:
+        """Return recent worker job states without scanning every persisted key."""
+        prefix = "workers:jobs:"
+        async with self._session_maker() as session:
+            unexpired = _unexpired_condition()
             total = await session.scalar(
                 select(func.count()).select_from(WorkerStateRecord).where(
-                    WorkerStateRecord.key.like(f"{prefix}%")
+                    WorkerStateRecord.key.like(f"{prefix}%"),
+                    unexpired,
                 )
             )
             stmt = (
                 select(WorkerStateRecord.value)
-                .where(WorkerStateRecord.key.like(f"{prefix}%"))
+                .where(WorkerStateRecord.key.like(f"{prefix}%"), unexpired)
                 .order_by(WorkerStateRecord.updated_at.desc())
             )
             if limit is not None:
@@ -213,21 +235,17 @@ class SQLAlchemyStateStore(_SQLAlchemyBackend):
             JobStatus.PAUSED.value,
         ]
         async with self._session_maker() as session:
-            await session.execute(
-                delete(WorkerStateRecord).where(
-                    WorkerStateRecord.expires_at.is_not(None),
-                    WorkerStateRecord.expires_at <= _now(),
-                )
-            )
-            await session.commit()
+            unexpired = _unexpired_condition()
             total = await session.scalar(
                 select(func.count()).select_from(WorkerStateRecord).where(
-                    WorkerStateRecord.key.like(f"{prefix}%")
+                    WorkerStateRecord.key.like(f"{prefix}%"),
+                    unexpired,
                 )
             )
             active = await session.scalar(
                 select(func.count()).select_from(WorkerStateRecord).where(
                     WorkerStateRecord.key.like(f"{prefix}%"),
+                    unexpired,
                     WorkerStateRecord.value["value"]["status"].as_string().in_(active_statuses),
                 )
             )
@@ -459,7 +477,6 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
         self, queues: list[str], *, visibility_timeout: float
     ) -> ClaimedJob | None:
         now = _now()
-        await self._release_expired_claims(now)
         async with self._session_maker() as session:
             for queue in queues:
                 result = await session.execute(
@@ -591,7 +608,6 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
 
     async def stats(self, queue: str) -> QueueStats:
         now = _now()
-        await self._release_expired_claims(now)
         stats = QueueStats(queue=queue)
         async with self._session_maker() as session:
             result = await session.execute(
@@ -620,14 +636,22 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
             return stats
 
     async def _release_expired_claims(self, now: datetime) -> None:
+        while (
+            await self._release_expired_claims_batch(now) == RECLAIM_BATCH_SIZE
+        ):
+            continue
+
+    async def _release_expired_claims_batch(self, now: datetime) -> int:
         async with self._session_maker() as session:
             result = await session.execute(
-                select(WorkerQueueRecord).where(
+                select(WorkerQueueRecord)
+                .where(
                     WorkerQueueRecord.dead_lettered.is_(False),
                     WorkerQueueRecord.claim_token.is_not(None),
                     WorkerQueueRecord.claim_expires_at.is_not(None),
                     WorkerQueueRecord.claim_expires_at <= now,
                 )
+                .limit(RECLAIM_BATCH_SIZE)
             )
             records = result.scalars().all()
             for record in records:
@@ -640,6 +664,7 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
                 record.visible_at = now
             if records:
                 await session.commit()
+            return len(records)
 
 
 class SQLAlchemyDeadLetterStore(_SQLAlchemyBackend):

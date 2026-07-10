@@ -24,6 +24,11 @@ class WorkerStateRecord(Base):
 
     __table_args__ = (
         Index("ix_worker_state_key", "key"),
+        Index(
+            "ix_worker_state_key_pattern",
+            "key",
+            postgresql_ops={"key": "text_pattern_ops"},
+        ),
         Index("ix_worker_state_expires_at", "expires_at"),
     )
 

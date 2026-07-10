@@ -112,11 +112,25 @@ def _validate_worker_process_backends(
 def _build_db_config(settings):
     from advanced_alchemy.config import EngineConfig
     from advanced_alchemy.extensions.litestar import AsyncSessionConfig, SQLAlchemyAsyncConfig
+    from sqlalchemy.pool import NullPool
+
+    engine_kwargs = {"echo": settings.db.echo}
+    disable_prepared_statements = (
+        settings.db.pgbouncer_transaction_mode or settings.db.statement_cache_size == 0
+    )
+    if disable_prepared_statements:
+        engine_kwargs["connect_args"] = {
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+        }
+        engine_kwargs["poolclass"] = NullPool
+    elif isinstance(settings.db.statement_cache_size, int):
+        engine_kwargs["connect_args"] = {"statement_cache_size": settings.db.statement_cache_size}
 
     return SQLAlchemyAsyncConfig(
         connection_string=settings.db.url,
         session_config=AsyncSessionConfig(expire_on_commit=False),
-        engine_config=EngineConfig(echo=settings.db.echo),
+        engine_config=EngineConfig(**engine_kwargs),
     )
 
 
@@ -142,7 +156,10 @@ def _configure_worker_runtime(settings, *, session_maker, queues, concurrency, m
         queues=tuple(queues),
         concurrency=concurrency,
         poll_interval=settings.workers.poll_interval,
+        max_poll_interval=settings.workers.max_poll_interval,
+        poll_backoff_factor=settings.workers.poll_backoff_factor,
         visibility_timeout=settings.workers.visibility_timeout,
+        reaper_interval=settings.workers.reaper_interval,
         max_reclaims=settings.workers.max_reclaims,
         backend_imports=settings.workers.backends,
         settings=settings,

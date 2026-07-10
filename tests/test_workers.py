@@ -8,10 +8,13 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import skrift
 from skrift.db.base import Base
+from skrift.db.models.worker import WorkerQueueRecord, WorkerStateRecord
+from skrift.workers.sqlalchemy import RECLAIM_BATCH_SIZE, _job_to_json, _value_to_json
 from skrift.workers import (
     LIFECYCLE_STREAM,
     HandlerRegistry,
@@ -43,7 +46,7 @@ from skrift.workers import (
     WorkerConfig,
     WorkerRuntime,
 )
-from skrift.workers.models import JobEnvelope, JobIdConflict, utcnow
+from skrift.workers.models import JobEnvelope, JobIdConflict, JobState, utcnow
 from skrift.workers.registry import registry
 
 
@@ -531,6 +534,109 @@ async def test_sqlalchemy_state_store_supports_ttl_prefix_scan_and_atomic_update
     assert await store.get("jobs:short") is None
 
 
+async def _seed_state_record(session_maker, key, value, *, expires_at=None):
+    async with session_maker() as session:
+        session.add(
+            WorkerStateRecord(
+                key=key,
+                value=_value_to_json(value),
+                expires_at=expires_at,
+            )
+        )
+        await session.commit()
+
+
+async def _state_record_count(session_maker):
+    async with session_maker() as session:
+        return await session.scalar(
+            select(func.count()).select_from(WorkerStateRecord)
+        )
+
+
+async def _state_key_exists(session_maker, key):
+    async with session_maker() as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(WorkerStateRecord)
+            .where(WorkerStateRecord.key == key)
+        )
+    return bool(count)
+
+
+async def test_worker_job_reads_exclude_expired_without_deleting(worker_session_maker):
+    store = SQLAlchemyStateStore(session_maker=worker_session_maker)
+    live = JobState(job=JobEnvelope(type="live"), status=JobStatus.RUNNING)
+    expired = JobState(job=JobEnvelope(type="expired"), status=JobStatus.RUNNING)
+    await _seed_state_record(worker_session_maker, "workers:jobs:live", live)
+    await _seed_state_record(
+        worker_session_maker,
+        "workers:jobs:expired",
+        expired,
+        expires_at=utcnow() - timedelta(minutes=1),
+    )
+
+    states, total = await store.worker_job_states()
+    assert total == 1
+    assert [state.job.type for state in states] == ["live"]
+
+    counts = await store.worker_job_counts()
+    assert counts == {"total": 1, "active": 1}
+
+    # The read paths must be side-effect free: the expired row is skipped
+    # logically but is still physically present for the reaper to reclaim.
+    assert await _state_record_count(worker_session_maker) == 2
+
+
+async def test_worker_job_states_issues_no_delete_on_read(worker_session_maker, monkeypatch):
+    store = SQLAlchemyStateStore(session_maker=worker_session_maker)
+    await _seed_state_record(
+        worker_session_maker,
+        "workers:jobs:live",
+        JobState(job=JobEnvelope(type="live")),
+    )
+
+    import skrift.workers.sqlalchemy as sqlalchemy_backend
+
+    delete_calls: list[Any] = []
+    original_delete = sqlalchemy_backend.delete
+
+    def tracking_delete(*args, **kwargs):
+        delete_calls.append(args)
+        return original_delete(*args, **kwargs)
+
+    monkeypatch.setattr(sqlalchemy_backend, "delete", tracking_delete)
+
+    await store.worker_job_states()
+    await store.worker_job_counts()
+
+    assert delete_calls == []
+
+
+async def test_state_store_sweep_expired_reclaims_rows(worker_session_maker):
+    store = SQLAlchemyStateStore(session_maker=worker_session_maker)
+    await _seed_state_record(
+        worker_session_maker,
+        "workers:jobs:live",
+        JobState(job=JobEnvelope(type="live")),
+    )
+    await _seed_state_record(
+        worker_session_maker,
+        "workers:jobs:expired",
+        JobState(job=JobEnvelope(type="expired")),
+        expires_at=utcnow() - timedelta(minutes=1),
+    )
+
+    removed = await store.sweep_expired()
+
+    assert removed == 1
+    assert await _state_record_count(worker_session_maker) == 1
+
+
+async def test_worker_state_model_exposes_key_pattern_index():
+    index_names = {index.name for index in WorkerStateRecord.__table__.indexes}
+    assert "ix_worker_state_key_pattern" in index_names
+
+
 async def test_sqlalchemy_event_log_replays_and_live_tails(worker_session_maker):
     log = SQLAlchemyEventLog(session_maker=worker_session_maker)
     assert await log.append("s", {"n": 1}) == 0
@@ -564,6 +670,7 @@ async def test_sqlalchemy_queue_claim_ack_delayed_visibility_reclaim_and_dead_le
     assert claimed is not None
     assert claimed.job.id == delayed.id
     await asyncio.sleep(0.02)
+    await queue._release_expired_claims(utcnow())
     reclaimed = await queue.claim(["default"], visibility_timeout=1)
     assert reclaimed is not None
     assert reclaimed.job.id == delayed.id
@@ -602,6 +709,104 @@ async def test_sqlalchemy_queue_concurrent_claims_are_atomic(worker_session_make
     claimed = [claim for claim in claims if claim is not None]
     assert len(claimed) == 1
     assert claimed[0].job.id == job.id
+
+
+async def _seed_expired_claim(session_maker, job, *, expired_at):
+    async with session_maker() as session:
+        session.add(
+            WorkerQueueRecord(
+                job_id=job.id,
+                queue=job.queue,
+                job=_job_to_json(job),
+                visible_at=expired_at,
+                claim_token="expired-token",
+                claim_expires_at=expired_at,
+                dead_lettered=False,
+            )
+        )
+        await session.commit()
+
+
+async def _expired_claim_count(session_maker):
+    async with session_maker() as session:
+        result = await session.execute(
+            select(func.count()).select_from(WorkerQueueRecord).where(
+                WorkerQueueRecord.dead_lettered.is_(False),
+                WorkerQueueRecord.claim_token.is_not(None),
+            )
+        )
+        return result.scalar_one()
+
+
+async def test_sqlalchemy_queue_claim_and_stats_do_not_reap(
+    worker_session_maker, monkeypatch
+):
+    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    reaper_calls: list[datetime] = []
+
+    async def spy(now):
+        reaper_calls.append(now)
+
+    monkeypatch.setattr(queue, "_release_expired_claims", spy)
+
+    await queue.submit(JobEnvelope(type="ready"))
+    await queue.claim(["default"], visibility_timeout=1)
+    await queue.stats("default")
+
+    assert reaper_calls == []
+
+
+async def test_release_expired_claims_drains_backlog_in_batches(worker_session_maker):
+    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    backlog = RECLAIM_BATCH_SIZE + 25
+    expired_at = utcnow() - timedelta(minutes=1)
+    for _ in range(backlog):
+        await _seed_expired_claim(
+            worker_session_maker, JobEnvelope(type="stuck"), expired_at=expired_at
+        )
+
+    reclaimed_in_one_batch = await queue._release_expired_claims_batch(utcnow())
+    assert reclaimed_in_one_batch == RECLAIM_BATCH_SIZE
+    assert await _expired_claim_count(worker_session_maker) == backlog - RECLAIM_BATCH_SIZE
+
+    await queue._release_expired_claims(utcnow())
+    assert await _expired_claim_count(worker_session_maker) == 0
+
+
+async def test_worker_runtime_reaper_loop_reclaims_expired_claim(worker_session_maker):
+    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    stuck = JobEnvelope(type="stuck", queue="default")
+    await _seed_expired_claim(
+        worker_session_maker, stuck, expired_at=utcnow() - timedelta(minutes=1)
+    )
+
+    runtime = WorkerRuntime(
+        config=WorkerConfig(mode="in_process", queues=("idle",), reaper_interval=0.02),
+        queue=queue,
+    )
+    await runtime.start()
+    try:
+        assert runtime._reaper_task is not None
+
+        pool_before_restart = runtime._pool
+        reaper_task = runtime._reaper_task
+        await runtime.start()
+        assert runtime._reaper_task is reaper_task
+        await pool_before_restart.stop()
+
+        reclaimed = None
+        for _ in range(100):
+            reclaimed = await queue.claim(["default"], visibility_timeout=5)
+            if reclaimed is not None:
+                break
+            await asyncio.sleep(0.02)
+        assert reclaimed is not None
+        assert reclaimed.job.id == stuck.id
+        assert reclaimed.job.reclaim_count == 1
+    finally:
+        await runtime.stop()
+
+    assert runtime._reaper_task is None
 
 
 async def test_sqlalchemy_archive_stores_events_and_state_history(worker_session_maker):
@@ -1262,3 +1467,199 @@ async def test_queue_wait_history_is_bucketed_and_bounded():
         await runtime._persist_queue_history_locked()
 
     assert len(await runtime.queue_wait_history()) <= runtime._queue_history_bucket_count
+
+
+async def test_record_queue_history_reports_idle_when_no_work():
+    runtime = WorkerRuntime()
+
+    idle = await runtime.record_queue_history(
+        queue_stats=[QueueStats(queue="default")]
+    )
+    assert idle is False
+
+    busy = await runtime.record_queue_history(
+        queue_stats=[QueueStats(queue="default", ready=1)]
+    )
+    assert busy is True
+
+
+def test_next_queue_history_interval_backs_off_only_while_idle():
+    runtime = WorkerRuntime()
+    runtime._queue_history_interval = 2.0
+    runtime._queue_history_idle_interval = 30.0
+
+    idle_once = runtime._next_queue_history_interval(
+        had_activity=False, current_interval=2.0
+    )
+    idle_twice = runtime._next_queue_history_interval(
+        had_activity=False, current_interval=idle_once
+    )
+    assert idle_once == 4.0
+    assert idle_twice == 8.0
+
+    capped = runtime._next_queue_history_interval(
+        had_activity=False, current_interval=20.0
+    )
+    assert capped == 30.0
+
+    reset = runtime._next_queue_history_interval(
+        had_activity=True, current_interval=30.0
+    )
+    assert reset == 2.0
+
+
+async def test_record_queue_history_loop_backs_off_when_idle():
+    runtime = WorkerRuntime()
+    runtime._queue_history_interval = 0.01
+    runtime._queue_history_idle_interval = 0.08
+    runtime._queue_history_current_interval = 0.01
+
+    loop_task = asyncio.create_task(runtime._record_queue_history_loop())
+    try:
+        for _ in range(100):
+            if runtime._queue_history_current_interval >= runtime._queue_history_idle_interval:
+                break
+            await asyncio.sleep(0.02)
+        assert (
+            runtime._queue_history_current_interval
+            == runtime._queue_history_idle_interval
+        )
+    finally:
+        loop_task.cancel()
+        await asyncio.gather(loop_task, return_exceptions=True)
+
+
+async def test_reaper_loop_sweeps_expired_state(worker_session_maker):
+    state_store = SQLAlchemyStateStore(session_maker=worker_session_maker)
+    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    await _seed_state_record(
+        worker_session_maker,
+        "workers:jobs:expired",
+        JobState(job=JobEnvelope(type="expired")),
+        expires_at=utcnow() - timedelta(minutes=1),
+    )
+
+    runtime = WorkerRuntime(
+        config=WorkerConfig(mode="in_process", queues=("idle",), reaper_interval=0.02),
+        state_store=state_store,
+        queue=queue,
+    )
+    await runtime.start()
+    try:
+        for _ in range(100):
+            if not await _state_key_exists(worker_session_maker, "workers:jobs:expired"):
+                break
+            await asyncio.sleep(0.02)
+        assert not await _state_key_exists(worker_session_maker, "workers:jobs:expired")
+    finally:
+        await runtime.stop()
+
+
+def _make_idle_pool(*, claim_results=None, poll_interval=0.05, max_poll_interval=2.0, poll_backoff_factor=2.0):
+    from skrift.workers.runtime import WorkerPool
+
+    executed = []
+    pending = list(claim_results or [])
+
+    async def claim(queues, *, visibility_timeout):
+        if pending:
+            return pending.pop(0)
+        return None
+
+    async def execute_claim(claimed):
+        executed.append(claimed)
+
+    stub_runtime = SimpleNamespace(
+        queue=SimpleNamespace(claim=claim),
+        default_visibility_timeout=30.0,
+        execute_claim=execute_claim,
+    )
+    pool = WorkerPool(
+        stub_runtime,
+        queues=["default"],
+        concurrency=1,
+        poll_interval=poll_interval,
+        max_poll_interval=max_poll_interval,
+        poll_backoff_factor=poll_backoff_factor,
+    )
+    return pool, executed
+
+
+def _record_sleeps_stopping_after(pool, sample_count):
+    recorded: list[float] = []
+
+    async def fake_sleep(delay):
+        recorded.append(delay)
+        if len(recorded) >= sample_count:
+            pool._stopping.set()
+
+    return recorded, fake_sleep
+
+
+async def test_idle_poll_backoff_ramps_and_caps_at_max(monkeypatch):
+    pool, _ = _make_idle_pool(poll_interval=0.05, max_poll_interval=2.0, poll_backoff_factor=2.0)
+    recorded, fake_sleep = _record_sleeps_stopping_after(pool, 8)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    await pool._run_worker()
+
+    assert recorded == [0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 2.0, 2.0]
+    assert all(later >= earlier for earlier, later in zip(recorded, recorded[1:]))
+    assert max(recorded) <= 2.0
+
+
+async def test_idle_poll_backoff_resets_to_floor_after_successful_claim(monkeypatch):
+    job = object()
+    pool, executed = _make_idle_pool(
+        claim_results=[None, None, job],
+        poll_interval=0.05,
+        max_poll_interval=2.0,
+        poll_backoff_factor=2.0,
+    )
+    recorded, fake_sleep = _record_sleeps_stopping_after(pool, 3)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    await pool._run_worker()
+
+    assert executed == [job]
+    # Two idle sleeps ramp up, then the claimed job resets the interval back
+    # to the floor for the next idle sleep.
+    assert recorded == [0.05, 0.1, 0.05]
+
+
+async def test_idle_poll_backoff_honors_configured_ceiling(monkeypatch):
+    pool, _ = _make_idle_pool(poll_interval=0.05, max_poll_interval=0.2, poll_backoff_factor=2.0)
+    recorded, fake_sleep = _record_sleeps_stopping_after(pool, 6)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    await pool._run_worker()
+
+    assert recorded == [0.05, 0.1, 0.2, 0.2, 0.2, 0.2]
+    assert max(recorded) <= 0.2
+
+
+async def test_worker_config_threads_backoff_settings_from_settings():
+    from skrift.config import WorkersConfig
+
+    settings = WorkersConfig()
+    assert settings.max_poll_interval == 2.0
+    assert settings.poll_backoff_factor == 2.0
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        max_poll_interval=settings.max_poll_interval,
+        poll_backoff_factor=settings.poll_backoff_factor,
+    )
+    assert runtime.config.max_poll_interval == 2.0
+    assert runtime.config.poll_backoff_factor == 2.0
+
+
+def test_workers_config_validates_backoff_fields():
+    from skrift.config import WorkersConfig
+
+    with pytest.raises(Exception):
+        WorkersConfig(max_poll_interval=0)
+    with pytest.raises(Exception):
+        WorkersConfig(poll_backoff_factor=0.5)
+    # A factor of exactly 1.0 is allowed (no growth) per ge=1.0.
+    assert WorkersConfig(poll_backoff_factor=1.0).poll_backoff_factor == 1.0
