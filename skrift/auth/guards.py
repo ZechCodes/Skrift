@@ -216,8 +216,17 @@ async def auth_guard(
     """Litestar guard that checks authentication and authorization requirements.
 
     Supports session-based auth (default), API key auth (when ``APIKeyAuth``
-    or ``APIKeyOnly`` markers are present in the route guards), or both.
+    or ``APIKeyOnly`` markers are present in the route guards), OAuth2 JWT
+    bearer auth (when ``BearerJWTAuth``/``BearerJWTOnly`` markers are
+    present), or any combination.
     """
+    from skrift.auth.bearer import (
+        BearerJWTAuth,
+        BearerJWTOnly,
+        is_jwt_shaped,
+        missing_bearer_error,
+        resolve_bearer_jwt_permissions,
+    )
     from skrift.auth.services import get_user_permissions
 
     # Get the guards from the route handler
@@ -226,18 +235,25 @@ async def auth_guard(
     # Determine auth mode from guard markers
     api_only = any(isinstance(g, APIKeyOnly) for g in guards)
     api_compatible = api_only or any(isinstance(g, APIKeyAuth) for g in guards)
+    jwt_marker = next((g for g in guards if isinstance(g, BearerJWTAuth)), None)
+    jwt_only = isinstance(jwt_marker, BearerJWTOnly)
 
     user_id: str | None = None
     permissions: UserPermissions | None = None
 
-    # Try API key auth if route supports it
-    if api_compatible:
-        bearer = _extract_bearer_token(connection)
-        if bearer and bearer.startswith("sk_"):
-            user_id, permissions = await _resolve_api_key_permissions(connection, bearer)
+    bearer = _extract_bearer_token(connection) if api_compatible or jwt_marker else None
 
-    # Fall back to session auth (unless API-only)
-    if not user_id and not api_only:
+    # Try API key auth if route supports it (``sk_`` bearers only)
+    if api_compatible and bearer and bearer.startswith("sk_"):
+        user_id, permissions = await _resolve_api_key_permissions(connection, bearer)
+
+    # Try JWT bearer auth if route supports it. A presented JWT must verify
+    # or the request fails — an invalid token never falls through to session.
+    if user_id is None and jwt_marker is not None and bearer and is_jwt_shaped(bearer):
+        user_id, permissions = await resolve_bearer_jwt_permissions(connection, bearer, jwt_marker)
+
+    # Fall back to session auth (unless the route is bearer-only)
+    if not user_id and not api_only and not jwt_only:
         user_id = connection.session.get(SESSION_USER_ID) if connection.session else None
         if user_id:
             session_maker = connection.app.state.session_maker_class
@@ -245,13 +261,15 @@ async def auth_guard(
                 permissions = await get_user_permissions(session, user_id)
 
     if not user_id or permissions is None:
+        if jwt_marker is not None:
+            raise missing_bearer_error()
         raise NotAuthorizedException("Authentication required")
 
     # Find AuthRequirement guards (exclude marker guards)
     auth_requirements = [
         g for g in guards
         if isinstance(g, AuthRequirement)
-        and not isinstance(g, (APIKeyAuth, APIKeyOnly))
+        and not isinstance(g, (APIKeyAuth, APIKeyOnly, BearerJWTAuth))
     ]
 
     if not auth_requirements:

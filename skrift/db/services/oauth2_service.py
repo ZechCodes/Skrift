@@ -12,6 +12,7 @@ from skrift.auth.client_secret import hash_client_secret
 from skrift.db.models.oauth2_client import OAuth2Client
 from skrift.db.models.revoked_family import RevokedFamily
 from skrift.db.models.revoked_token import RevokedToken
+from skrift.db.services import oauth2_consent_service
 from skrift.hooks import hooks
 
 
@@ -155,12 +156,19 @@ async def prune_stale_dynamic_clients(
     ago. Admin-created and actively-used clients are never touched.
     """
     cutoff = now - timedelta(days=max_age_days)
-    result = await db_session.execute(
-        delete(OAuth2Client).where(
+    stale = await db_session.execute(
+        select(OAuth2Client.client_id).where(
             OAuth2Client.is_dynamically_registered == True,  # noqa: E712
             OAuth2Client.last_used_at.is_(None),
             OAuth2Client.client_id_issued_at < cutoff,
         )
+    )
+    client_ids = [row[0] for row in stale.all()]
+    if not client_ids:
+        return 0
+    await oauth2_consent_service.delete_grants_for_clients(db_session, client_ids)
+    result = await db_session.execute(
+        delete(OAuth2Client).where(OAuth2Client.client_id.in_(client_ids))
     )
     await db_session.commit()
     return result.rowcount
@@ -196,6 +204,7 @@ async def delete_client(db_session: AsyncSession, client_id: UUID) -> None:
     client = result.scalar_one_or_none()
     if client:
         await hooks.do_action("before_oauth2_client_deleted", client)
+        await oauth2_consent_service.delete_grants_for_clients(db_session, [client.client_id])
         await db_session.delete(client)
         await db_session.commit()
         await hooks.do_action("after_oauth2_client_deleted", client_id)

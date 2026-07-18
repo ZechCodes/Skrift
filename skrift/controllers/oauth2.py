@@ -25,7 +25,12 @@ from skrift.auth.session_keys import SESSION_USER_EMAIL, SESSION_USER_ID, SESSIO
 from skrift.auth.tokens import create_signed_token, verify_signed_token
 from skrift.config import get_settings
 from skrift.db.models.user import User
-from skrift.db.services import oauth2_service, oauth2_signing_key_service, oauth_service
+from skrift.db.services import (
+    oauth2_consent_service,
+    oauth2_service,
+    oauth2_signing_key_service,
+    oauth_service,
+)
 from skrift.forms import verify_csrf
 from skrift.lib.client_ip import get_client_ip
 from skrift.middleware.security import add_form_action_source, apply_csp_nonce, csp_nonce_var
@@ -173,6 +178,41 @@ async def verify_oauth_token(token: str, secret: str, db_session: AsyncSession) 
     return payload
 
 
+def _issue_authorization_code(
+    request: Request,
+    settings,
+    *,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    scope: str,
+    code_challenge: str,
+    resource: str,
+) -> Redirect:
+    """Mint an authorization code for the logged-in user and redirect back.
+
+    Shared by the consent-approval path and the remembered-consent skip path
+    so both bind the same PKCE challenge, resource, and session profile onto
+    the code.
+    """
+    code_payload = {
+        "type": "code",
+        "user_id": request.session.get(SESSION_USER_ID),
+        "email": request.session.get(SESSION_USER_EMAIL, ""),
+        "name": request.session.get(SESSION_USER_NAME, ""),
+        "picture_url": request.session.get(SESSION_USER_PICTURE_URL, ""),
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "code_challenge": code_challenge,
+        "resource": resource,
+    }
+    code = create_signed_token(code_payload, settings.secret_key, AUTH_CODE_TTL)
+    sep = "&" if "?" in redirect_uri else "?"
+    callback_url = f"{redirect_uri}{sep}" + urlencode({"code": code, "state": state})
+    return Redirect(path=callback_url)
+
+
 class OAuth2Controller(Controller):
     path = "/oauth"
 
@@ -245,6 +285,23 @@ class OAuth2Controller(Controller):
             # single value or its `&`-separated params (response_type, ...) leak
             # out of `next` and are lost across the login round-trip.
             return Redirect(path=f"/auth/login?{urlencode({'next': next_url})}")
+
+        # Remembered consent: if a prior grant for this (user, client) already
+        # covers every requested scope, skip the consent screen and issue the
+        # code directly — still binding PKCE and the resource onto it. A request
+        # for scopes beyond the grant falls through to the consent screen.
+        grant = await oauth2_consent_service.find_grant(db_session, user_id, client_id)
+        if grant is not None and set(requested_scopes).issubset(set(grant.scope_list)):
+            return _issue_authorization_code(
+                request,
+                get_settings(),
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                state=state,
+                scope=scope,
+                code_challenge=code_challenge,
+                resource=resource,
+            )
 
         # Store params in session for POST consent
         request.session["oauth_authorize"] = {
@@ -345,30 +402,30 @@ class OAuth2Controller(Controller):
             deny_url = f"{redirect_uri}{sep}" + urlencode({"error": "access_denied", "state": state})
             return Redirect(path=deny_url)
 
-        # User approved — create auth code
+        # User approved — remember this consent, then issue the auth code.
         settings = get_settings()
         user_id = request.session.get(SESSION_USER_ID)
         if not user_id:
             return _json_error("invalid_request", "User not logged in")
 
-        code_payload = {
-            "type": "code",
-            "user_id": user_id,
-            "email": request.session.get(SESSION_USER_EMAIL, ""),
-            "name": request.session.get(SESSION_USER_NAME, ""),
-            "picture_url": request.session.get(SESSION_USER_PICTURE_URL, ""),
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "scope": scope,
-            "code_challenge": code_challenge,
-            "resource": resource,
-        }
+        await oauth2_consent_service.upsert_grant(
+            db_session,
+            user_id=user_id,
+            client_id=client_id,
+            scopes=scope.split() if scope else [],
+            granted_at=datetime.now(tz=timezone.utc),
+        )
 
-        code = create_signed_token(code_payload, settings.secret_key, AUTH_CODE_TTL)
-
-        sep = "&" if "?" in redirect_uri else "?"
-        callback_url = f"{redirect_uri}{sep}" + urlencode({"code": code, "state": state})
-        return Redirect(path=callback_url)
+        return _issue_authorization_code(
+            request,
+            settings,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            state=state,
+            scope=scope,
+            code_challenge=code_challenge,
+            resource=resource,
+        )
 
     @post("/token")
     async def token_exchange(self, request: Request, db_session: AsyncSession) -> Response:
