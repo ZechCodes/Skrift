@@ -1,5 +1,6 @@
 """Authentication and authorization module."""
 
+from skrift.auth.bearer import BearerJWTAuth, BearerJWTOnly
 from skrift.auth.guards import (
     ADMINISTRATOR_PERMISSION,
     AndRequirement,
@@ -77,6 +78,8 @@ __all__ = [
     "ADMINISTRATOR_PERMISSION",
     "AndRequirement",
     "AuthRequirement",
+    "BearerJWTAuth",
+    "BearerJWTOnly",
     "OrRequirement",
     "OwnerOrPermission",
     "Permission",

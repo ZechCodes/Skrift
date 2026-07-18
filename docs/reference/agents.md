@@ -81,7 +81,7 @@ Creates a high-level chat facade for a stable conversation key.
 | --- | --- |
 | `key` | Stable application conversation key. The same key reuses the same durable session. |
 | `actor` | Optional default actor for audit events. May be a string, dict, or `Actor`. |
-| `deps_ref` | Serializable dependency reference passed to `deps_factory`. |
+| `deps_ref` | Serializable dependency reference passed to `deps_factory`. Re-sent on every turn (not just the first), and any dict replaces the session's stored reference. A per-call `send()`/`send_typed()` `deps_ref` overrides this default. |
 | `**defaults` | Default turn kwargs applied to `send()` and `send_typed()`. |
 
 ### `Agent.run()`
@@ -104,7 +104,7 @@ Starts a low-level durable run and returns `Session`.
 | `dispatch` | `"queued"`, `"inline"`, `"inline_then_queued"`, or `"same_worker"`. `"inline"` and `"same_worker"` start immediately in the caller process and resume inline on approval; `"inline_then_queued"` starts immediately but resumes through the normal queue; `"queued"` uses the normal agent queue from the start. |
 | `session_id` | Optional explicit durable session id. Raises `AgentSessionError` if it already exists. |
 | `actor` | Actor written to audit events. |
-| `deps_ref` | Serializable dependency reference. |
+| `deps_ref` | Serializable dependency reference stored on the new session. Raises `AgentSessionError` if the agent has no `deps_factory`. |
 | `parent_session_id` / `root_session_id` | Optional lineage overrides for sub-agent workflows. |
 | `**kwargs` | Pydantic AI run kwargs plus Skrift `reasoning`. |
 
@@ -137,8 +137,11 @@ Supported turn kwargs include:
 - `capabilities`
 - `spec`
 - `reasoning`
+- `deps_ref`
 
 `reasoning` may be a string or `ReasoningLevel`. Skrift maps it to `model_settings["thinking"]` and stores it in metadata as `skrift_reasoning`.
+
+`deps_ref` overrides the `Chat` constructor default for this turn only. It follows replace-when-provided semantics: `None` keeps the session's stored reference, any dict (including `{}`) replaces it. The change takes effect when this turn activates, so overlapping turns each run with their own reference, and a changed reference emits a `DepsRefUpdated` audit event.
 
 ### `Chat.send_typed()`
 
@@ -159,6 +162,7 @@ Takes a string and returns the requested output type.
 | `actor` | Optional actor override for this turn. |
 | `model` | Optional model override for this turn. |
 | `reasoning` | Optional string or `ReasoningLevel`. |
+| `deps_ref` | Optional per-turn dependency reference. `None` keeps the stored reference; any dict replaces it when this turn activates. Overrides the `Chat` constructor default. |
 | `**kwargs` | Additional Pydantic AI run kwargs. |
 
 ### `Chat.status()`
@@ -195,7 +199,7 @@ Low-level durable run handle.
 | `status()` | Return current status. |
 | `messages()` | Return raw durable message records. |
 | `lineage()` | Return parent/root session ids. |
-| `send(message, **kwargs)` | Record a new user turn and return its `turn_id`. |
+| `send(message, deps_ref=None, **kwargs)` | Record a new user turn and return its `turn_id`. A `deps_ref` dict replaces the session's stored reference when the turn activates (`None` leaves it unchanged); passing one for an agent without a `deps_factory` raises `AgentSessionError`. |
 | `result(turn_id=None)` | Wait for session output or a specific turn output. |
 | `pause()` | Pause a queued/running/approval session. |
 | `resume()` | Resume a paused session. |
@@ -308,7 +312,7 @@ Passed to `deps_factory`.
 | `session_id` | Durable session id. |
 | `tool_call_id` | Current tool call id when relevant. |
 | `actor` | Actor associated with the resume context. |
-| `deps_ref` | Serializable dependency reference supplied at chat/run creation. |
+| `deps_ref` | Serializable dependency reference for the active turn — the value most recently supplied by a send, or the creation value if no later turn replaced it. |
 | `metadata` | Runtime metadata, including worker job id when running in a worker. |
 
 ## Audit and Replay
@@ -324,6 +328,8 @@ audit = await skrift.audit_export(session_id, include_lineage=True)
 - `usage_totals`: aggregate usage across exported records.
 
 Tool events may include `payload.display` when a tool display formatter is configured. The raw audit fields remain present.
+
+When a turn activates with a `deps_ref` that differs from the session's stored reference, the export includes a `DepsRefUpdated` event carrying the new `deps_ref`, the `turn_id`, and the actor. Turns that reuse the stored reference emit no such event.
 
 ## Usage Tracking
 

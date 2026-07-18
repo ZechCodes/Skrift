@@ -9,10 +9,38 @@ from litestar.exceptions import NotFoundException
 from litestar.response import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from skrift.auth.scopes import SCOPE_DEFINITIONS
 from skrift.db.services import page_service
 from skrift.db.services.setting_service import get_cached_site_base_url, get_cached_robots_txt
 from skrift.lib.client_ip import get_client_ip
 from skrift.hooks import hooks, ROBOTS_TXT, ROBOTS_TXT_FETCHED, SITEMAP_PAGE, SITEMAP_URLS
+
+
+def build_authorization_server_metadata(issuer: str, *, registration_enabled: bool = False) -> dict:
+    """RFC 8414 / OIDC discovery metadata shared by both well-known routes.
+
+    ``registration_endpoint`` (RFC 7591) is advertised only when Dynamic
+    Client Registration is enabled, so discovery matches what the server
+    actually accepts.
+    """
+    metadata = {
+        "issuer": issuer,
+        "authorization_endpoint": f"{issuer}/oauth/authorize",
+        "token_endpoint": f"{issuer}/oauth/token",
+        "userinfo_endpoint": f"{issuer}/oauth/userinfo",
+        "revocation_endpoint": f"{issuer}/oauth/revoke",
+        "introspection_endpoint": f"{issuer}/oauth/introspect",
+        "jwks_uri": f"{issuer}/oauth/jwks",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "scopes_supported": sorted(SCOPE_DEFINITIONS),
+        "claims_supported": ["sub", "name", "email", "email_verified", "picture"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
+    }
+    if registration_enabled:
+        metadata["registration_endpoint"] = f"{issuer}/oauth/register"
+    return metadata
 
 
 @dataclass
@@ -136,37 +164,34 @@ Sitemap: {sitemap_url}
             headers={"Content-Type": "text/plain; charset=utf-8"},
         )
 
-    @get("/.well-known/openid-configuration")
-    async def openid_configuration(self, request: Request) -> Response:
-        """OIDC Discovery document."""
+    def _authorization_server_metadata_response(self, request: Request) -> Response:
+        """Shared body for the OIDC and RFC 8414 discovery documents."""
         from skrift.config import get_settings
 
         settings = get_settings()
         if not settings.oauth2_enabled:
             raise NotFoundException()
 
-        issuer = str(request.base_url).rstrip("/")
-
-        discovery = {
-            "issuer": issuer,
-            "authorization_endpoint": f"{issuer}/oauth/authorize",
-            "token_endpoint": f"{issuer}/oauth/token",
-            "userinfo_endpoint": f"{issuer}/oauth/userinfo",
-            "revocation_endpoint": f"{issuer}/oauth/revoke",
-            "introspection_endpoint": f"{issuer}/oauth/introspect",
-            "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code", "refresh_token"],
-            "scopes_supported": ["openid", "profile", "email"],
-            "claims_supported": ["sub", "name", "email", "email_verified", "picture"],
-            "code_challenge_methods_supported": ["S256"],
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
-        }
+        issuer = settings.oauth2_issuer or str(request.base_url).rstrip("/")
 
         return Response(
-            content=discovery,
+            content=build_authorization_server_metadata(
+                issuer,
+                registration_enabled=settings.oauth2_dynamic_registration_enabled,
+            ),
             status_code=200,
             media_type="application/json",
         )
+
+    @get("/.well-known/openid-configuration")
+    async def openid_configuration(self, request: Request) -> Response:
+        """OIDC Discovery document."""
+        return self._authorization_server_metadata_response(request)
+
+    @get("/.well-known/oauth-authorization-server")
+    async def oauth_authorization_server(self, request: Request) -> Response:
+        """OAuth 2.0 Authorization Server Metadata (RFC 8414)."""
+        return self._authorization_server_metadata_response(request)
 
     @get("/.well-known/security.txt")
     async def security_txt(self, request: Request) -> Response:

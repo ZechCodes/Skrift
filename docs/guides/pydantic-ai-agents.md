@@ -95,6 +95,17 @@ chat = assistant.chat(
 )
 ```
 
+`deps_ref` is not fixed at session creation. The constructor value is re-sent on every turn, and any send may supply a fresh reference. The semantics are replace-when-provided: `deps_ref=None` leaves the stored reference unchanged, and any dict (including `{}`) replaces it — no merging. The new reference takes effect when the turn it was submitted with activates, so each queued turn runs with its own `deps_ref` even when several sends overlap. A per-call override wins over the constructor default:
+
+```python
+reply = await chat.send(
+    "Now act on behalf of a different tenant.",
+    deps_ref={"tenant_id": other_tenant.id},
+)
+```
+
+Passing `deps_ref` to an agent that has no `deps_factory` raises `AgentSessionError`. Each turn that changes the stored reference emits a `DepsRefUpdated` audit event.
+
 ## Run kwargs
 
 Skrift forwards common Pydantic AI run kwargs through durable state:

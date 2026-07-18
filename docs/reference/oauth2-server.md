@@ -2,6 +2,9 @@
 
 Skrift can act as an OAuth2 Authorization Server, allowing other applications (including other Skrift instances) to authenticate users via the Authorization Code grant with PKCE.
 
+!!! tip "Using Skrift with Claude custom connectors / MCP"
+    This page is the endpoint reference. For turning the server into an identity provider for MCP resource servers and Claude custom connectors — Dynamic Client Registration, the audience naming convention, signing-key rotation, and a worked downstream resource-server example — see [MCP Identity Provider](mcp-identity-provider.md).
+
 ## Enabling the Server
 
 Add to your `app.yaml`:
@@ -44,7 +47,10 @@ Toggle the **Active** checkbox off. Inactive clients are rejected at all OAuth2 
 | `GET` | `/oauth/userinfo` | User claims — requires Bearer access token |
 | `POST` | `/oauth/revoke` | Token revocation (RFC 7009) |
 | `POST` | `/oauth/introspect` | Token introspection (RFC 7662) |
+| `POST` | `/oauth/register` | Dynamic Client Registration (RFC 7591) — when enabled |
+| `GET` | `/oauth/jwks` | JWK Set — public keys for access-token verification |
 | `GET` | `/.well-known/openid-configuration` | OIDC Discovery document |
+| `GET` | `/.well-known/oauth-authorization-server` | Authorization Server Metadata (RFC 8414) |
 
 ### Authorization (`GET /oauth/authorize`)
 
@@ -140,17 +146,23 @@ Custom scopes appear in the admin UI's scope checkboxes and are validated during
 
 ## Token Architecture
 
-Tokens are HMAC-SHA256 signed JSON payloads (not JWT). Each token contains:
+Access tokens are **ES256 JWTs** (RFC 9068 `at+jwt` profile) signed by a rotating EC P-256 key, so third-party resource servers can verify them offline against the public keys at `GET /oauth/jwks`. Authorization codes and refresh tokens stay **HMAC-SHA256** signed JSON payloads that never leave the client↔server exchange. Every token carries:
 
-- `type` — prevents cross-use (`code`, `access`, `refresh`)
+- `type` (HMAC tokens) — prevents cross-use (`code`, `refresh`)
 - `jti` — unique ID for revocation tracking
 - `exp` — expiration timestamp
 
-| Token | Lifetime |
-|-------|----------|
-| Authorization code | 10 minutes |
-| Access token | 15 minutes |
-| Refresh token | 30 days |
+Access-token JWTs additionally carry `iss`, `sub`, `client_id`, `scope`, and — when a `resource` was requested — `aud`. See [MCP Identity Provider](mcp-identity-provider.md) for the audience convention and JWKS verification.
+
+| Token | Lifetime | Signing |
+|-------|----------|---------|
+| Authorization code | 10 minutes | HMAC-SHA256 (`secret_key`) |
+| Access token | 15 minutes (`oauth2_access_token_ttl`) | ES256 JWT (rotating key) |
+| Refresh token | 30 days | HMAC-SHA256 (`secret_key`) |
+
+## Remembered Consent
+
+After a user approves a client's scopes, the grant is remembered (one per user + client). A later `/oauth/authorize` request from the same user for that client **skips the consent screen** and issues the code directly when the stored grant covers every requested scope; a request for broader scopes re-prompts and, on approval, widens the stored grant. Grants are deleted automatically when their client is deleted or pruned. See [MCP Identity Provider](mcp-identity-provider.md#remembered-consent) for details.
 
 ## PKCE
 
@@ -184,5 +196,6 @@ The spoke will redirect users to the hub for authentication and receive user dat
 
 ## See Also
 
+- [MCP Identity Provider](mcp-identity-provider.md) — Dynamic Client Registration, JWT access tokens, audience convention, signing-key rotation, downstream resource servers
 - [Auth Providers](auth-providers.md) — OAuth provider configuration (client side)
 - [Security Features](security-features.md) — CSRF, rate limiting, security headers

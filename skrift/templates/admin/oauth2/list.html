@@ -34,6 +34,9 @@
                 {% else %}
                     <span class="sk-text-muted">Inactive</span>
                 {% endif %}
+                {% if client.is_dynamically_registered %}
+                    <span class="sk-role-badge">Dynamic</span>
+                {% endif %}
             </td>
             <td>
                 <a href="/admin/oauth-clients/{{ client.id }}/edit" role="button" class="sk-btn-outline sk-btn-small">Edit</a>

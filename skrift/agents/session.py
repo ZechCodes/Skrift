@@ -67,6 +67,7 @@ class Session:
         message: Any,
         *,
         actor: Actor | dict | str | None = None,
+        deps_ref: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str:
         resolved = resolve_actor(actor)
@@ -81,7 +82,26 @@ class Session:
                 f"Agent {state.agent_name!r} uses deps_factory; pass durable "
                 "dependencies through deps_ref=..., not deps=."
             )
+        if deps_ref is not None and definition.deps_factory is None:
+            raise AgentSessionError(
+                f"Agent {state.agent_name!r} has no deps_factory; deps_ref would be ignored."
+            )
         run_kwargs = normalize_turn_kwargs(kwargs)
+
+        def apply_deps_ref(state: RunState) -> None:
+            if deps_ref is None or deps_ref == state.deps_ref:
+                return
+            state.deps_ref = dict(deps_ref)
+            append_event(
+                state,
+                "DepsRefUpdated",
+                {
+                    "deps_ref": dict(deps_ref),
+                    "turn_id": turn_id,
+                    "actor": actor_payload(resolved),
+                    "updated_at": utcnow().isoformat(),
+                },
+            )
 
         async def mutate(state: RunState) -> RunState:
             queued_for_later = False
@@ -91,6 +111,7 @@ class Session:
                 "message": message,
                 "actor": actor_payload(resolved),
                 "run_kwargs": run_kwargs,
+                "deps_ref": dict(deps_ref) if deps_ref is not None else None,
                 "submitted_at": utcnow().isoformat(),
             }
             if state.status == "completed" or state.status in {"failed", "cancelled"}:
@@ -106,6 +127,7 @@ class Session:
                 state.paused_at = None
                 state.status_before_pause = None
                 state.run_kwargs = run_kwargs
+                apply_deps_ref(state)
                 submit_job_id = job_id
             else:
                 queued_for_later = True
@@ -144,6 +166,7 @@ class Session:
                         state.current_run_job_id = job_id
                         state.current_turn_id = turn_id
                         state.run_kwargs = run_kwargs
+                        apply_deps_ref(state)
                         submit_job_id = job_id
             append_event(
                 state,

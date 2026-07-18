@@ -2,16 +2,17 @@
 
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.client_secret import hash_client_secret
 from skrift.db.models.oauth2_client import OAuth2Client
 from skrift.db.models.revoked_family import RevokedFamily
 from skrift.db.models.revoked_token import RevokedToken
+from skrift.db.services import oauth2_consent_service
 from skrift.hooks import hooks
 
 
@@ -73,6 +74,121 @@ async def create_client(
     return ClientCreateResult(client=client, plaintext_secret=plaintext_secret)
 
 
+async def create_dynamic_client(
+    db_session: AsyncSession,
+    *,
+    display_name: str,
+    redirect_uris: list[str],
+    allowed_scopes: list[str],
+    registered_by_ip: str | None,
+    issued_at: datetime,
+) -> OAuth2Client:
+    """Create a public client via RFC 7591 Dynamic Client Registration.
+
+    Dynamic clients are always public: ``client_secret`` is empty and the
+    token-endpoint auth method is ``none``, so they authenticate with PKCE
+    alone. ``issued_at`` is recorded so the pruning job can retire clients
+    that are registered but never used.
+    """
+    client = OAuth2Client(
+        client_id=secrets.token_urlsafe(24),
+        client_secret="",
+        display_name=display_name,
+        redirect_uris="\n".join(redirect_uris),
+        allowed_scopes="\n".join(allowed_scopes),
+        is_dynamically_registered=True,
+        token_endpoint_auth_method="none",
+        registered_by_ip=registered_by_ip,
+        client_id_issued_at=issued_at,
+    )
+    db_session.add(client)
+    await db_session.commit()
+    await hooks.do_action("after_oauth2_client_created", client)
+    return client
+
+
+async def count_recent_dynamic_registrations(
+    db_session: AsyncSession,
+    registered_by_ip: str,
+    since: datetime,
+) -> int:
+    """Count dynamic client registrations from an IP at or after ``since``.
+
+    Backs the per-IP registration cap: the caller compares this against the
+    configured limit before creating another dynamic client for the same IP.
+    """
+    result = await db_session.execute(
+        select(func.count())
+        .select_from(OAuth2Client)
+        .where(
+            OAuth2Client.is_dynamically_registered == True,  # noqa: E712
+            OAuth2Client.registered_by_ip == registered_by_ip,
+            OAuth2Client.client_id_issued_at >= since,
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def count_dynamic_clients(db_session: AsyncSession) -> int:
+    """Count every dynamically-registered client currently in the table.
+
+    Backs the global registration cap: the per-IP window only bounds the
+    registration rate, so this total keeps a distributed attacker from
+    growing ``oauth2_clients`` without limit.
+    """
+    result = await db_session.execute(
+        select(func.count())
+        .select_from(OAuth2Client)
+        .where(OAuth2Client.is_dynamically_registered == True)  # noqa: E712
+    )
+    return int(result.scalar_one())
+
+
+async def mark_client_used(
+    db_session: AsyncSession,
+    client: OAuth2Client,
+    used_at: datetime,
+) -> None:
+    """Stamp ``last_used_at`` on a client after a token is issued for it.
+
+    Keeps dynamically-registered clients out of the pruning job's reach once
+    they have actually been used at least once.
+    """
+    client.last_used_at = used_at
+    await db_session.commit()
+
+
+async def prune_stale_dynamic_clients(
+    db_session: AsyncSession,
+    *,
+    now: datetime,
+    max_age_days: int,
+) -> int:
+    """Delete dynamically-registered clients that were registered but never used.
+
+    A client is pruned only when it is dynamic, has never issued a token
+    (``last_used_at IS NULL``), and was registered more than ``max_age_days``
+    ago. Admin-created and actively-used clients are never touched.
+    """
+    cutoff = now - timedelta(days=max_age_days)
+    stale = await db_session.execute(
+        select(OAuth2Client.client_id).where(
+            OAuth2Client.is_dynamically_registered == True,  # noqa: E712
+            OAuth2Client.last_used_at.is_(None),
+            OAuth2Client.client_id_issued_at < cutoff,
+        )
+    )
+    client_ids = [row[0] for row in stale.all()]
+    if not client_ids:
+        return 0
+    await oauth2_consent_service.delete_grants_for_clients(db_session, client_ids)
+    result = await db_session.execute(
+        delete(OAuth2Client).where(OAuth2Client.client_id.in_(client_ids))
+    )
+    await db_session.commit()
+    return result.rowcount
+
+
 async def update_client(
     db_session: AsyncSession,
     client: OAuth2Client,
@@ -103,6 +219,7 @@ async def delete_client(db_session: AsyncSession, client_id: UUID) -> None:
     client = result.scalar_one_or_none()
     if client:
         await hooks.do_action("before_oauth2_client_deleted", client)
+        await oauth2_consent_service.delete_grants_for_clients(db_session, [client.client_id])
         await db_session.delete(client)
         await db_session.commit()
         await hooks.do_action("after_oauth2_client_deleted", client_id)

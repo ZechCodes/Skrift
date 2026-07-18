@@ -1104,6 +1104,11 @@ def create_app() -> ASGIApp:
 
             configure_webhooks(settings.webhooks, session_maker=db_config.get_session)
 
+        if settings.oauth2_enabled and settings.oauth2_dynamic_registration_enabled:
+            from skrift.oauth2_maintenance import configure_oauth2_maintenance
+
+            configure_oauth2_maintenance(session_maker=db_config.get_session)
+
         if settings.workers.enabled:
             from skrift.agents.config import configure_agent_runtime
             from skrift.workers import configure_workers
@@ -1113,6 +1118,8 @@ def create_app() -> ASGIApp:
             configure_agent_runtime(settings.agents)
             if settings.webhooks.enabled:
                 import skrift.webhooks.jobs  # noqa: F401 - register built-in handlers
+            if settings.oauth2_enabled and settings.oauth2_dynamic_registration_enabled:
+                import skrift.oauth2_maintenance  # noqa: F401 - register prune handler
 
             worker_runtime = configure_workers(
                 mode=settings.workers.execution,

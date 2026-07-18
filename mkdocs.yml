@@ -97,6 +97,7 @@ nav:
     - Page Types: reference/page-types.md
     - OAuth Providers: reference/auth-providers.md
     - OAuth2 Server: reference/oauth2-server.md
+    - MCP Identity Provider: reference/mcp-identity-provider.md
     - API Keys: reference/api-keys.md
     - API Permission Grants: reference/api-grants.md
     - Republishing: reference/republish.md

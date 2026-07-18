@@ -33,6 +33,7 @@ class Chat:
         actor: Any = None,
         model: Any = None,
         reasoning: str | Any | None = None,
+        deps_ref: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str:
         """Send a chat message and return this turn's string reply."""
@@ -43,6 +44,7 @@ class Chat:
             actor=actor,
             model=model,
             reasoning=reasoning,
+            deps_ref=deps_ref,
             **kwargs,
         )
         return result if isinstance(result, str) else str(result)
@@ -55,13 +57,16 @@ class Chat:
         actor: Any = None,
         model: Any = None,
         reasoning: str | Any | None = None,
+        deps_ref: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> T:
         """Send a message and return this turn's typed output."""
 
         turn_kwargs = self._turn_kwargs(model=model, reasoning=reasoning, **kwargs)
         turn_kwargs["output_type"] = output_type
-        session, turn_id = await self._submit(message, actor=actor, turn_kwargs=turn_kwargs)
+        session, turn_id = await self._submit(
+            message, actor=actor, deps_ref=deps_ref, turn_kwargs=turn_kwargs
+        )
         return await session.result(turn_id=turn_id)
 
     async def status(self) -> str:
@@ -101,17 +106,19 @@ class Chat:
         message: str,
         *,
         actor: Any,
+        deps_ref: dict[str, Any] | None,
         turn_kwargs: dict[str, Any],
     ) -> tuple[Session, str]:
         session = await self._session_or_none()
         resolved_actor = actor if actor is not None else self.actor
+        resolved_deps_ref = deps_ref if deps_ref is not None else self.deps_ref
         if session is None:
             session_id = self._session_id()
             session = await self.agent.run(
                 message,
                 session_id=session_id,
                 actor=resolved_actor,
-                deps_ref=self.deps_ref,
+                deps_ref=resolved_deps_ref,
                 **turn_kwargs,
             )
             await self._store_chat_state(session.id)
@@ -119,7 +126,9 @@ class Chat:
             if state.current_turn_id is None:
                 raise RuntimeError("Agent run did not create a turn id")
             return session, state.current_turn_id
-        turn_id = await session.send(message, actor=resolved_actor, **turn_kwargs)
+        turn_id = await session.send(
+            message, actor=resolved_actor, deps_ref=resolved_deps_ref, **turn_kwargs
+        )
         await self._store_chat_state(session.id)
         return session, turn_id
 

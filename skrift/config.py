@@ -175,6 +175,14 @@ _RESERVED_CONFIG_KEYS = frozenset(
         "domain",
         "security_contact",
         "oauth2_enabled",
+        "oauth2_issuer",
+        "oauth2_access_token_ttl",
+        "oauth2_allowed_resources",
+        "oauth2_dynamic_registration_enabled",
+        "oauth2_dynamic_registration_ip_limit",
+        "oauth2_dynamic_registration_ip_window_seconds",
+        "oauth2_dynamic_registration_total_limit",
+        "oauth2_dynamic_client_max_age_days",
         "controllers",
         "models",
         "middleware",
@@ -1173,6 +1181,32 @@ class Settings(BaseSettings):
     # OAuth2 Authorization Server enabled flag
     oauth2_enabled: bool = False
 
+    # OAuth2 access-token issuer; empty falls back to the request base URL
+    oauth2_issuer: str = ""
+
+    # OAuth2 access-token lifetime in seconds
+    oauth2_access_token_ttl: int = 900
+
+    # RFC 8707 resource allowlist; empty allows any valid absolute resource URI
+    oauth2_allowed_resources: list[str] = []
+
+    # RFC 7591 Dynamic Client Registration (POST /oauth/register). Gated on top
+    # of oauth2_enabled; the registration endpoint 404s while this is False.
+    oauth2_dynamic_registration_enabled: bool = False
+
+    # Max dynamic registrations accepted from a single IP within the window
+    # below, and the window length in seconds.
+    oauth2_dynamic_registration_ip_limit: int = 20
+    oauth2_dynamic_registration_ip_window_seconds: int = 3600
+
+    # Hard cap on the total number of dynamically-registered clients. The
+    # per-IP limit only bounds the registration rate; this bounds the table.
+    oauth2_dynamic_registration_total_limit: int = 1000
+
+    # Dynamically registered clients that are never used are pruned once they
+    # age past this many days (client_id_issued_at older, last_used_at IS NULL).
+    oauth2_dynamic_client_max_age_days: int = 7
+
     # API key configuration
     api_keys: APIKeyConfig = APIKeyConfig()
 
@@ -1324,6 +1358,34 @@ def get_settings() -> Settings:
 
     if "oauth2_enabled" in app_config:
         kwargs["oauth2_enabled"] = app_config["oauth2_enabled"]
+
+    if "oauth2_issuer" in app_config:
+        kwargs["oauth2_issuer"] = app_config["oauth2_issuer"]
+
+    if "oauth2_access_token_ttl" in app_config:
+        kwargs["oauth2_access_token_ttl"] = app_config["oauth2_access_token_ttl"]
+
+    if "oauth2_allowed_resources" in app_config:
+        kwargs["oauth2_allowed_resources"] = list(app_config["oauth2_allowed_resources"])
+
+    if "oauth2_dynamic_registration_enabled" in app_config:
+        kwargs["oauth2_dynamic_registration_enabled"] = app_config["oauth2_dynamic_registration_enabled"]
+
+    if "oauth2_dynamic_registration_ip_limit" in app_config:
+        kwargs["oauth2_dynamic_registration_ip_limit"] = app_config["oauth2_dynamic_registration_ip_limit"]
+
+    if "oauth2_dynamic_registration_ip_window_seconds" in app_config:
+        kwargs["oauth2_dynamic_registration_ip_window_seconds"] = app_config[
+            "oauth2_dynamic_registration_ip_window_seconds"
+        ]
+
+    if "oauth2_dynamic_registration_total_limit" in app_config:
+        kwargs["oauth2_dynamic_registration_total_limit"] = app_config[
+            "oauth2_dynamic_registration_total_limit"
+        ]
+
+    if "oauth2_dynamic_client_max_age_days" in app_config:
+        kwargs["oauth2_dynamic_client_max_age_days"] = app_config["oauth2_dynamic_client_max_age_days"]
 
     if "storage" in app_config:
         storage_data = app_config["storage"]
