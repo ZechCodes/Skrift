@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import skrift
+from skrift.auth.scopes import SCOPE_DEFINITIONS, register_scope
 from skrift.auth.tokens import create_signed_token
 from skrift.config import SecurityHeadersConfig
 from skrift.controllers.oauth2 import (
@@ -51,7 +52,7 @@ async def db_session():
     await engine.dispose()
 
 
-def _settings(*, enabled=True, dcr=True, ip_limit=20, window=3600, max_age_days=7):
+def _settings(*, enabled=True, dcr=True, ip_limit=20, window=3600, max_age_days=7, total_limit=1000):
     settings = MagicMock()
     settings.secret_key = SECRET
     settings.security_headers = SecurityHeadersConfig()
@@ -62,6 +63,7 @@ def _settings(*, enabled=True, dcr=True, ip_limit=20, window=3600, max_age_days=
     settings.oauth2_allowed_resources = []
     settings.oauth2_dynamic_registration_ip_limit = ip_limit
     settings.oauth2_dynamic_registration_ip_window_seconds = window
+    settings.oauth2_dynamic_registration_total_limit = total_limit
     settings.oauth2_dynamic_client_max_age_days = max_age_days
     return settings
 
@@ -80,6 +82,15 @@ def _pkce_pair():
     digest = hashlib.sha256(verifier.encode()).digest()
     challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
     return verifier, challenge
+
+
+async def _authorize_get(db_session, query):
+    controller = OAuth2Controller(owner=MagicMock())
+    request = MagicMock()
+    request.query_params = query
+    request.session = {}
+    with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()):
+        return await OAuth2Controller.authorize_get.fn(controller, request, db_session)
 
 
 class TestRegisterEndpoint:
@@ -241,6 +252,98 @@ class TestRegisterEndpoint:
         assert len(client.display_name) <= CLIENT_NAME_MAX_LENGTH
 
 
+class TestRegisterMetadataValidation:
+    """RFC 7591 — unsupported grant/response types are rejected, not echoed."""
+
+    @pytest.mark.asyncio
+    async def test_unsupported_grant_type_rejected(self, db_session):
+        result = await _register(
+            db_session,
+            {"redirect_uris": ["https://app.example.com/cb"], "grant_types": ["implicit"]},
+        )
+        assert result.status_code == 400
+        assert result.content["error"] == "invalid_client_metadata"
+
+    @pytest.mark.asyncio
+    async def test_unsupported_response_type_rejected(self, db_session):
+        result = await _register(
+            db_session,
+            {"redirect_uris": ["https://app.example.com/cb"], "response_types": ["token"]},
+        )
+        assert result.status_code == 400
+        assert result.content["error"] == "invalid_client_metadata"
+
+    @pytest.mark.asyncio
+    async def test_non_list_grant_types_rejected(self, db_session):
+        result = await _register(
+            db_session,
+            {"redirect_uris": ["https://app.example.com/cb"], "grant_types": "authorization_code"},
+        )
+        assert result.status_code == 400
+        assert result.content["error"] == "invalid_client_metadata"
+
+    @pytest.mark.asyncio
+    async def test_supported_subset_echoed_verbatim(self, db_session):
+        result = await _register(
+            db_session,
+            {
+                "redirect_uris": ["https://app.example.com/cb"],
+                "grant_types": ["authorization_code"],
+                "response_types": ["code"],
+            },
+        )
+        assert result.status_code == 201
+        assert result.content["grant_types"] == ["authorization_code"]
+        assert result.content["response_types"] == ["code"]
+
+
+class TestRegisterScopeDefaults:
+    """Omitting `scope` must cap the client to a minimal identity set — an
+    empty allowed_scopes list would mean 'unrestricted' at /oauth/authorize."""
+
+    @pytest.mark.asyncio
+    async def test_omitted_scope_defaults_to_identity_scopes(self, db_session):
+        result = await _register(db_session, {"redirect_uris": ["https://app.example.com/cb"]})
+        assert result.status_code == 201
+        assert result.content["scope"] == "openid profile email"
+        client = await oauth2_service.get_client_by_client_id(db_session, result.content["client_id"])
+        assert client.allowed_scope_list == ["openid", "profile", "email"]
+
+    @pytest.mark.asyncio
+    async def test_empty_scope_defaults_to_identity_scopes(self, db_session):
+        result = await _register(
+            db_session,
+            {"redirect_uris": ["https://app.example.com/cb"], "scope": ""},
+        )
+        assert result.status_code == 201
+        client = await oauth2_service.get_client_by_client_id(db_session, result.content["client_id"])
+        assert client.allowed_scope_list == ["openid", "profile", "email"]
+
+    @pytest.mark.asyncio
+    async def test_scopeless_registration_cannot_authorize_app_scope(self, db_session):
+        register_scope("mcp-test-scope", "Test-only high-value scope")
+        try:
+            registered = await _register(
+                db_session, {"redirect_uris": ["https://app.example.com/cb"]}
+            )
+            result = await _authorize_get(
+                db_session,
+                {
+                    "client_id": registered.content["client_id"],
+                    "redirect_uri": "https://app.example.com/cb",
+                    "response_type": "code",
+                    "state": "xyz",
+                    "scope": "mcp-test-scope",
+                    "code_challenge": "challenge",
+                    "code_challenge_method": "S256",
+                },
+            )
+            assert result.status_code == 400
+            assert result.content["error"] == "invalid_scope"
+        finally:
+            SCOPE_DEFINITIONS.pop("mcp-test-scope", None)
+
+
 class TestPerIpRegistrationCap:
     @pytest.mark.asyncio
     async def test_cap_enforced_per_ip(self, db_session):
@@ -279,6 +382,45 @@ class TestPerIpRegistrationCap:
             client_ip="7.7.7.7",
         )
         assert result.status_code == 201
+
+
+class TestTotalRegistrationCap:
+    @pytest.mark.asyncio
+    async def test_total_cap_enforced_across_ips(self, db_session):
+        """The per-IP window only bounds the registration rate; the total cap
+        must stop a distributed attacker from growing the table unboundedly."""
+        settings = _settings(total_limit=1)
+        body = {"redirect_uris": ["https://app.example.com/cb"]}
+
+        first = await _register(db_session, body, settings=settings, client_ip="1.1.1.1")
+        second = await _register(db_session, body, settings=settings, client_ip="2.2.2.2")
+
+        assert first.status_code == 201
+        assert second.status_code == 429
+        assert second.content["error"] == "too_many_requests"
+
+    @pytest.mark.asyncio
+    async def test_used_clients_still_count_toward_total_cap(self, db_session):
+        """Marking a client used exempts it from pruning but must not free up
+        registration capacity."""
+        settings = _settings(total_limit=1)
+        client = await oauth2_service.create_dynamic_client(
+            db_session,
+            display_name="Used",
+            redirect_uris=["https://used.example.com/cb"],
+            allowed_scopes=["openid"],
+            registered_by_ip="3.3.3.3",
+            issued_at=datetime.now(tz=timezone.utc),
+        )
+        await oauth2_service.mark_client_used(db_session, client, datetime.now(tz=timezone.utc))
+
+        result = await _register(
+            db_session,
+            {"redirect_uris": ["https://app.example.com/cb"]},
+            settings=settings,
+            client_ip="4.4.4.4",
+        )
+        assert result.status_code == 429
 
 
 class TestRedirectUriValidation:

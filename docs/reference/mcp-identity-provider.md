@@ -53,6 +53,7 @@ oauth2_allowed_resources:                 # allowlist of canonical resource iden
 | `oauth2_allowed_resources` | `[]` | RFC 8707 resource allowlist; empty allows any absolute URI |
 | `oauth2_dynamic_registration_ip_limit` | `20` | Max dynamic registrations per IP per window |
 | `oauth2_dynamic_registration_ip_window_seconds` | `3600` | Registration rate-limit window |
+| `oauth2_dynamic_registration_total_limit` | `1000` | Hard cap on total dynamically-registered clients |
 | `oauth2_dynamic_client_max_age_days` | `7` | Unused dynamic clients are pruned after this age |
 
 !!! warning "Set a stable issuer in production"

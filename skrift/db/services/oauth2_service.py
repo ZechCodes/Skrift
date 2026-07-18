@@ -129,6 +129,21 @@ async def count_recent_dynamic_registrations(
     return int(result.scalar_one())
 
 
+async def count_dynamic_clients(db_session: AsyncSession) -> int:
+    """Count every dynamically-registered client currently in the table.
+
+    Backs the global registration cap: the per-IP window only bounds the
+    registration rate, so this total keeps a distributed attacker from
+    growing ``oauth2_clients`` without limit.
+    """
+    result = await db_session.execute(
+        select(func.count())
+        .select_from(OAuth2Client)
+        .where(OAuth2Client.is_dynamically_registered == True)  # noqa: E712
+    )
+    return int(result.scalar_one())
+
+
 async def mark_client_used(
     db_session: AsyncSession,
     client: OAuth2Client,

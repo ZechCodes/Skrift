@@ -45,6 +45,18 @@ REFRESH_TOKEN_TTL = 2592000  # 30 days
 # here and rendered through the templating engine's autoescape.
 CLIENT_NAME_MAX_LENGTH = 255
 
+# The only grant/response types this server supports for dynamically-registered
+# (public, PKCE-only) clients. RFC 7591 §2: unsupported requested values are
+# rejected rather than echoed back as if they were registered.
+DYNAMIC_CLIENT_GRANT_TYPES = ("authorization_code", "refresh_token")
+DYNAMIC_CLIENT_RESPONSE_TYPES = ("code",)
+
+# Scopes a dynamic registration gets when it omits `scope`. An empty
+# allowed_scopes list means "unrestricted" at /oauth/authorize, so omission
+# must fall back to this minimal identity set — never to every registered
+# scope.
+DYNAMIC_CLIENT_DEFAULT_SCOPES = ("openid", "profile", "email")
+
 
 def _json_error(error: str, description: str, status_code: int = 400) -> Response:
     """Return an OAuth2 JSON error response."""
@@ -721,8 +733,25 @@ class OAuth2Controller(Controller):
                 "invalid_client_metadata", "token_endpoint_auth_method must be 'none'"
             )
 
-        grant_types = body.get("grant_types") or ["authorization_code", "refresh_token"]
-        response_types = body.get("response_types") or ["code"]
+        grant_types = body.get("grant_types") or list(DYNAMIC_CLIENT_GRANT_TYPES)
+        if not isinstance(grant_types, list) or not all(
+            isinstance(grant_type, str) for grant_type in grant_types
+        ):
+            return _json_error("invalid_client_metadata", "grant_types must be a list of strings")
+        for grant_type in grant_types:
+            if grant_type not in DYNAMIC_CLIENT_GRANT_TYPES:
+                return _json_error("invalid_client_metadata", f"Unsupported grant_type: {grant_type}")
+
+        response_types = body.get("response_types") or list(DYNAMIC_CLIENT_RESPONSE_TYPES)
+        if not isinstance(response_types, list) or not all(
+            isinstance(response_type, str) for response_type in response_types
+        ):
+            return _json_error("invalid_client_metadata", "response_types must be a list of strings")
+        for response_type in response_types:
+            if response_type not in DYNAMIC_CLIENT_RESPONSE_TYPES:
+                return _json_error(
+                    "invalid_client_metadata", f"Unsupported response_type: {response_type}"
+                )
 
         client_name = body.get("client_name", "")
         if not isinstance(client_name, str):
@@ -736,6 +765,12 @@ class OAuth2Controller(Controller):
         for requested_scope in requested_scopes:
             if requested_scope not in SCOPE_DEFINITIONS:
                 return _json_error("invalid_client_metadata", f"Unknown scope: {requested_scope}")
+        if not requested_scopes:
+            requested_scopes = [
+                default_scope
+                for default_scope in DYNAMIC_CLIENT_DEFAULT_SCOPES
+                if default_scope in SCOPE_DEFINITIONS
+            ]
 
         # Per-IP registration cap — counts this IP's recent dynamic clients and
         # rejects once it reaches the configured limit within the window.
@@ -749,6 +784,16 @@ class OAuth2Controller(Controller):
             return _json_error(
                 "too_many_requests",
                 "Registration rate limit exceeded for this client",
+                status_code=429,
+            )
+
+        # Global cap — the per-IP window only bounds the rate, so a distributed
+        # attacker could otherwise grow oauth2_clients without limit.
+        total_dynamic = await oauth2_service.count_dynamic_clients(db_session)
+        if total_dynamic >= settings.oauth2_dynamic_registration_total_limit:
+            return _json_error(
+                "too_many_requests",
+                "Dynamic client registration capacity reached",
                 status_code=429,
             )
 
@@ -926,7 +971,16 @@ class OAuth2Controller(Controller):
         if not client:
             return _json_error("invalid_client", "Unknown client_id")
 
-        if client.client_secret and not verify_client_secret(client_secret, client.client_secret):
+        # RFC 7662 §2.1: introspection must be limited to authenticated
+        # callers. Public (secretless) clients — e.g. dynamically-registered
+        # ones — cannot authenticate here, so they may not introspect at all;
+        # anything less turns this endpoint into an unauthenticated
+        # token-validity oracle.
+        if not client.client_secret:
+            return _json_error(
+                "invalid_client", "Public clients may not introspect tokens", status_code=401
+            )
+        if not verify_client_secret(client_secret, client.client_secret):
             return _json_error("invalid_client", "Invalid client_secret")
 
         if not token_str:

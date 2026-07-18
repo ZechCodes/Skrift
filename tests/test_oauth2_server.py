@@ -959,6 +959,64 @@ class TestIntrospect:
         assert result.status_code == 400
         assert result.content["error"] == "invalid_client"
 
+    @pytest.mark.asyncio
+    async def test_public_client_cannot_introspect(self):
+        """RFC 7662 §2.1 — a secretless (dynamically-registered) client has no
+        way to authenticate here, so it must be refused outright. Anything
+        else turns introspection into an unauthenticated validity oracle for
+        any captured token string."""
+        settings = _make_settings()
+        public_client = _mock_client(client_id="dyn-public", client_secret="")
+        token = create_signed_token({
+            "type": "access",
+            "user_id": "user-123",
+            "client_id": "some-other-client",
+            "scope": "openid",
+        }, SECRET, ACCESS_TOKEN_TTL)
+
+        controller = OAuth2Controller(owner=MagicMock())
+        request = MagicMock()
+        request.form = AsyncMock(return_value={
+            "token": token,
+            "client_id": "dyn-public",
+            "client_secret": "",
+        })
+        db_session = AsyncMock()
+
+        with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
+             patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=public_client)
+            mock_svc.is_token_revoked = AsyncMock(return_value=False)
+            result = await OAuth2Controller.introspect.fn(controller, request, db_session)
+
+        assert result.status_code == 401
+        assert result.content["error"] == "invalid_client"
+        assert "active" not in result.content
+
+    @pytest.mark.asyncio
+    async def test_public_client_with_guessed_secret_still_refused(self):
+        """Presenting an arbitrary secret for a secretless client must not
+        sneak past the authentication gate either."""
+        settings = _make_settings()
+        public_client = _mock_client(client_id="dyn-public", client_secret="")
+
+        controller = OAuth2Controller(owner=MagicMock())
+        request = MagicMock()
+        request.form = AsyncMock(return_value={
+            "token": "any-token",
+            "client_id": "dyn-public",
+            "client_secret": "guessed",
+        })
+        db_session = AsyncMock()
+
+        with patch("skrift.controllers.oauth2.get_settings", return_value=settings), \
+             patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=public_client)
+            result = await OAuth2Controller.introspect.fn(controller, request, db_session)
+
+        assert result.status_code == 401
+        assert result.content["error"] == "invalid_client"
+
 
 class TestScopeRegistry:
     def test_builtin_scopes_registered(self):

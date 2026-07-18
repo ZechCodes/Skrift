@@ -16,6 +16,7 @@ from joserfc.jwk import ECKey, KeySet
 from skrift.db.models.oauth2_signing_key import OAuth2SigningKey
 
 ACCESS_TOKEN_JWT_TYPE = "at+jwt"
+ACCEPTED_ACCESS_TOKEN_JWT_TYPES = frozenset({"at+jwt", "application/at+jwt"})
 SUPPORTED_ACCESS_TOKEN_ALGORITHMS = ["ES256"]
 
 
@@ -65,10 +66,13 @@ def verify_access_token_jwt(
 ) -> dict | None:
     """Verify an access-token JWT against a JWK set.
 
-    Validates the signature (selecting the JWKS key matching the token's
-    ``kid``), ``exp``, ``iss``, and — when ``audience`` is given — that it
-    appears in the token's ``aud``. Passing ``audience=None`` skips only the
-    audience check (used by userinfo/introspection, which serve any audience).
+    Validates the header ``typ`` (RFC 9068 §4 — anything but ``at+jwt`` is
+    rejected so other JWT kinds signed with the same key can never pass as
+    access tokens), the signature (selecting the JWKS key matching the
+    token's ``kid``), ``exp``, ``iss``, and — when ``audience`` is given —
+    that it appears in the token's ``aud``. Passing ``audience=None`` skips
+    only the audience check (used by userinfo/introspection, which serve any
+    audience).
 
     Returns the claims dict, or ``None`` on any failure (fail closed).
     """
@@ -76,6 +80,10 @@ def verify_access_token_jwt(
         key_set = KeySet.import_key_set({"keys": jwks})
         decoded = jwt.decode(token, key_set, algorithms=SUPPORTED_ACCESS_TOKEN_ALGORITHMS)
     except (JoseError, ValueError):
+        return None
+
+    declared_type = decoded.header.get("typ")
+    if not isinstance(declared_type, str) or declared_type.lower() not in ACCEPTED_ACCESS_TOKEN_JWT_TYPES:
         return None
 
     claims = decoded.claims

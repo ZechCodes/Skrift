@@ -181,6 +181,7 @@ _RESERVED_CONFIG_KEYS = frozenset(
         "oauth2_dynamic_registration_enabled",
         "oauth2_dynamic_registration_ip_limit",
         "oauth2_dynamic_registration_ip_window_seconds",
+        "oauth2_dynamic_registration_total_limit",
         "oauth2_dynamic_client_max_age_days",
         "controllers",
         "models",
@@ -1198,6 +1199,10 @@ class Settings(BaseSettings):
     oauth2_dynamic_registration_ip_limit: int = 20
     oauth2_dynamic_registration_ip_window_seconds: int = 3600
 
+    # Hard cap on the total number of dynamically-registered clients. The
+    # per-IP limit only bounds the registration rate; this bounds the table.
+    oauth2_dynamic_registration_total_limit: int = 1000
+
     # Dynamically registered clients that are never used are pruned once they
     # age past this many days (client_id_issued_at older, last_used_at IS NULL).
     oauth2_dynamic_client_max_age_days: int = 7
@@ -1372,6 +1377,11 @@ def get_settings() -> Settings:
     if "oauth2_dynamic_registration_ip_window_seconds" in app_config:
         kwargs["oauth2_dynamic_registration_ip_window_seconds"] = app_config[
             "oauth2_dynamic_registration_ip_window_seconds"
+        ]
+
+    if "oauth2_dynamic_registration_total_limit" in app_config:
+        kwargs["oauth2_dynamic_registration_total_limit"] = app_config[
+            "oauth2_dynamic_registration_total_limit"
         ]
 
     if "oauth2_dynamic_client_max_age_days" in app_config:

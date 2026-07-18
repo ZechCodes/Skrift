@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import pytest_asyncio
+from joserfc import jwt as jose_jwt
 from joserfc.jwk import ECKey
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -161,6 +162,54 @@ class TestJwtRoundTrip:
         key = _signing_key()
         token = _mint(key)
         assert verify_access_token_jwt(token, jwks=[], issuer=ISSUER, audience=RESOURCE) is None
+
+
+def _mint_with_typ(signing_key, typ):
+    """Sign otherwise-valid access-token claims under an arbitrary header typ."""
+    header = {"alg": "ES256", "kid": signing_key.kid}
+    if typ is not None:
+        header["typ"] = typ
+    issued_at = int(time.time())
+    claims = {
+        "iss": ISSUER,
+        "sub": USER_ID,
+        "client_id": "abc",
+        "scope": "openid",
+        "iat": issued_at,
+        "exp": issued_at + ACCESS_TTL,
+        "jti": "typ-test-jti",
+    }
+    private_key = ECKey.import_key(signing_key.private_key_pem)
+    return jose_jwt.encode(header, claims, private_key, algorithms=["ES256"])
+
+
+class TestJwtTypEnforcement:
+    """RFC 9068 §4 — only `at+jwt` tokens may pass as access tokens, so any
+    other JWT kind signed with the same rotating key can never be confused
+    into one."""
+
+    def test_at_jwt_typ_accepted(self):
+        key = _signing_key()
+        for accepted in ("at+jwt", "application/at+jwt", "AT+JWT"):
+            token = _mint_with_typ(key, accepted)
+            assert verify_access_token_jwt(token, jwks=_jwks_for(key), issuer=ISSUER, audience=None) is not None, accepted
+
+    def test_wrong_typ_rejected(self):
+        key = _signing_key()
+        for wrong in ("JWT", "logout+jwt", "id_token+jwt", ""):
+            token = _mint_with_typ(key, wrong)
+            assert verify_access_token_jwt(token, jwks=_jwks_for(key), issuer=ISSUER, audience=None) is None, wrong
+
+    def test_missing_typ_rejected(self):
+        key = _signing_key()
+        token = _mint_with_typ(key, None)
+        assert verify_access_token_jwt(token, jwks=_jwks_for(key), issuer=ISSUER, audience=None) is None
+
+    def test_create_access_token_jwt_sets_at_jwt_typ(self):
+        key = _signing_key()
+        token = _mint(key)
+        header = json.loads(base64.urlsafe_b64decode(token.split(".")[0] + "=="))
+        assert header["typ"] == "at+jwt"
 
 
 @pytest_asyncio.fixture
@@ -579,6 +628,60 @@ class TestUserinfoWithJwt:
         key = _signing_key()
         result = await _userinfo(_mint(key, issuer="https://evil.example.com"), _jwks_for(key))
         assert result.status_code == 401
+
+
+async def _revoke(token, jwks):
+    controller = OAuth2Controller(owner=MagicMock())
+    request = MagicMock()
+    request.form = AsyncMock(return_value={"token": token})
+    request.base_url = "http://localhost:8000/"
+    db_session = AsyncMock()
+
+    with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()), \
+         patch("skrift.controllers.oauth2.oauth2_service") as mock_svc, \
+         patch("skrift.controllers.oauth2.oauth2_signing_key_service") as mock_keys:
+        mock_svc.is_token_revoked = AsyncMock(return_value=False)
+        mock_svc.revoke_token = AsyncMock()
+        mock_keys.list_jwks_keys = AsyncMock(return_value=jwks)
+        result = await OAuth2Controller.revoke.fn(controller, request, db_session)
+    return result, mock_svc
+
+
+class TestRevokeWithJwt:
+    @pytest.mark.asyncio
+    async def test_jwt_access_token_revocation_stores_its_jti(self):
+        key = _signing_key()
+        token = _mint(key)
+        claims = verify_access_token_jwt(token, jwks=_jwks_for(key), issuer=ISSUER, audience=None)
+
+        result, mock_svc = await _revoke(token, _jwks_for(key))
+
+        assert result.status_code == 200
+        mock_svc.revoke_token.assert_awaited_once()
+        _, stored_jti, stored_type, stored_expiry = mock_svc.revoke_token.await_args.args
+        assert stored_jti == claims["jti"]
+        assert stored_type == "access"
+        assert stored_expiry == datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_revoked_jwt_no_longer_passes_userinfo(self):
+        """End-to-end shape of the connector 'disconnect' path: once the JWT's
+        jti is on the revocation list, the token stops working."""
+        key = _signing_key()
+        token = _mint(key)
+
+        result = await _userinfo(token, _jwks_for(key), revoked=True)
+        assert result.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_foreign_issuer_jwt_returns_200_without_storing_revocation(self):
+        key = _signing_key()
+        token = _mint(key, issuer="https://evil.example.com")
+
+        result, mock_svc = await _revoke(token, _jwks_for(key))
+
+        assert result.status_code == 200
+        mock_svc.revoke_token.assert_not_awaited()
 
 
 async def _introspect(token, jwks, *, client=None, revoked=False):
