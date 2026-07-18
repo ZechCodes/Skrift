@@ -17,11 +17,13 @@ from litestar.response import Redirect, Response, Template as TemplateResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.auth.client_secret import verify_client_secret
+from skrift.auth.jwt_tokens import create_access_token_jwt, verify_access_token_jwt
 from skrift.auth.scopes import SCOPE_DEFINITIONS
 from skrift.auth.session_keys import SESSION_USER_EMAIL, SESSION_USER_ID, SESSION_USER_NAME, SESSION_USER_PICTURE_URL
 from skrift.auth.tokens import create_signed_token, verify_signed_token
 from skrift.config import get_settings
-from skrift.db.services import oauth2_service, oauth_service
+from skrift.db.models.user import User
+from skrift.db.services import oauth2_service, oauth2_signing_key_service, oauth_service
 from skrift.forms import verify_csrf
 from skrift.middleware.security import add_form_action_source, apply_csp_nonce, csp_nonce_var
 
@@ -45,6 +47,38 @@ def _verify_pkce(code_verifier: str, code_challenge: str) -> bool:
     digest = hashlib.sha256(code_verifier.encode()).digest()
     computed = base64.urlsafe_b64encode(digest).decode().rstrip("=")
     return computed == code_challenge
+
+
+def _resolve_issuer(settings, request: Request) -> str:
+    """The token issuer: configured value, or this request's base URL."""
+    return settings.oauth2_issuer or str(request.base_url).rstrip("/")
+
+
+def _extract_resource_values(params) -> list[str]:
+    """Collect RFC 8707 ``resource`` values from query or form parameters.
+
+    Litestar multi-dicts expose ``getall`` (needed to detect the invalid
+    multiple-``resource`` case); plain mappings fall back to the single value.
+    """
+    getall = getattr(params, "getall", None)
+    if getall is None:
+        value = params.get("resource", "")
+        return [value] if value else []
+    return [value for value in getall("resource", []) if value]
+
+
+def _validate_resource_indicator(resource: str, allowed_resources: list[str]) -> bool:
+    """Validate an RFC 8707 resource indicator.
+
+    Must be an absolute URI without a fragment and — when an allowlist is
+    configured — one of the allowed resources.
+    """
+    parts = urlsplit(resource)
+    if not parts.scheme or parts.fragment:
+        return False
+    if allowed_resources and resource not in allowed_resources:
+        return False
+    return True
 
 
 async def verify_oauth_token(token: str, secret: str, db_session: AsyncSession) -> dict | None:
@@ -107,6 +141,15 @@ class OAuth2Controller(Controller):
             if allowed and s not in allowed:
                 return _json_error("invalid_scope", f"Scope not allowed for this client: {s}")
 
+        # RFC 8707 resource indicator — optional, at most one, and must be a
+        # valid (allowlisted) target so the access token's `aud` is trustworthy.
+        resource_values = _extract_resource_values(params)
+        if len(resource_values) > 1:
+            return _json_error("invalid_target", "Multiple resource parameters are not supported")
+        resource = resource_values[0] if resource_values else ""
+        if resource and not _validate_resource_indicator(resource, get_settings().oauth2_allowed_resources):
+            return _json_error("invalid_target", "Invalid or disallowed resource")
+
         # Check if user is logged in
         user_id = request.session.get(SESSION_USER_ID)
         if not user_id:
@@ -119,6 +162,7 @@ class OAuth2Controller(Controller):
                 "scope": scope,
                 "code_challenge": code_challenge,
                 "code_challenge_method": code_challenge_method,
+                "resource": resource,
             })
             next_url = f"/oauth/authorize?{query}"
             # next_url carries its own query string; it must be encoded as a
@@ -133,6 +177,7 @@ class OAuth2Controller(Controller):
             "state": state,
             "scope": scope,
             "code_challenge": code_challenge,
+            "resource": resource,
         }
 
         # Build scope descriptions for the consent screen
@@ -211,6 +256,7 @@ class OAuth2Controller(Controller):
         state = authorize_data["state"]
         scope = authorize_data.get("scope", "")
         code_challenge = authorize_data.get("code_challenge", "")
+        resource = authorize_data.get("resource", "")
 
         # User denied
         if action == "deny":
@@ -234,6 +280,7 @@ class OAuth2Controller(Controller):
             "redirect_uri": redirect_uri,
             "scope": scope,
             "code_challenge": code_challenge,
+            "resource": resource,
         }
 
         code = create_signed_token(code_payload, settings.secret_key, AUTH_CODE_TTL)
@@ -247,15 +294,16 @@ class OAuth2Controller(Controller):
         """Token endpoint — exchange auth code or refresh token for access token."""
         form_data = await request.form()
         grant_type = form_data.get("grant_type", "")
+        issuer = _resolve_issuer(get_settings(), request)
 
         if grant_type == "authorization_code":
-            return await self._handle_authorization_code(form_data, db_session)
+            return await self._handle_authorization_code(form_data, db_session, issuer)
         elif grant_type == "refresh_token":
-            return await self._handle_refresh_token(form_data, db_session)
+            return await self._handle_refresh_token(form_data, db_session, issuer)
         else:
             return _json_error("unsupported_grant_type", f"Unsupported grant_type: {grant_type}")
 
-    async def _handle_authorization_code(self, form_data, db_session: AsyncSession) -> Response:
+    async def _handle_authorization_code(self, form_data, db_session: AsyncSession, issuer: str) -> Response:
         """Handle grant_type=authorization_code."""
         settings = get_settings()
 
@@ -298,6 +346,20 @@ class OAuth2Controller(Controller):
         if not _verify_pkce(code_verifier, stored_challenge):
             return _json_error("invalid_grant", "PKCE verification failed")
 
+        # RFC 8707: a token-endpoint `resource` may narrow the authorized
+        # target (equal it, or restrict an unrestricted grant) but never widen.
+        granted_resource = payload.get("resource", "")
+        resource_values = _extract_resource_values(form_data)
+        if len(resource_values) > 1:
+            return _json_error("invalid_target", "Multiple resource parameters are not supported")
+        requested_resource = resource_values[0] if resource_values else ""
+        if requested_resource:
+            if not _validate_resource_indicator(requested_resource, settings.oauth2_allowed_resources):
+                return _json_error("invalid_target", "Invalid or disallowed resource")
+            if granted_resource and requested_resource != granted_resource:
+                return _json_error("invalid_target", "resource was not authorized by this grant")
+        effective_resource = requested_resource or granted_resource
+
         # Revoke the auth code before issuing tokens so a concurrent replay fails.
         code_jti = payload.get("jti")
         if code_jti:
@@ -310,25 +372,27 @@ class OAuth2Controller(Controller):
         # (presenting a previously-rotated token) and mass-revoke the lineage.
         family_id = uuid.uuid4().hex
 
-        # Issue tokens
-        access_payload = {
-            "type": "access",
-            "user_id": payload["user_id"],
-            "email": payload["email"],
-            "name": payload["name"],
-            "picture_url": payload["picture_url"],
-            "client_id": client_id,
-            "scope": scope,
-        }
+        # Issue tokens — the access token is an asymmetric JWT third parties
+        # can verify via /oauth/jwks; the refresh token stays HMAC and carries
+        # the resource so refreshed access tokens keep the same audience.
+        signing_key = await oauth2_signing_key_service.get_or_create_active_key(db_session)
+        access_token = create_access_token_jwt(
+            subject=payload["user_id"],
+            client_id=client_id,
+            scope=scope,
+            audience=effective_resource or None,
+            issuer=issuer,
+            signing_key=signing_key,
+            expires_in=settings.oauth2_access_token_ttl,
+        )
         refresh_payload = {
             "type": "refresh",
             "user_id": payload["user_id"],
             "client_id": client_id,
             "scope": scope,
             "family_id": family_id,
+            "resource": effective_resource,
         }
-
-        access_token = create_signed_token(access_payload, settings.secret_key, ACCESS_TOKEN_TTL)
         refresh_token = create_signed_token(refresh_payload, settings.secret_key, REFRESH_TOKEN_TTL)
 
         return Response(
@@ -336,14 +400,14 @@ class OAuth2Controller(Controller):
                 "access_token": access_token,
                 "refresh_token": refresh_token,
                 "token_type": "bearer",
-                "expires_in": ACCESS_TOKEN_TTL,
+                "expires_in": settings.oauth2_access_token_ttl,
                 "scope": scope,
             },
             status_code=200,
             media_type="application/json",
         )
 
-    async def _handle_refresh_token(self, form_data, db_session: AsyncSession) -> Response:
+    async def _handle_refresh_token(self, form_data, db_session: AsyncSession, issuer: str) -> Response:
         """Handle grant_type=refresh_token with RFC 6749 §10.4 reuse detection.
 
         Three outcomes for a presented refresh token:
@@ -423,6 +487,19 @@ class OAuth2Controller(Controller):
         else:
             effective_scope = original_scope
 
+        # Resource binding mirrors the code grant: equal/narrow only.
+        granted_resource = payload.get("resource", "")
+        resource_values = _extract_resource_values(form_data)
+        if len(resource_values) > 1:
+            return _json_error("invalid_target", "Multiple resource parameters are not supported")
+        requested_resource = resource_values[0] if resource_values else ""
+        if requested_resource:
+            if not _validate_resource_indicator(requested_resource, settings.oauth2_allowed_resources):
+                return _json_error("invalid_target", "Invalid or disallowed resource")
+            if granted_resource and requested_resource != granted_resource:
+                return _json_error("invalid_target", "resource was not authorized by this grant")
+        effective_resource = requested_resource or granted_resource
+
         # Revoke the old refresh token (normal rotation path).
         if old_jti:
             expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
@@ -430,24 +507,24 @@ class OAuth2Controller(Controller):
 
         # Issue new access + refresh tokens (token rotation); stay on the
         # same family so future rotations remain linkable for reuse checks.
-        access_payload = {
-            "type": "access",
-            "user_id": payload["user_id"],
-            "email": "",
-            "name": "",
-            "picture_url": "",
-            "client_id": client_id,
-            "scope": effective_scope,
-        }
+        signing_key = await oauth2_signing_key_service.get_or_create_active_key(db_session)
+        access_token = create_access_token_jwt(
+            subject=payload["user_id"],
+            client_id=client_id,
+            scope=effective_scope,
+            audience=effective_resource or None,
+            issuer=issuer,
+            signing_key=signing_key,
+            expires_in=settings.oauth2_access_token_ttl,
+        )
         refresh_payload = {
             "type": "refresh",
             "user_id": payload["user_id"],
             "client_id": client_id,
             "scope": effective_scope,
             "family_id": family_id,
+            "resource": effective_resource,
         }
-
-        access_token = create_signed_token(access_payload, settings.secret_key, ACCESS_TOKEN_TTL)
         new_refresh_token = create_signed_token(refresh_payload, settings.secret_key, REFRESH_TOKEN_TTL)
 
         return Response(
@@ -455,12 +532,51 @@ class OAuth2Controller(Controller):
                 "access_token": access_token,
                 "refresh_token": new_refresh_token,
                 "token_type": "bearer",
-                "expires_in": ACCESS_TOKEN_TTL,
+                "expires_in": settings.oauth2_access_token_ttl,
                 "scope": effective_scope,
             },
             status_code=200,
             media_type="application/json",
         )
+
+    @get("/jwks")
+    async def jwks(self, db_session: AsyncSession) -> Response:
+        """JWK Set endpoint — public keys for access-token verification."""
+        await oauth2_signing_key_service.get_or_create_active_key(db_session)
+        keys = await oauth2_signing_key_service.list_jwks_keys(db_session)
+        return Response(
+            content={"keys": keys},
+            status_code=200,
+            media_type="application/json",
+        )
+
+    async def _verify_jwt_access_claims(
+        self, request: Request, db_session: AsyncSession, token: str
+    ) -> dict | None:
+        """Verify a JWT access token against the JWKS and the revocation list.
+
+        Audience is intentionally not enforced here — userinfo and
+        introspection serve tokens minted for any resource.
+        """
+        if token.count(".") != 2:
+            return None
+
+        settings = get_settings()
+        jwks = await oauth2_signing_key_service.list_jwks_keys(db_session)
+        if not jwks:
+            return None
+
+        claims = verify_access_token_jwt(
+            token, jwks=jwks, issuer=_resolve_issuer(settings, request), audience=None
+        )
+        if claims is None:
+            return None
+
+        jti = claims.get("jti", "")
+        if jti and await oauth2_service.is_token_revoked(db_session, jti):
+            return None
+
+        return claims
 
     @get("/userinfo")
     async def userinfo(self, request: Request, db_session: AsyncSession) -> Response:
@@ -473,13 +589,33 @@ class OAuth2Controller(Controller):
 
         token = auth_header[7:]  # Strip "Bearer "
         payload = await verify_oauth_token(token, settings.secret_key, db_session)
-        if not payload or payload.get("type") != "access":
-            return _json_error("invalid_token", "Invalid or expired access token", status_code=401)
+        if payload is not None and payload.get("type") == "access":
+            # Legacy HMAC access token — the profile travels in the payload.
+            subject = payload["user_id"]
+            scope_str = payload.get("scope", "")
+            profile = {
+                "email": payload.get("email", ""),
+                "name": payload.get("name", ""),
+                "picture": payload.get("picture_url", ""),
+            }
+        else:
+            jwt_claims = await self._verify_jwt_access_claims(request, db_session, token)
+            if jwt_claims is None:
+                return _json_error("invalid_token", "Invalid or expired access token", status_code=401)
+            # JWT access tokens carry no profile claims — read them from the
+            # user record so userinfo stays authoritative.
+            subject = jwt_claims["sub"]
+            scope_str = jwt_claims.get("scope", "")
+            user = await db_session.get(User, UUID(subject))
+            profile = {
+                "email": (user.email if user else "") or "",
+                "name": (user.name if user else "") or "",
+                "picture": (user.picture_url if user else "") or "",
+            }
 
         # Build claims strictly from granted scopes. A token minted with
         # no scopes gets only `sub` — prior backwards-compat code returned
         # the full profile + email, which silently defeated scope filtering.
-        scope_str = payload.get("scope", "")
         granted_scopes = scope_str.split() if scope_str else []
 
         allowed_claims: set[str] = set()
@@ -489,22 +625,21 @@ class OAuth2Controller(Controller):
                 allowed_claims.update(defn.claims)
 
         # Always include sub — the minimum subject identifier required by OIDC.
-        claims: dict = {"sub": payload["user_id"]}
+        claims: dict = {"sub": subject}
 
         if "email" in allowed_claims:
-            email = payload.get("email", "")
-            claims["email"] = email
+            claims["email"] = profile["email"]
             # Report verification from this server's own records — never a
             # blanket true. ``email_verified`` is set only when the user has a
             # linked identity whose email was attested as verified, mirroring
             # the gate that protects the email-match auto-link path.
             claims["email_verified"] = await oauth_service.is_email_verified_for_user(
-                db_session, UUID(payload["user_id"]), email
+                db_session, UUID(subject), profile["email"]
             )
         if "name" in allowed_claims:
-            claims["name"] = payload.get("name", "")
+            claims["name"] = profile["name"]
         if "picture" in allowed_claims:
-            claims["picture"] = payload.get("picture_url", "")
+            claims["picture"] = profile["picture"]
 
         return Response(
             content=claims,
@@ -529,6 +664,11 @@ class OAuth2Controller(Controller):
             await oauth2_service.revoke_token(
                 db_session, payload["jti"], payload.get("type", "unknown"), expires_at
             )
+        elif payload is None:
+            jwt_claims = await self._verify_jwt_access_claims(request, db_session, token_str)
+            if jwt_claims and jwt_claims.get("jti"):
+                expires_at = datetime.fromtimestamp(jwt_claims["exp"], tz=timezone.utc)
+                await oauth2_service.revoke_token(db_session, jwt_claims["jti"], "access", expires_at)
 
         # RFC 7009: always return 200, even if token was invalid
         return Response(content={}, status_code=200, media_type="application/json")
@@ -557,6 +697,17 @@ class OAuth2Controller(Controller):
 
         settings = get_settings()
         payload = await verify_oauth_token(token_str, settings.secret_key, db_session)
+        if payload is None:
+            jwt_claims = await self._verify_jwt_access_claims(request, db_session, token_str)
+            if jwt_claims is not None:
+                payload = {
+                    "type": "access",
+                    "user_id": jwt_claims.get("sub", ""),
+                    "client_id": jwt_claims.get("client_id", ""),
+                    "scope": jwt_claims.get("scope", ""),
+                    "exp": jwt_claims.get("exp"),
+                    "aud": jwt_claims.get("aud", ""),
+                }
 
         if not payload:
             return Response(content={"active": False}, status_code=200, media_type="application/json")
@@ -576,6 +727,8 @@ class OAuth2Controller(Controller):
                 "scope": payload.get("scope", ""),
                 "exp": payload.get("exp"),
             }
+            if payload.get("aud"):
+                result["aud"] = payload["aud"]
         else:
             result = {
                 "active": True,

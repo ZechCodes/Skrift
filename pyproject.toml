@@ -22,6 +22,7 @@ dependencies = [
     "mdit-py-plugins>=0.4.0",
     "pillow>=10.0.0",
     "aiosmtplib>=3.0.0",
+    "joserfc>=1.0.0",
 ]
 
 [project.scripts]

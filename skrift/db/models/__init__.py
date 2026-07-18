@@ -3,6 +3,7 @@ from skrift.db.models.asset import Asset
 from skrift.db.models.content_area import ContentAreaRecord
 from skrift.db.models.notification import DismissedNotification, StoredNotification
 from skrift.db.models.oauth2_client import OAuth2Client
+from skrift.db.models.oauth2_signing_key import OAuth2SigningKey
 from skrift.db.models.oauth_account import OAuthAccount
 from skrift.db.models.page import Page
 from skrift.db.models.page_asset import page_assets
@@ -32,6 +33,7 @@ __all__ = [
     "ContentAreaRecord",
     "DismissedNotification",
     "OAuth2Client",
+    "OAuth2SigningKey",
     "OAuthAccount",
     "Page",
     "PageRepublish",

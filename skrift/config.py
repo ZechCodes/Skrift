@@ -175,6 +175,9 @@ _RESERVED_CONFIG_KEYS = frozenset(
         "domain",
         "security_contact",
         "oauth2_enabled",
+        "oauth2_issuer",
+        "oauth2_access_token_ttl",
+        "oauth2_allowed_resources",
         "controllers",
         "models",
         "middleware",
@@ -1173,6 +1176,15 @@ class Settings(BaseSettings):
     # OAuth2 Authorization Server enabled flag
     oauth2_enabled: bool = False
 
+    # OAuth2 access-token issuer; empty falls back to the request base URL
+    oauth2_issuer: str = ""
+
+    # OAuth2 access-token lifetime in seconds
+    oauth2_access_token_ttl: int = 900
+
+    # RFC 8707 resource allowlist; empty allows any valid absolute resource URI
+    oauth2_allowed_resources: list[str] = []
+
     # API key configuration
     api_keys: APIKeyConfig = APIKeyConfig()
 
@@ -1324,6 +1336,15 @@ def get_settings() -> Settings:
 
     if "oauth2_enabled" in app_config:
         kwargs["oauth2_enabled"] = app_config["oauth2_enabled"]
+
+    if "oauth2_issuer" in app_config:
+        kwargs["oauth2_issuer"] = app_config["oauth2_issuer"]
+
+    if "oauth2_access_token_ttl" in app_config:
+        kwargs["oauth2_access_token_ttl"] = app_config["oauth2_access_token_ttl"]
+
+    if "oauth2_allowed_resources" in app_config:
+        kwargs["oauth2_allowed_resources"] = list(app_config["oauth2_allowed_resources"])
 
     if "storage" in app_config:
         storage_data = app_config["storage"]
