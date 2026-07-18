@@ -193,6 +193,24 @@ assistant = skrift.Agent(
 )
 ```
 
+Passing `deps_ref` for an agent that has no `deps_factory` raises `AgentSessionError` on `Agent.run()`, `Session.send()`, and the chat sends, because the reference would be silently ignored.
+
+### Updating `deps_ref` across turns
+
+`deps_ref` is not frozen at session creation. Every send may carry a fresh `deps_ref`, and the semantics are **replace-when-provided**:
+
+- `deps_ref=None` (the default) leaves the session's stored `deps_ref` unchanged.
+- Any dict — including an empty `{}` — replaces the stored `deps_ref` for the turn it is submitted with and every turn after it. There is no merging.
+
+The new reference is applied to durable state at the moment the turn it rode in on **activates**, never earlier. Each queued turn therefore runs with the `deps_ref` it was submitted with, even when several sends are in flight at once:
+
+- Two rapid sends each keep their own `deps_ref`; the second does not overwrite the first turn before it runs.
+- A send that arrives while a turn is mid-flight (for example `awaiting_approval`) does not change the in-flight turn's deps when it resumes. The in-flight turn finishes with its original `deps_ref`, and the queued turn activates with the new one.
+
+When a turn activates with a `deps_ref` that differs from the stored value, the runtime appends a `DepsRefUpdated` audit event carrying the new `deps_ref`, the `turn_id`, and the actor. No event is emitted when the provided `deps_ref` equals the stored one.
+
+For chat, `Chat(..., deps_ref=...)` is passed on every turn — not just the first — so a chat reconstructed with a fresh `deps_ref` under the same key updates the session going forward. A per-call `chat.send(..., deps_ref=...)` or `chat.send_typed(..., deps_ref=...)` overrides the constructor default for that turn.
+
 ## Resume model
 
 Skrift resumes agents from committed durable boundaries:
@@ -202,6 +220,6 @@ Skrift resumes agents from committed durable boundaries:
 - approval decisions
 - queued user turns
 - stored run kwargs
-- `deps_ref`
+- `deps_ref` (as last replaced by an activated turn)
 
 The runtime does not try to resume from arbitrary internal Pydantic AI graph nodes. That avoids repeating model calls or tool work from an unsafe mid-step checkpoint.

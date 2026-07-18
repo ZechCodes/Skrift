@@ -785,6 +785,19 @@ def _activate_next_pending_turn(runstate: Any) -> bool:
     runstate.messages.append(
         {"role": "user", "content": turn.get("message"), "turn_id": turn.get("turn_id")}
     )
+    turn_deps_ref = turn.get("deps_ref")
+    if turn_deps_ref is not None and turn_deps_ref != runstate.deps_ref:
+        runstate.deps_ref = dict(turn_deps_ref)
+        append_event(
+            runstate,
+            "DepsRefUpdated",
+            {
+                "deps_ref": dict(turn_deps_ref),
+                "turn_id": turn.get("turn_id"),
+                "actor": turn.get("actor"),
+                "updated_at": utcnow().isoformat(),
+            },
+        )
     runstate.status = "queued"
     runstate.terminal_at = None
     runstate.error = None

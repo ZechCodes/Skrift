@@ -96,9 +96,9 @@ decision = await chat.send_typed(
 
 ## Queued typed turns
 
-If a typed send arrives while another turn is running, Skrift stores the message, output type, model override, reasoning level, and other turn kwargs with the pending turn. When that turn activates, the stored configuration is decoded and passed to Pydantic AI.
+If a typed send arrives while another turn is running, Skrift stores the message, output type, model override, reasoning level, `deps_ref`, and other turn kwargs with the pending turn. When that turn activates, the stored configuration is decoded and passed to Pydantic AI.
 
-This matters for multi-step object processing because a queued turn can safely request a different output type or model from the active turn.
+This matters for multi-step object processing because a queued turn can safely request a different output type, model, or `deps_ref` from the active turn. A per-turn `deps_ref` follows replace-when-provided semantics — `None` keeps the stored reference, any dict replaces it — and is applied only when that turn activates, so the in-flight turn keeps the `deps_ref` it started with. Changing the stored reference emits a `DepsRefUpdated` audit event.
 
 Most server handlers should still await each send in order. If your UI deliberately allows multiple pending requests for the same chat key, Skrift stores each turn's output type and turn kwargs with that pending message before activation.
 

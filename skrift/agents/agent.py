@@ -380,6 +380,10 @@ class Agent:
                 f"Agent {self.skrift_name!r} uses deps_factory; pass durable "
                 "dependencies through deps_ref=..., not deps=."
             )
+        if deps_ref is not None and self.deps_factory is None:
+            raise AgentSessionError(
+                f"Agent {self.skrift_name!r} has no deps_factory; deps_ref would be ignored."
+            )
         run_kwargs = normalize_turn_kwargs(kwargs)
         inherited_parent_session_id = parent_session_id or current_session_id()
         inherited_root_session_id = root_session_id

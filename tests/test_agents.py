@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
@@ -689,6 +690,202 @@ async def test_session_send_rejects_deps_kwarg_when_deps_factory_set():
 
     with pytest.raises(AgentSessionError, match="deps_ref"):
         await session.send("again", deps="not durable")
+
+
+async def test_chat_second_turn_uses_fresh_deps_ref():
+    seen: list[dict[str, Any]] = []
+
+    def deps_factory(ctx):
+        seen.append(dict(ctx.deps_ref))
+        return dict(ctx.deps_ref)
+
+    agent = skrift.Agent(TestModel(), name="demo", deps_type=dict, deps_factory=deps_factory)
+
+    @agent.tool
+    def token(ctx: RunContext[dict]) -> str:
+        return ctx.deps.get("token", "")
+
+    await agent.chat("shared", deps_ref={"token": "first"}).send("hi")
+    await agent.chat("shared", deps_ref={"token": "second"}).send("again")
+
+    assert seen[0] == {"token": "first"}
+    assert seen[-1] == {"token": "second"}
+
+
+async def test_session_send_replaces_deps_ref_on_completed_session():
+    seen: list[dict[str, Any]] = []
+
+    def deps_factory(ctx):
+        seen.append(dict(ctx.deps_ref))
+        return dict(ctx.deps_ref)
+
+    agent = skrift.Agent(TestModel(), name="demo", deps_type=dict, deps_factory=deps_factory)
+    session = await agent.run("hi", deps_ref={"token": "first"})
+    await session.result()
+
+    await session.send("again", deps_ref={"token": "second"})
+    await session.result()
+
+    assert seen[-1] == {"token": "second"}
+    state = await session.state()
+    assert state.deps_ref == {"token": "second"}
+
+
+async def test_queued_turns_each_use_own_deps_ref():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    seen: list[dict[str, Any]] = []
+
+    def deps_factory(ctx):
+        seen.append(dict(ctx.deps_ref))
+        return dict(ctx.deps_ref)
+
+    agent = skrift.Agent(TestModel(), name="demo", deps_type=dict, deps_factory=deps_factory)
+    session = await agent.run("hi", deps_ref={"n": 0})
+    turn_one = await session.send("t1", deps_ref={"n": 1})
+    turn_two = await session.send("t2", deps_ref={"n": 2})
+
+    await runtime.start()
+    try:
+        while await session.status() != "completed":
+            await asyncio.sleep(0.01)
+    finally:
+        await runtime.stop()
+
+    assert seen == [{"n": 0}, {"n": 1}, {"n": 2}]
+
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    deps_events = [event for _, event in events if event["type"] == "DepsRefUpdated"]
+    assert [
+        (event["payload"]["turn_id"], event["payload"]["deps_ref"]) for event in deps_events
+    ] == [(turn_one, {"n": 1}), (turn_two, {"n": 2})]
+
+
+async def test_mid_turn_send_does_not_change_in_flight_deps_ref():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    seen: list[dict[str, Any]] = []
+
+    def deps_factory(ctx):
+        seen.append(dict(ctx.deps_ref))
+        return dict(ctx.deps_ref)
+
+    agent = skrift.Agent(TestModel(), name="demo", deps_type=dict, deps_factory=deps_factory)
+
+    @agent.tool_plain(approval=True, policy_description="approval required")
+    def touch() -> str:
+        return "ok"
+
+    session = await agent.run("use the tool", deps_ref={"v": "old"})
+    await runtime.start()
+    try:
+        while await session.status() != "awaiting_approval":
+            await asyncio.sleep(0.01)
+        await session.send("next", deps_ref={"v": "new"})
+        for _ in range(500):
+            if len(seen) >= 3:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await runtime.stop()
+
+    assert len(seen) >= 3
+    assert all(entry == {"v": "old"} for entry in seen[:-1])
+    assert seen[-1] == {"v": "new"}
+    state = await session.state()
+    assert state.deps_ref == {"v": "new"}
+
+
+async def test_send_without_deps_ref_preserves_stored_deps_ref():
+    seen: list[dict[str, Any]] = []
+
+    def deps_factory(ctx):
+        seen.append(dict(ctx.deps_ref))
+        return dict(ctx.deps_ref)
+
+    agent = skrift.Agent(TestModel(), name="demo", deps_type=dict, deps_factory=deps_factory)
+    session = await agent.run("hi", deps_ref={"token": "keep"})
+    await session.result()
+
+    await session.send("again")
+    await session.result()
+
+    assert seen == [{"token": "keep"}, {"token": "keep"}]
+    state = await session.state()
+    assert state.deps_ref == {"token": "keep"}
+
+
+async def test_agent_run_rejects_deps_ref_without_deps_factory():
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+
+    with pytest.raises(AgentSessionError, match="no deps_factory"):
+        await agent.run("hi", deps_ref={"token": "x"})
+
+
+async def test_session_send_rejects_deps_ref_without_deps_factory():
+    agent = skrift.Agent(TestModel(custom_output_text="hello"), name="demo")
+    session = await agent.run("hi")
+    assert await session.result() == "hello"
+
+    with pytest.raises(AgentSessionError, match="no deps_factory"):
+        await session.send("again", deps_ref={"token": "x"})
+
+
+async def test_deps_ref_updated_event_emitted_on_change():
+    agent = skrift.Agent(
+        TestModel(),
+        name="demo",
+        deps_type=dict,
+        deps_factory=lambda ctx: dict(ctx.deps_ref),
+    )
+    session = await agent.run("hi", deps_ref={"token": "first"})
+    await session.result()
+
+    turn_id = await session.send("again", deps_ref={"token": "second"})
+    await session.result()
+
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    deps_events = [event for _, event in events if event["type"] == "DepsRefUpdated"]
+    assert len(deps_events) == 1
+    assert deps_events[0]["payload"]["deps_ref"] == {"token": "second"}
+    assert deps_events[0]["payload"]["turn_id"] == turn_id
+
+
+async def test_deps_ref_updated_event_not_emitted_when_unchanged():
+    agent = skrift.Agent(
+        TestModel(),
+        name="demo",
+        deps_type=dict,
+        deps_factory=lambda ctx: dict(ctx.deps_ref),
+    )
+    session = await agent.run("hi", deps_ref={"token": "same"})
+    await session.result()
+
+    await session.send("again", deps_ref={"token": "same"})
+    await session.result()
+
+    events = await skrift.get_runtime().event_log.read(f"agents:run:{session.id}")
+    assert not any(event["type"] == "DepsRefUpdated" for _, event in events)
+
+
+async def test_chat_send_deps_ref_overrides_chat_default():
+    seen: list[dict[str, Any]] = []
+
+    def deps_factory(ctx):
+        seen.append(dict(ctx.deps_ref))
+        return dict(ctx.deps_ref)
+
+    agent = skrift.Agent(TestModel(), name="demo", deps_type=dict, deps_factory=deps_factory)
+
+    await agent.chat("k", deps_ref={"token": "default"}).send(
+        "hi", deps_ref={"token": "override"}
+    )
+
+    assert seen[-1] == {"token": "override"}
+
+    await agent.chat("k", deps_ref={"token": "default"}).send(
+        "again", deps_ref={"token": "override-2"}
+    )
+
+    assert seen[-1] == {"token": "override-2"}
 
 
 async def test_agent_constructor_output_type_is_preserved():
