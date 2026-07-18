@@ -169,7 +169,7 @@ User clicks "Login with Skrift"
 oauth2_enabled: true
 ```
 
-When enabled: `OAuth2Controller` is auto-registered, OAuth token endpoints are CSRF-exempt, `/.well-known/openid-configuration` is active, and admin shows "OAuth Clients" (requires `manage-oauth-clients` permission).
+When enabled: `OAuth2Controller` is auto-registered, OAuth token endpoints are CSRF-exempt, `/.well-known/openid-configuration` + `/.well-known/oauth-authorization-server` are active, and admin shows "OAuth Clients" (requires `manage-oauth-clients` permission). Add `oauth2_dynamic_registration_enabled: true` to open `POST /oauth/register` for machine clients (e.g. Claude custom connectors); it 404s otherwise.
 
 Clients are managed via admin UI at `/admin/oauth-clients`:
 
@@ -206,7 +206,10 @@ Multiple hubs: use the `provider` field to decouple key from type (see Provider 
 | `GET` | `/oauth/userinfo` | Scope-filtered user claims (Bearer token) |
 | `POST` | `/oauth/revoke` | Revoke a token (RFC 7009) |
 | `POST` | `/oauth/introspect` | Token introspection (RFC 7662, requires client auth) |
+| `POST` | `/oauth/register` | Dynamic Client Registration (RFC 7591) — gated by `oauth2_dynamic_registration_enabled` |
+| `GET` | `/oauth/jwks` | Public JWK Set for ES256 access-token verification |
 | `GET` | `/.well-known/openid-configuration` | OIDC Discovery |
+| `GET` | `/.well-known/oauth-authorization-server` | Authorization Server Metadata (RFC 8414) |
 
 ### Scope Registry
 
@@ -221,17 +224,25 @@ Scopes control authorization (validated against client's `allowed_scopes`) and c
 
 ### Token Architecture
 
-| Token | TTL | Payload includes |
-|-------|-----|-----------------|
-| Auth code | 10 min | user_id, email, name, client_id, redirect_uri, scope, code_challenge |
-| Access token | 15 min | user_id, email, name, client_id, scope |
-| Refresh token | 30 days | user_id, client_id, scope |
+| Token | TTL | Signing | Payload / claims |
+|-------|-----|---------|------------------|
+| Auth code | 10 min | HMAC-SHA256 (`secret_key`) | user_id, email, name, client_id, redirect_uri, scope, code_challenge, resource |
+| Access token | 15 min (`oauth2_access_token_ttl`) | ES256 JWT (rotating EC P-256 key) | iss, sub, client_id, scope, aud (when `resource` requested), iat, exp, jti |
+| Refresh token | 30 days | HMAC-SHA256 (`secret_key`) | user_id, client_id, scope, family_id, resource |
 
-All tokens are HMAC-SHA256 signed with `settings.secret_key`. Each includes a `jti` for revocation. Refresh token exchange performs rotation (old token revoked).
+Access tokens are **ES256 JWTs** (RFC 9068) verifiable offline against `GET /oauth/jwks`; codes and refresh tokens stay HMAC and never leave the client↔server exchange. HMAC tokens include a `jti` for revocation. Refresh exchange rotates (old token revoked; reuse of a rotated token mass-revokes its `family_id`). Signing keys rotate via `oauth2_signing_key_service.rotate()` / `prune_expired()`.
+
+### Remembered Consent
+
+`ConsentGrant` (unique per user + client) records approved scopes. `/oauth/authorize` skips the consent screen and issues a code directly when a stored grant covers all requested scopes; broader scopes re-prompt and widen the grant on approval. Grants cascade-delete when the client is deleted or pruned. Service: `skrift/db/services/oauth2_consent_service.py` (`find_grant`, `upsert_grant`, `revoke_grant`, `delete_grants_for_clients`).
 
 ### PKCE
 
-S256 only. **Required** for public clients (no `client_secret`), optional for confidential clients.
+S256 only. **Required** for all clients (OAuth 2.1); `plain` is rejected.
+
+### MCP / Bearer JWT guard
+
+Downstream MCP resource servers protect routes with `BearerJWTAuth(audience=..., scopes=[...])` from `skrift/auth/bearer.py`, listed in a route's `guards` alongside `auth_guard`. It verifies the JWT against the JWKS, checks `iss`/`exp`/`aud`, enforces scopes, and resolves `sub` to the same `UserPermissions` identity as the session/API-key paths (so `Permission()`/`Role()` compose). Fail-closed 401 with `WWW-Authenticate: Bearer error="invalid_token"` (or `insufficient_scope`). See `docs/reference/mcp-identity-provider.md`.
 
 ## Security Notes
 
@@ -247,16 +258,22 @@ S256 only. **Required** for public clients (no `client_secret`), optional for co
 |------|---------|
 | `skrift/auth/` | Guards, roles, permissions |
 | `skrift/auth/providers.py` | OAuth provider classes, `get_oauth_provider()`, dynamic import |
-| `skrift/auth/tokens.py` | `create_signed_token()` / `verify_signed_token()` |
+| `skrift/auth/tokens.py` | `create_signed_token()` / `verify_signed_token()` (HMAC codes/refresh) |
+| `skrift/auth/jwt_tokens.py` | `create_access_token_jwt()` / `verify_access_token_jwt()` (ES256 access tokens) |
+| `skrift/auth/bearer.py` | `BearerJWTAuth` guard marker for MCP resource servers |
 | `skrift/auth/scopes.py` | Scope registry |
 | `skrift/auth/oauth_account_service.py` | `find_or_create_oauth_user()` with token persistence |
 | `skrift/controllers/auth.py` | OAuth login/callback controller |
-| `skrift/controllers/oauth2.py` | OAuth2Controller — authorize, token, userinfo, revoke, introspect |
-| `skrift/config.py` | `AuthConfig`, `SkriftProviderConfig`, `oauth2_enabled` |
+| `skrift/controllers/oauth2.py` | OAuth2Controller — authorize, token, userinfo, revoke, introspect, register, jwks |
+| `skrift/config.py` | `AuthConfig`, `SkriftProviderConfig`, `oauth2_enabled`, `oauth2_dynamic_registration_enabled`, `oauth2_issuer`, `oauth2_access_token_ttl`, `oauth2_allowed_resources` |
 | `skrift/db/models/user.py` | `User` model |
 | `skrift/db/models/oauth_account.py` | `OAuthAccount` model |
 | `skrift/db/models/oauth2_client.py` | `OAuth2Client` model |
+| `skrift/db/models/oauth2_consent_grant.py` | `ConsentGrant` model (remembered consent) |
+| `skrift/db/models/oauth2_signing_key.py` | `OAuth2SigningKey` model (rotating ES256 keys) |
 | `skrift/db/models/revoked_token.py` | `RevokedToken` model |
 | `skrift/db/services/oauth2_service.py` | Client CRUD, revocation |
+| `skrift/db/services/oauth2_consent_service.py` | Remembered-consent CRUD + client-delete cascade |
+| `skrift/db/services/oauth2_signing_key_service.py` | Signing-key lifecycle (`rotate`, `prune_expired`) |
 | `skrift/admin/oauth2_clients.py` | Admin UI for OAuth2 clients |
 | `skrift/setup/providers.py` | `OAuthProviderInfo` definitions |

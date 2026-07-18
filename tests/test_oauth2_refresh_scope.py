@@ -21,7 +21,21 @@ SECRET = "test-secret-key"
 def _settings():
     settings = MagicMock()
     settings.secret_key = SECRET
+    settings.oauth2_issuer = "http://localhost:8000"
+    settings.oauth2_access_token_ttl = 900
+    settings.oauth2_allowed_resources = []
     return settings
+
+
+def _signing_key():
+    from joserfc.jwk import ECKey
+
+    key = ECKey.generate_key("P-256")
+    signing_key = MagicMock()
+    signing_key.kid = key.thumbprint()
+    signing_key.private_key_pem = key.as_pem(private=True).decode("ascii")
+    signing_key.algorithm = "ES256"
+    return signing_key
 
 
 def _client():
@@ -64,12 +78,15 @@ def _request(refresh: str, *, scope: str | None = None):
 
 async def _exchange(controller, request, db_session, *, client):
     with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()), \
-         patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+         patch("skrift.controllers.oauth2.oauth2_service") as mock_svc, \
+         patch("skrift.controllers.oauth2.oauth2_signing_key_service") as mock_keys:
         mock_svc.is_token_revoked = AsyncMock(return_value=False)
         mock_svc.is_family_revoked = AsyncMock(return_value=False)
         mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
         mock_svc.revoke_token = AsyncMock()
         mock_svc.revoke_family = AsyncMock()
+        mock_svc.mark_client_used = AsyncMock()
+        mock_keys.get_or_create_active_key = AsyncMock(return_value=_signing_key())
         return await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
 

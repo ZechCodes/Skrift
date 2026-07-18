@@ -243,8 +243,10 @@ async def _authorize_get(query, *, session=None, settings=None):
     request.session = session if session is not None else {}
     db_session = AsyncMock()
     with patch("skrift.controllers.oauth2.get_settings", return_value=settings or _settings()), \
+         patch("skrift.controllers.oauth2.oauth2_consent_service") as mock_consent, \
          patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
         mock_svc.get_client_by_client_id = AsyncMock(return_value=_client())
+        mock_consent.find_grant = AsyncMock(return_value=None)
         return await OAuth2Controller.authorize_get.fn(controller, request, db_session), request
 
 
@@ -332,7 +334,9 @@ class TestAuthorizePostCarriesResource:
         db_session = AsyncMock()
 
         with patch("skrift.controllers.oauth2.verify_csrf", new_callable=AsyncMock, return_value=True), \
+             patch("skrift.controllers.oauth2.oauth2_consent_service") as mock_consent, \
              patch("skrift.controllers.oauth2.get_settings", return_value=_settings()):
+            mock_consent.upsert_grant = AsyncMock()
             result = await OAuth2Controller.authorize_post.fn(controller, request, db_session)
 
         code = parse_qs(urlsplit(result.url).query)["code"][0]
@@ -373,6 +377,7 @@ async def _exchange(form_data, *, settings=None, signing_key=None):
         mock_svc.is_family_revoked = AsyncMock(return_value=False)
         mock_svc.revoke_token = AsyncMock()
         mock_svc.revoke_family = AsyncMock()
+        mock_svc.mark_client_used = AsyncMock()
         mock_keys.get_or_create_active_key = AsyncMock(return_value=signing_key or _signing_key())
         return await OAuth2Controller.token_exchange.fn(controller, request, db_session)
 
@@ -653,6 +658,7 @@ class TestDiscoveryDocuments:
         settings = MagicMock()
         settings.oauth2_enabled = True
         settings.oauth2_issuer = ""
+        settings.oauth2_dynamic_registration_enabled = False
 
         controller = SitemapController(owner=MagicMock())
         request = MagicMock()
@@ -690,6 +696,7 @@ class TestDiscoveryDocuments:
         settings = MagicMock()
         settings.oauth2_enabled = True
         settings.oauth2_issuer = "https://id.example.com"
+        settings.oauth2_dynamic_registration_enabled = False
 
         controller = SitemapController(owner=MagicMock())
         request = MagicMock()
