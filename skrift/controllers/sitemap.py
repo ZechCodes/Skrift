@@ -16,9 +16,14 @@ from skrift.lib.client_ip import get_client_ip
 from skrift.hooks import hooks, ROBOTS_TXT, ROBOTS_TXT_FETCHED, SITEMAP_PAGE, SITEMAP_URLS
 
 
-def build_authorization_server_metadata(issuer: str) -> dict:
-    """RFC 8414 / OIDC discovery metadata shared by both well-known routes."""
-    return {
+def build_authorization_server_metadata(issuer: str, *, registration_enabled: bool = False) -> dict:
+    """RFC 8414 / OIDC discovery metadata shared by both well-known routes.
+
+    ``registration_endpoint`` (RFC 7591) is advertised only when Dynamic
+    Client Registration is enabled, so discovery matches what the server
+    actually accepts.
+    """
+    metadata = {
         "issuer": issuer,
         "authorization_endpoint": f"{issuer}/oauth/authorize",
         "token_endpoint": f"{issuer}/oauth/token",
@@ -33,6 +38,9 @@ def build_authorization_server_metadata(issuer: str) -> dict:
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
     }
+    if registration_enabled:
+        metadata["registration_endpoint"] = f"{issuer}/oauth/register"
+    return metadata
 
 
 @dataclass
@@ -167,7 +175,10 @@ Sitemap: {sitemap_url}
         issuer = settings.oauth2_issuer or str(request.base_url).rstrip("/")
 
         return Response(
-            content=build_authorization_server_metadata(issuer),
+            content=build_authorization_server_metadata(
+                issuer,
+                registration_enabled=settings.oauth2_dynamic_registration_enabled,
+            ),
             status_code=200,
             media_type="application/json",
         )

@@ -7,12 +7,14 @@ instance can act as an identity hub for spoke sites.
 
 import base64
 import hashlib
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 from urllib.parse import urlencode, urlsplit
 
 from litestar import Controller, Request, get, post
+from litestar.exceptions import NotFoundException
 from litestar.response import Redirect, Response, Template as TemplateResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,12 +27,18 @@ from skrift.config import get_settings
 from skrift.db.models.user import User
 from skrift.db.services import oauth2_service, oauth2_signing_key_service, oauth_service
 from skrift.forms import verify_csrf
+from skrift.lib.client_ip import get_client_ip
 from skrift.middleware.security import add_form_action_source, apply_csp_nonce, csp_nonce_var
 
 # Token lifetimes
 AUTH_CODE_TTL = 600        # 10 minutes
 ACCESS_TOKEN_TTL = 900     # 15 minutes
 REFRESH_TOKEN_TTL = 2592000  # 30 days
+
+# Longest client_name accepted at Dynamic Client Registration. client_name is
+# attacker-controlled and echoed on the consent screen, so it is length-capped
+# here and rendered through the templating engine's autoescape.
+CLIENT_NAME_MAX_LENGTH = 255
 
 
 def _json_error(error: str, description: str, status_code: int = 400) -> Response:
@@ -79,6 +87,74 @@ def _validate_resource_indicator(resource: str, allowed_resources: list[str]) ->
     if allowed_resources and resource not in allowed_resources:
         return False
     return True
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Loopback hosts that may use plain http in a redirect_uri (RFC 8252)."""
+    return host == "127.0.0.1" or host == "localhost"
+
+
+# A registered host may only contain characters that are unambiguously part of
+# a DNS name or dotted-quad IP. This deliberately excludes spaces, ';', '*',
+# '@', and every other character that could smuggle extra tokens or directives
+# into the consent-page ``form-action`` CSP allowlist (see _consent_csp_headers)
+# or confuse a URL parser.
+_REDIRECT_HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
+
+
+def _redirect_uri_origin(uri: str) -> str | None:
+    """Return the safe ``scheme://host[:port]`` origin of a redirect_uri.
+
+    Returns ``None`` when the URI cannot be reduced to a trustworthy origin —
+    the single choke point both the registration validator and the consent CSP
+    builder rely on so neither can be fed an origin that injects CSP tokens.
+
+    Rejected: URIs with any whitespace/control character (which URL parsers
+    silently strip, letting a newline smuggle a second, unvalidated URI through
+    the newline-delimited ``redirect_uris`` storage), embedded userinfo
+    (``user:pass@host``), a host outside :data:`_REDIRECT_HOST_RE`, or an
+    unparseable port.
+    """
+    if not uri or any(character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F for character in uri):
+        return None
+    parts = urlsplit(uri)
+    if not parts.scheme or not parts.netloc:
+        return None
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+        return None
+    host = parts.hostname
+    if not host or not _REDIRECT_HOST_RE.match(host):
+        return None
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    origin = f"{parts.scheme}://{host}"
+    if port is not None:
+        origin = f"{origin}:{port}"
+    return origin
+
+
+def _validate_registration_redirect_uri(uri: str) -> bool:
+    """Validate a redirect_uri submitted to Dynamic Client Registration.
+
+    Hardening rules (audited): the URI must reduce to a safe origin (see
+    :func:`_redirect_uri_origin` — absolute, no whitespace/control chars, no
+    embedded credentials, strict host charset), carry no fragment, and use
+    ``https`` — the sole exception being loopback ``http://127.0.0.1`` /
+    ``http://localhost`` (with an optional port), which native/CLI clients rely
+    on. Anything else is rejected.
+    """
+    if _redirect_uri_origin(uri) is None:
+        return False
+    parts = urlsplit(uri)
+    if parts.fragment:
+        return False
+    if parts.scheme == "https":
+        return True
+    if parts.scheme == "http":
+        return _is_loopback_host(parts.hostname or "")
+    return False
 
 
 async def verify_oauth_token(token: str, secret: str, db_session: AsyncSession) -> dict | None:
@@ -224,8 +300,13 @@ class OAuth2Controller(Controller):
         if not security.enabled or not security.content_security_policy:
             return {}
 
-        parts = urlsplit(redirect_uri)
-        origin = f"{parts.scheme}://{parts.netloc}"
+        # Build the form-action source from a sanitized origin, never the raw
+        # redirect_uri. A host containing a space, ';' or '*' would otherwise
+        # inject extra CSP tokens/directives (e.g. widening form-action to '*').
+        # Fail closed: if the origin cannot be trusted, don't widen the policy.
+        origin = _redirect_uri_origin(redirect_uri)
+        if origin is None:
+            return {}
         csp = add_form_action_source(security.content_security_policy, origin)
 
         # The middleware skips its own CSP (and nonce injection) once a response
@@ -395,6 +476,10 @@ class OAuth2Controller(Controller):
         }
         refresh_token = create_signed_token(refresh_payload, settings.secret_key, REFRESH_TOKEN_TTL)
 
+        # Stamp liveness so the dynamic-client pruning job never retires a
+        # client that has actually issued a token.
+        await oauth2_service.mark_client_used(db_session, client, datetime.now(tz=timezone.utc))
+
         return Response(
             content={
                 "access_token": access_token,
@@ -527,6 +612,9 @@ class OAuth2Controller(Controller):
         }
         new_refresh_token = create_signed_token(refresh_payload, settings.secret_key, REFRESH_TOKEN_TTL)
 
+        # Stamp liveness so refreshed dynamic clients stay out of the pruner.
+        await oauth2_service.mark_client_used(db_session, client, datetime.now(tz=timezone.utc))
+
         return Response(
             content={
                 "access_token": access_token,
@@ -536,6 +624,98 @@ class OAuth2Controller(Controller):
                 "scope": effective_scope,
             },
             status_code=200,
+            media_type="application/json",
+        )
+
+    @post("/register")
+    async def register(self, request: Request, db_session: AsyncSession) -> Response:
+        """Dynamic Client Registration endpoint (RFC 7591).
+
+        Machine clients (e.g. Claude custom connectors) self-register a public
+        client here. The route is CSRF-exempt like ``/oauth/token`` — there is
+        no browser session to protect — and 404s unless dynamic registration is
+        explicitly enabled on top of ``oauth2_enabled``.
+        """
+        settings = get_settings()
+        if not settings.oauth2_enabled or not settings.oauth2_dynamic_registration_enabled:
+            raise NotFoundException()
+
+        try:
+            body = await request.json()
+        except ValueError:
+            return _json_error("invalid_client_metadata", "Request body must be valid JSON")
+
+        if not isinstance(body, dict):
+            return _json_error("invalid_client_metadata", "Request body must be a JSON object")
+
+        redirect_uris = body.get("redirect_uris")
+        if not isinstance(redirect_uris, list) or not redirect_uris:
+            return _json_error("invalid_client_metadata", "redirect_uris is required")
+        if not all(isinstance(uri, str) for uri in redirect_uris):
+            return _json_error("invalid_redirect_uri", "Each redirect_uri must be a string")
+        for uri in redirect_uris:
+            if not _validate_registration_redirect_uri(uri):
+                return _json_error("invalid_redirect_uri", f"Invalid redirect_uri: {uri}")
+
+        # Public DCR only: the sole accepted auth method is `none` (PKCE).
+        auth_method = body.get("token_endpoint_auth_method", "none")
+        if auth_method != "none":
+            return _json_error(
+                "invalid_client_metadata", "token_endpoint_auth_method must be 'none'"
+            )
+
+        grant_types = body.get("grant_types") or ["authorization_code", "refresh_token"]
+        response_types = body.get("response_types") or ["code"]
+
+        client_name = body.get("client_name", "")
+        if not isinstance(client_name, str):
+            return _json_error("invalid_client_metadata", "client_name must be a string")
+        display_name = client_name[:CLIENT_NAME_MAX_LENGTH].strip() or "Dynamic Client"
+
+        scope = body.get("scope", "")
+        if not isinstance(scope, str):
+            return _json_error("invalid_client_metadata", "scope must be a string")
+        requested_scopes = scope.split()
+        for requested_scope in requested_scopes:
+            if requested_scope not in SCOPE_DEFINITIONS:
+                return _json_error("invalid_client_metadata", f"Unknown scope: {requested_scope}")
+
+        # Per-IP registration cap — counts this IP's recent dynamic clients and
+        # rejects once it reaches the configured limit within the window.
+        client_ip = get_client_ip(request.scope)
+        now = datetime.now(tz=timezone.utc)
+        window_start = now - timedelta(seconds=settings.oauth2_dynamic_registration_ip_window_seconds)
+        recent = await oauth2_service.count_recent_dynamic_registrations(
+            db_session, client_ip, window_start
+        )
+        if recent >= settings.oauth2_dynamic_registration_ip_limit:
+            return _json_error(
+                "too_many_requests",
+                "Registration rate limit exceeded for this client",
+                status_code=429,
+            )
+
+        client = await oauth2_service.create_dynamic_client(
+            db_session,
+            display_name=display_name,
+            redirect_uris=redirect_uris,
+            allowed_scopes=requested_scopes,
+            registered_by_ip=client_ip,
+            issued_at=now,
+        )
+
+        return Response(
+            content={
+                "client_id": client.client_id,
+                "client_id_issued_at": int(now.timestamp()),
+                "token_endpoint_auth_method": "none",
+                "grant_types": grant_types,
+                "response_types": response_types,
+                "redirect_uris": client.redirect_uri_list,
+                "client_name": display_name,
+                "scope": " ".join(requested_scopes),
+            },
+            status_code=201,
             media_type="application/json",
         )
 
