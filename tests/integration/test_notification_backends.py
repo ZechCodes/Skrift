@@ -132,7 +132,7 @@ class TestNotificationBackends:
         items = await drain_queue(q)
         assert len(items) == 1
         assert items[0].type == "dismissed"
-        assert items[0].id == n.id
+        assert items[0].payload["notification_id"] == str(n.id)
 
         # Notification still in storage but dismissed for subscriber
         queued = await backend_a.get_queued_multi(["session:sess-1"])
