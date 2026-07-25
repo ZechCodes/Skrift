@@ -350,9 +350,11 @@ class OAuth2Controller(Controller):
         for s in requested_scopes:
             defn = SCOPE_DEFINITIONS.get(s)
             if defn:
-                scope_descriptions.append({"name": s, "description": defn.description})
+                scope_descriptions.append(
+                    {"name": s, "description": defn.description, "required": defn.required}
+                )
             else:
-                scope_descriptions.append({"name": s, "description": s})
+                scope_descriptions.append({"name": s, "description": s, "required": False})
 
         return TemplateResponse(
             "oauth/authorize.html",
@@ -443,9 +445,24 @@ class OAuth2Controller(Controller):
         if not granted_scopes.issubset(requested_scopes):
             return _json_error("invalid_scope", "Granted scope exceeds the requested scope")
 
+        # Required scopes are not user-declinable: the consent screen renders
+        # them locked, but a locked checkbox submits nothing and a tampered
+        # form could strip the accompanying hidden field, so they are
+        # re-asserted here. Only requested scopes are ever added — the request
+        # stays the ceiling, so a required scope the client never asked for is
+        # not smuggled into the grant.
+        granted_scopes |= {
+            requested_scope
+            for requested_scope in requested_scopes
+            if (definition := SCOPE_DEFINITIONS.get(requested_scope)) and definition.required
+        }
+
         # Approving while keeping nothing grants nothing, which is the same
         # answer as denying — never an empty-scope token. A request that asked
         # for no scopes at all has nothing to decline and still approves.
+        # Keeping only required scopes is an approval: declining the rest is
+        # what the checkboxes are for, and refusing those too is the Deny
+        # button's job.
         if requested_scopes and not granted_scopes:
             return _consent_denied_redirect(redirect_uri, state)
 

@@ -32,6 +32,17 @@
         accent-color: #16a34a;
     }
 
+    .scope-option:has(input:disabled) {
+        cursor: default;
+    }
+
+    .scope-required-hint {
+        display: block;
+        font-size: 0.85em;
+        font-style: normal;
+        color: var(--sk-color-text-muted, #6b7280);
+    }
+
     .client-name {
         font-weight: 600;
         color: var(--sk-color-primary, #2563eb);
@@ -94,8 +105,19 @@
                 {% for scope in scope_descriptions %}
                 <li>
                     <label class="scope-option">
+                        {% if scope.required %}
+                        {# A disabled checkbox submits nothing, so the value
+                           rides in a hidden field; the server re-asserts
+                           required scopes regardless. #}
+                        <input type="checkbox" checked disabled>
+                        <input type="hidden" name="scope" value="{{ scope.name }}">
+                        <span>{{ scope.description }}
+                            <em class="scope-required-hint">Required — the other permissions depend on it</em>
+                        </span>
+                        {% else %}
                         <input type="checkbox" name="scope" value="{{ scope.name }}" checked>
                         <span>{{ scope.description }}</span>
+                        {% endif %}
                     </label>
                 </li>
                 {% endfor %}

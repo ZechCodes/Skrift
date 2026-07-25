@@ -22,6 +22,7 @@ from markupsafe import Markup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from skrift.auth.scopes import SCOPE_DEFINITIONS, register_scope
 from skrift.auth.tokens import verify_signed_token
 from skrift.config import SecurityHeadersConfig
 from skrift.controllers.oauth2 import OAuth2Controller
@@ -682,3 +683,151 @@ class TestClientDeletionCascade:
         )
         assert deleted == 1
         assert await oauth2_consent_service.find_grant(db_session, USER_ID, client.client_id) is None
+
+
+class TestRequiredScopes:
+    """Issue #171 — an app can mark a scope as not user-declinable."""
+
+    @pytest.fixture(autouse=True)
+    def scope_registry(self):
+        saved = dict(SCOPE_DEFINITIONS)
+        register_scope("documents.read", "View your documents", required=True)
+        register_scope("documents.create", "Create documents")
+        register_scope("documents.delete", "Delete documents")
+        yield
+        SCOPE_DEFINITIONS.clear()
+        SCOPE_DEFINITIONS.update(saved)
+
+    def test_register_scope_stores_the_required_flag(self):
+        assert SCOPE_DEFINITIONS["documents.read"].required is True
+        assert SCOPE_DEFINITIONS["documents.create"].required is False
+
+    def test_scopes_default_to_optional(self):
+        definition = register_scope("temp.scope", "Temporary")
+        assert definition.required is False
+
+    @pytest.mark.asyncio
+    async def test_authorize_get_marks_required_scopes_for_the_template(self, db_session):
+        client = await _make_client(db_session)
+        request = _authorize_get_request(client.client_id, "documents.read documents.create")
+
+        response = await _authorize_get(db_session, request)
+
+        assert isinstance(response, TemplateResponse)
+        by_name = {entry["name"]: entry for entry in response.context["scope_descriptions"]}
+        assert by_name["documents.read"]["required"] is True
+        assert by_name["documents.create"]["required"] is False
+
+    @pytest.mark.asyncio
+    async def test_unregistered_scopes_never_reach_the_consent_screen(self, db_session):
+        """Unknown scopes are rejected before consent, so required-ness never
+        needs answering for them."""
+        client = await _make_client(db_session)
+        request = _authorize_get_request(client.client_id, "unregistered.scope")
+
+        response = await _authorize_get(db_session, request)
+
+        assert not isinstance(response, TemplateResponse)
+        assert response.content["error"] == "invalid_scope"
+
+    @pytest.mark.asyncio
+    async def test_stripping_the_required_scope_cannot_decline_it(self, db_session):
+        """A tampered form that drops the required scope's field still grants it."""
+        client = await _make_client(db_session)
+        request = _consent_post_request(
+            client.client_id,
+            "documents.read documents.create",
+            ["documents.create"],
+        )
+
+        response = await _authorize_post(db_session, request)
+
+        assert isinstance(response, Redirect)
+        grant = await oauth2_consent_service.find_grant(db_session, USER_ID, client.client_id)
+        assert "documents.read" in grant.scope_list
+        assert "documents.create" in grant.scope_list
+
+    @pytest.mark.asyncio
+    async def test_unchecking_all_optional_scopes_grants_the_required_set(self, db_session):
+        """Keeping only required scopes is an approval, not a denial."""
+        client = await _make_client(db_session)
+        request = _consent_post_request(
+            client.client_id,
+            "documents.read documents.create documents.delete",
+            [],
+        )
+
+        response = await _authorize_post(db_session, request)
+
+        assert isinstance(response, Redirect)
+        query = parse_qs(urlsplit(response.url).query)
+        assert "code" in query
+        assert "error" not in query
+        grant = await oauth2_consent_service.find_grant(db_session, USER_ID, client.client_id)
+        assert grant.scope_list == ["documents.read"]
+
+    @pytest.mark.asyncio
+    async def test_required_scope_is_never_recorded_as_declined(self, db_session):
+        """Re-consent must not strip a required scope via declined_scopes."""
+        client = await _make_client(db_session)
+        first = _consent_post_request(
+            client.client_id,
+            "documents.read documents.create",
+            ["documents.read", "documents.create"],
+        )
+        await _authorize_post(db_session, first)
+
+        second = _consent_post_request(client.client_id, "documents.read documents.create", [])
+        await _authorize_post(db_session, second)
+
+        grant = await oauth2_consent_service.find_grant(db_session, USER_ID, client.client_id)
+        assert "documents.read" in grant.scope_list
+        assert "documents.create" not in grant.scope_list
+
+    @pytest.mark.asyncio
+    async def test_required_scope_outside_the_request_is_not_added(self, db_session):
+        """required only unions scopes the client actually requested."""
+        client = await _make_client(db_session)
+        request = _consent_post_request(
+            client.client_id, "documents.create", ["documents.create"]
+        )
+
+        response = await _authorize_post(db_session, request)
+
+        assert isinstance(response, Redirect)
+        grant = await oauth2_consent_service.find_grant(db_session, USER_ID, client.client_id)
+        assert grant.scope_list == ["documents.create"]
+
+    @pytest.mark.asyncio
+    async def test_deny_button_still_denies_a_required_scope_request(self, db_session):
+        client = await _make_client(db_session)
+        request = _consent_post_request(
+            client.client_id,
+            "documents.read documents.create",
+            ["documents.read", "documents.create"],
+            action="deny",
+        )
+
+        response = await _authorize_post(db_session, request)
+
+        assert isinstance(response, Redirect)
+        query = parse_qs(urlsplit(response.url).query)
+        assert query["error"] == ["access_denied"]
+        assert await oauth2_consent_service.find_grant(db_session, USER_ID, client.client_id) is None
+
+    def test_required_scope_renders_locked_with_a_hidden_field(self):
+        html = TestConsentTemplateCheckboxes._render(
+            client_id="abc",
+            display_name="Consent App",
+            scopes=["documents.read", "documents.create"],
+            scope_descriptions=[
+                {"name": "documents.read", "description": "View your documents", "required": True},
+                {"name": "documents.create", "description": "Create documents", "required": False},
+            ],
+        )
+
+        assert 'type="checkbox" checked disabled' in html
+        assert 'type="hidden" name="scope" value="documents.read"' in html
+        assert 'name="scope" value="documents.create" checked' in html
+        assert "disabled" not in html.split("documents.create")[1].split("</label>")[0]
+        assert "Required" in html
