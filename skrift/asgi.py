@@ -27,9 +27,8 @@ from advanced_alchemy.extensions.litestar import (
 
 from skrift.db.session import SessionCleanupMiddleware
 from litestar import Litestar
-from litestar.config.compression import CompressionConfig
 
-from skrift.middleware.compression import SafeGzipCompression
+from skrift.middleware.compression import build_compression_middleware
 from litestar.middleware import DefineMiddleware
 from litestar.types import ASGIApp, Receive, Scope, Send
 
@@ -42,7 +41,15 @@ from skrift.app_factory import (
     get_template_directories,
     update_template_directories,
 )
-from skrift.config import DatabaseConfig, get_config_path, get_settings, is_config_valid
+from skrift.config import (
+    CompressionConfig,
+    DEFAULT_MAX_REQUEST_BODY_SIZE,
+    DatabaseConfig,
+    get_config_path,
+    get_settings,
+    is_config_valid,
+    resolve_request_max_body_size,
+)
 from skrift.db.services.asset_service import internal_asset_url
 from skrift.ratelimit import RateLimiter, set_limiter
 from skrift.lib.trusted_proxy import TrustedProxyManager
@@ -649,6 +656,7 @@ def _build_site_app(
         route_handlers=controllers,
         plugins=[SQLAlchemyPlugin(config=db_config)],
         middleware=[
+            *build_compression_middleware(settings.compression),
             DefineMiddleware(SessionCleanupMiddleware),
             *client_ip_middleware,
             *security_middleware,
@@ -657,8 +665,8 @@ def _build_site_app(
             *user_middleware,
         ],
         template_config=template_config,
-        compression_config=CompressionConfig(backend="gzip", compression_facade=SafeGzipCompression),
         exception_handlers=EXCEPTION_HANDLERS,
+        request_max_body_size=resolve_request_max_body_size(settings),
         debug=settings.debug,
     )
     site_app.state.storage_manager = storage_manager
@@ -1186,10 +1194,10 @@ def create_app() -> ASGIApp:
         on_shutdown=[on_shutdown],
         route_handlers=[NotificationsController, SitemapController, AccountController, *oauth2_handlers, *api_auth_handlers, *republish_handlers, *webhook_handlers, *bot_detection_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, *bot_detection_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
+        middleware=[*build_compression_middleware(settings.compression), DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, *bot_detection_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
         template_config=template_config,
-        compression_config=CompressionConfig(backend="gzip", exclude="/notifications/stream", compression_facade=SafeGzipCompression),
         exception_handlers=EXCEPTION_HANDLERS,
+        request_max_body_size=resolve_request_max_body_size(settings),
         debug=settings.debug,
     )
     app.state.webhook_secret = settings.notifications.webhook_secret
@@ -1314,6 +1322,9 @@ def create_setup_app() -> Litestar:
     class MinimalSettings(BaseSettings):
         debug: bool = True
         secret_key: str = "setup-wizard-temporary-secret-key-change-me"
+        compression: CompressionConfig = CompressionConfig()
+        # The setup wizard has no upload routes, so the plain floor applies.
+        max_request_body_size: int = DEFAULT_MAX_REQUEST_BODY_SIZE
 
     settings = MinimalSettings()
 
@@ -1439,10 +1450,10 @@ def create_setup_app() -> Litestar:
         on_startup=[on_startup],
         route_handlers=route_handlers,
         plugins=plugins,
-        middleware=[DefineMiddleware(SessionCleanupMiddleware), session_config.middleware],
+        middleware=[*build_compression_middleware(settings.compression), DefineMiddleware(SessionCleanupMiddleware), session_config.middleware],
         template_config=template_config,
-        compression_config=CompressionConfig(backend="gzip", compression_facade=SafeGzipCompression),
         exception_handlers=EXCEPTION_HANDLERS,
+        request_max_body_size=settings.max_request_body_size,
         debug=settings.debug,
     )
     return StaticFilesMiddleware(

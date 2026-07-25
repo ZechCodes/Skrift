@@ -149,8 +149,8 @@ async def _assert_queue_contract(queue) -> None:
     assert claimed is not None
     assert claimed.job.id == delayed.id
     await asyncio.sleep(0.02)
-    if isinstance(queue, SQLAlchemyQueue):
-        await queue._release_expired_claims(utcnow())
+    # Every queue backend exposes the same reaper entry point the runtime drives.
+    await queue._release_expired_claims(utcnow())
     reclaimed = await queue.claim(["default"], visibility_timeout=1)
     assert reclaimed is not None
     assert reclaimed.job.id == delayed.id

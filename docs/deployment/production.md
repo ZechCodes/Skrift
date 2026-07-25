@@ -122,8 +122,10 @@ Environment="SECRET_KEY=your-secure-secret-key"
 Environment="DATABASE_URL=postgresql+asyncpg://skrift:your-secure-password@localhost:5432/skrift"
 Environment="GOOGLE_CLIENT_ID=your-production-client-id"
 Environment="GOOGLE_CLIENT_SECRET=your-production-client-secret"
+# glibc Linux: cap per-thread malloc arenas so freed memory is returned to the OS
+Environment="MALLOC_ARENA_MAX=2"
 ExecStart=/home/skrift/app/venv/bin/hypercorn skrift.asgi:app \
-    --workers 4 \
+    --workers 2 \
     --bind 127.0.0.1:8000 \
     --access-logfile /var/log/skrift/access.log \
     --error-logfile /var/log/skrift/error.log
@@ -133,6 +135,12 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
+
+!!! warning "Workers cost memory"
+    Each worker is a full Python process using roughly **150MB of RSS** with nothing
+    shared between them. Two workers is ~300MB before serving a single request. Size
+    the worker count against available RAM first (see
+    [Worker Count and Memory](#worker-count-and-memory)), not against CPU cores.
 
 Generate a secure secret key:
 
@@ -267,15 +275,44 @@ psql -U skrift skrift < backup_20240101.sql
 
 ## Performance Tuning
 
-### Gunicorn Workers
+### Worker Count and Memory
 
-Adjust workers based on CPU cores:
+Workers are **separate processes**, not threads: nothing is shared between them, so
+memory scales linearly with the worker count. A single Skrift worker measures
+**~135-155MB RSS** once warm, so budget ~150MB per worker plus headroom for the OS
+and any background worker processes.
+
+| Available RAM | Recommended `--workers` |
+|---------------|-------------------------|
+| 512MB | 1 (2 only if nothing else runs on the box) |
+| 1GB | 2 |
+| 2GB | 3-4 |
+
+Skrift is async, so one worker already handles many concurrent connections. Add
+workers to use additional CPU cores, staying within both the RAM budget above and
+the CPU core count.
+
+Each worker also opens **its own database connection pool** (`db.pool_size` 5 plus
+`db.pool_overflow` 10, so up to 15 connections per process). Four workers can therefore
+demand 60 PostgreSQL connections; keep the total below `max_connections` or put
+PgBouncer in front.
 
 ```bash
-# Rule: 2-4 workers per core
-# For 2 cores: 4-8 workers
-gunicorn ... -w 4
+# 1GB server, 2 cores
+skrift serve --workers 2 --host 127.0.0.1 --port 8000
 ```
+
+`skrift serve --workers N` spawns N real worker processes. `--reload` is
+development-only and always runs a single worker.
+
+!!! tip "Reduce per-process memory"
+    - **Set `MALLOC_ARENA_MAX=2`** in the systemd unit or container environment on
+      glibc Linux. Without it glibc creates up to 8 arenas per core per process,
+      which inflates RSS considerably and rarely returns freed memory to the OS.
+    - **Terminate response compression at the reverse proxy or CDN** (nginx `gzip on;`)
+      rather than in the application. In-app gzip buffers response bodies per request
+      in every worker process; moving it to the edge substantially lowers per-process
+      memory.
 
 ### PostgreSQL Tuning
 

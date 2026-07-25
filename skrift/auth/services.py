@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -17,9 +18,12 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-# Cache for user permissions with TTL
-_permission_cache: dict[str, tuple[datetime, "UserPermissions"]] = {}
+# Cache for user permissions: TTL for freshness, LRU cap for memory. The TTL
+# alone can't bound it — a user who never comes back is never read again, so
+# their entry would sit there forever. Least-recently-used entries sit first.
+_permission_cache: OrderedDict[str, tuple[datetime, "UserPermissions"]] = OrderedDict()
 CACHE_TTL = timedelta(minutes=5)
+MAX_PERMISSION_CACHE_ENTRIES = 10_000
 
 
 @dataclass
@@ -31,12 +35,34 @@ class UserPermissions:
     permissions: set[str] = field(default_factory=set)
 
 
+def _purge_expired_permissions(now: datetime) -> None:
+    """Drop lapsed entries from the front, stopping at the first live one.
+
+    Opportunistic: entries that were pushed to the back by a recent read may
+    outlive their TTL until the LRU cap reaches them. That's fine — the TTL is
+    still checked on every read, so a stale entry is never served.
+    """
+    while _permission_cache:
+        oldest_user_id = next(iter(_permission_cache))
+        cached_time, _ = _permission_cache[oldest_user_id]
+        if now - cached_time < CACHE_TTL:
+            return
+        del _permission_cache[oldest_user_id]
+
+
+def _evict_permissions_over_capacity() -> None:
+    """Drop least-recently-used entries until the cache fits its cap."""
+    while len(_permission_cache) > MAX_PERMISSION_CACHE_ENTRIES:
+        _permission_cache.popitem(last=False)
+
+
 async def get_user_permissions(
     session: "AsyncSession", user_id: str | UUID
 ) -> UserPermissions:
     """Get all permissions and roles for a user.
 
-    Results are cached with a TTL for performance.
+    Results are cached with a TTL for performance; the cache is capped at
+    ``MAX_PERMISSION_CACHE_ENTRIES`` and evicts least-recently-used entries.
     """
     user_id_str = str(user_id)
     user_id_uuid = user_id if isinstance(user_id, UUID) else UUID(user_id)
@@ -45,6 +71,7 @@ async def get_user_permissions(
     if user_id_str in _permission_cache:
         cached_time, cached_perms = _permission_cache[user_id_str]
         if datetime.now() - cached_time < CACHE_TTL:
+            _permission_cache.move_to_end(user_id_str)
             return cached_perms
 
     # Query user with roles and permissions
@@ -66,7 +93,11 @@ async def get_user_permissions(
                 permissions.permissions.add(role_perm.permission)
 
     # Update cache
-    _permission_cache[user_id_str] = (datetime.now(), permissions)
+    cached_at = datetime.now()
+    _purge_expired_permissions(cached_at)
+    _permission_cache[user_id_str] = (cached_at, permissions)
+    _permission_cache.move_to_end(user_id_str)
+    _evict_permissions_over_capacity()
 
     return permissions
 

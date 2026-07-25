@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import islice
 from typing import Any
 from uuid import uuid4
 
@@ -18,8 +19,17 @@ from skrift.workers.models import (
     EventIdConflict,
     JobEnvelope,
     JobIdConflict,
+    JobState,
+    JobStatus,
     QueueStats,
 )
+
+# Streams live entirely in process memory, so they are capped the way the Redis
+# event log is capped by `retention.redis_event_max_entries`: newest events win
+# and the oldest are dropped once the cap is reached.
+DEFAULT_EVENT_STREAM_MAX_EVENTS = 10_000
+
+WORKER_JOB_STATE_PREFIX = "workers:jobs:"
 
 
 def _now() -> datetime:
@@ -87,29 +97,141 @@ class InMemoryStateStore:
                     del self._values[key]
             return sorted(key for key in self._values if key.startswith(prefix))
 
+    async def sweep_expired(self) -> int:
+        """Drop every expired entry and report how many were removed.
+
+        Reads skip expired entries without necessarily reclaiming them, so this
+        dedicated sweep — driven by the runtime's reaper timer — is what actually
+        frees the memory they hold.
+        """
+        async with self._lock:
+            expired = [key for key, stored in self._values.items() if self._is_expired(stored)]
+            for key in expired:
+                del self._values[key]
+            return len(expired)
+
+    async def worker_job_states(self, *, limit: int | None = None) -> tuple[list[JobState], int]:
+        """Return recent worker job states plus the total, in one pass."""
+        async with self._lock:
+            states = [
+                stored.value
+                for key, stored in self._values.items()
+                if key.startswith(WORKER_JOB_STATE_PREFIX)
+                and not self._is_expired(stored)
+                and isinstance(stored.value, JobState)
+            ]
+        states.sort(key=lambda state: state.updated_at, reverse=True)
+        return (states if limit is None else states[:limit]), len(states)
+
+    async def worker_job_counts(self) -> dict[str, int]:
+        """Return aggregate worker job counts without re-reading every entry."""
+        active_statuses = {JobStatus.CLAIMED, JobStatus.RUNNING, JobStatus.PAUSED}
+        states, total = await self.worker_job_states()
+        return {
+            "total": total,
+            "active": sum(state.status in active_statuses for state in states),
+        }
+
+
+class _EventStream:
+    """Bounded event buffer whose positions stay stable as old events drop out."""
+
+    def __init__(self, max_events: int) -> None:
+        self._events: deque[tuple[int, dict[str, Any]]] = deque(maxlen=max_events)
+        self._positions_by_event_id: dict[Any, int] = {}
+        self._next_position = 0
+
+    @property
+    def next_position(self) -> int:
+        return self._next_position
+
+    @property
+    def event_id_count(self) -> int:
+        return len(self._positions_by_event_id)
+
+    def find_by_event_id(self, event_id: Any) -> tuple[int, dict[str, Any]] | None:
+        position = self._positions_by_event_id.get(event_id)
+        return None if position is None else (position, self._at(position))
+
+    def append(self, event: dict[str, Any]) -> int:
+        position = self._next_position
+        evicted = self._events[0][1] if self._is_full() else None
+        self._events.append((position, dict(event)))
+        if evicted is not None:
+            self._forget_event_id(evicted)
+        event_id = event.get("event_id")
+        if event_id is not None:
+            self._positions_by_event_id[event_id] = position
+        self._next_position = position + 1
+        return position
+
+    def read(self, *, from_position: int, limit: int | None) -> list[tuple[int, dict[str, Any]]]:
+        start = max(0, from_position - self._start_position)
+        end = None if limit is None else start + limit
+        return [(position, dict(event)) for position, event in islice(self._events, start, end)]
+
+    def read_tail(self, *, limit: int) -> list[tuple[int, dict[str, Any]]]:
+        start = max(0, len(self._events) - limit)
+        return [(position, dict(event)) for position, event in islice(self._events, start, None)]
+
+    def _is_full(self) -> bool:
+        return bool(self._events) and len(self._events) == self._events.maxlen
+
+    @property
+    def _start_position(self) -> int:
+        return self._events[0][0] if self._events else self._next_position
+
+    def _at(self, position: int) -> dict[str, Any]:
+        return self._events[position - self._start_position][1]
+
+    def _forget_event_id(self, event: dict[str, Any]) -> None:
+        event_id = event.get("event_id")
+        if event_id is not None:
+            self._positions_by_event_id.pop(event_id, None)
+
 
 class InMemoryEventLog:
-    """Append-only event log with replay and live tail support."""
+    """Append-only event log with replay and live tail support.
+
+    Each stream keeps only its most recent ``max_events_per_stream`` events;
+    positions remain monotonic so cursors held by subscribers and the persister
+    stay meaningful after older events are dropped.
+    """
 
     capabilities = BackendCapabilities({"replay", "live_tail", "delete"})
 
-    def __init__(self) -> None:
-        self._streams: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    def __init__(
+        self, *, max_events_per_stream: int = DEFAULT_EVENT_STREAM_MAX_EVENTS
+    ) -> None:
+        self.max_events_per_stream = max_events_per_stream
+        self._streams: dict[str, _EventStream] = defaultdict(self._new_stream)
         self._condition = asyncio.Condition()
+
+    def _new_stream(self) -> _EventStream:
+        return _EventStream(self.max_events_per_stream)
+
+    def stream_event_id_count(self, stream: str) -> int:
+        """Number of ``event_id`` dedupe entries a stream currently retains.
+
+        The dedupe index is bounded by the stream itself, so this stays at or
+        below ``max_events_per_stream``.
+        """
+        events = self._streams.get(stream)
+        return 0 if events is None else events.event_id_count
 
     async def append(self, stream: str, event: dict[str, Any]) -> int:
         async with self._condition:
             event_id = event.get("event_id")
             if event_id is not None:
-                for position, existing in enumerate(self._streams.get(stream, [])):
-                    if existing.get("event_id") == event_id:
-                        if existing == event:
-                            return position
-                        raise EventIdConflict(
-                            f"event_id {event_id!r} already exists in stream {stream!r}"
-                        )
-            self._streams[stream].append(dict(event))
-            position = len(self._streams[stream]) - 1
+                existing = self._streams[stream].find_by_event_id(event_id)
+                if existing is not None:
+                    position, stored = existing
+                    if stored == event:
+                        return position
+                    raise EventIdConflict(
+                        f"event_id {event_id!r} already exists in stream {stream!r}"
+                    )
+            position = self._streams[stream].append(event)
             self._condition.notify_all()
             return position
 
@@ -117,12 +239,17 @@ class InMemoryEventLog:
         self, stream: str, *, from_position: int = 0, limit: int | None = None
     ) -> list[tuple[int, dict[str, Any]]]:
         async with self._condition:
-            events = self._streams.get(stream, [])
-            end = None if limit is None else from_position + limit
-            return [
-                (position, dict(event))
-                for position, event in enumerate(events[from_position:end], start=from_position)
-            ]
+            events = self._streams.get(stream)
+            if events is None:
+                return []
+            return events.read(from_position=from_position, limit=limit)
+
+    async def read_tail(self, stream: str, *, limit: int) -> list[tuple[int, dict[str, Any]]]:
+        if limit <= 0:
+            return []
+        async with self._condition:
+            events = self._streams.get(stream)
+            return [] if events is None else events.read_tail(limit=limit)
 
     async def read_filtered(
         self,
@@ -143,15 +270,19 @@ class InMemoryEventLog:
     async def subscribe(
         self, stream: str, *, from_position: int | None = None
     ) -> AsyncIterator[tuple[int, dict[str, Any]]]:
-        cursor = len(self._streams.get(stream, [])) if from_position is None else from_position
+        cursor = self._next_position(stream) if from_position is None else from_position
         while True:
             async with self._condition:
-                while cursor >= len(self._streams.get(stream, [])):
+                while cursor >= self._next_position(stream):
                     await self._condition.wait()
-                event = dict(self._streams[stream][cursor])
-                position = cursor
-                cursor += 1
+                # Events dropped by the size cap are skipped rather than replayed.
+                position, event = self._streams[stream].read(from_position=cursor, limit=1)[0]
+                cursor = position + 1
             yield position, event
+
+    def _next_position(self, stream: str) -> int:
+        events = self._streams.get(stream)
+        return 0 if events is None else events.next_position
 
     async def delete(self, stream: str) -> None:
         async with self._condition:
@@ -198,8 +329,17 @@ class InMemoryQueue:
             self._condition.notify_all()
             return job
 
-    def _release_expired_claims(self) -> None:
-        now = _now()
+    async def _release_expired_claims(self, now: datetime) -> None:
+        """Reclaim jobs whose visibility timeout lapsed, as of ``now``.
+
+        Mirrors the Redis and SQLAlchemy queues so the runtime reaper can drive
+        every backend through the same call.
+        """
+        async with self._condition:
+            self._release_expired_claims_locked(now)
+            self._condition.notify_all()
+
+    def _release_expired_claims_locked(self, now: datetime) -> None:
         for queue_entries in self._entries.values():
             for entry in queue_entries.values():
                 if (
@@ -229,7 +369,7 @@ class InMemoryQueue:
         self, queues: list[str], *, visibility_timeout: float
     ) -> ClaimedJob | None:
         async with self._condition:
-            self._release_expired_claims()
+            self._release_expired_claims_locked(_now())
             for queue in queues:
                 entry = self._claimable(queue)
                 if entry is None:
@@ -295,9 +435,9 @@ class InMemoryQueue:
 
     async def stats(self, queue: str) -> QueueStats:
         async with self._condition:
-            self._release_expired_claims()
-            stats = QueueStats(queue=queue)
             now = _now()
+            self._release_expired_claims_locked(now)
+            stats = QueueStats(queue=queue)
             for entry in self._entries.get(queue, {}).values():
                 if entry.dead_lettered:
                     stats.dead_lettered += 1

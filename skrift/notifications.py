@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -28,6 +29,13 @@ from skrift.hooks import hooks, NOTIFICATION_PRE_SEND, NOTIFICATION_SENT, NOTIFI
 
 if TYPE_CHECKING:
     from skrift.lib.notification_backends import NotificationBackend
+
+logger = logging.getLogger(__name__)
+
+# Upper bound on undelivered notifications held for a single SSE connection.
+# A stalled client drops its oldest pending notifications instead of growing
+# memory; stored notifications are re-flushed when the client reconnects.
+SSE_QUEUE_MAXSIZE = 100
 
 
 class NotificationMode(str, Enum):
@@ -92,6 +100,23 @@ def _parse_source_key(source_key: str) -> tuple[str, str | None]:
     return (source_key, None)
 
 
+def _put_dropping_oldest(queue: asyncio.Queue, notification: Notification) -> None:
+    """Enqueue *notification*, discarding the oldest entry when the queue is full.
+
+    Bounded listener queues give slow SSE clients backpressure: the newest
+    notification always wins, so a stalled connection costs a fixed amount of
+    memory rather than one entry per broadcast.
+    """
+    if queue.full():
+        dropped = queue.get_nowait()
+        logger.warning(
+            "SSE listener queue full — dropped notification %s (type=%s)",
+            dropped.id,
+            dropped.type,
+        )
+    queue.put_nowait(notification)
+
+
 class SourceRegistry:
     """In-memory subscription DAG and listener registry.
 
@@ -122,6 +147,10 @@ class SourceRegistry:
 
     def has_listeners(self, source_key: str) -> bool:
         return bool(self._listeners.get(source_key))
+
+    def has_subscribers(self, source_key: str) -> bool:
+        """True while any child still subscribes to *source_key*."""
+        return bool(self._subscribers.get(source_key))
 
     def subscribe(self, child: str, parent: str) -> None:
         """Add an edge: child subscribes to parent (idempotent)."""
@@ -184,7 +213,7 @@ class SourceRegistry:
         targets = self.resolve_downstream(source_key)
         for target in targets:
             for q in self._listeners.get(target, ()):
-                q.put_nowait(notification)
+                _put_dropping_oldest(q, notification)
 
 
 class NotificationService:
@@ -199,6 +228,7 @@ class NotificationService:
         self._backend: NotificationBackend | None = None
         self._publisher_id: str = str(uuid4())
         self._loaded_user_subs: set[str] = set()
+        self._session_users: dict[str, str] = {}  # session_key -> user_key
 
     def set_backend(self, backend: NotificationBackend) -> None:
         self._backend = backend
@@ -388,16 +418,17 @@ class NotificationService:
         Sets up ephemeral graph edges and loads persistent subscriptions.
         """
         session_key = f"session:{nid}"
-        q: asyncio.Queue = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue(maxsize=SSE_QUEUE_MAXSIZE)
 
         # Ephemeral edges: session -> global, session -> user, user -> global
         self._registry.subscribe(session_key, "global")
         if user_id:
             user_key = f"user:{user_id}"
+            self._session_users[session_key] = user_key
             self._registry.subscribe(session_key, user_key)
             self._registry.subscribe(user_key, "global")
 
-            # Load persistent subscriptions for this user (once per process)
+            # Load persistent subscriptions while the user has a live connection
             if user_key not in self._loaded_user_subs:
                 self._loaded_user_subs.add(user_key)
                 backend = self._get_backend()
@@ -409,13 +440,23 @@ class NotificationService:
         return q
 
     def unregister_connection(self, nid: str, q: asyncio.Queue) -> None:
-        """Remove a connection on disconnect."""
+        """Remove a connection on disconnect and tear down its ephemeral edges."""
         session_key = f"session:{nid}"
         self._registry.remove_listener(session_key, q)
 
-        # If no more listeners on this session, tear down ephemeral edges
-        if not self._registry.has_listeners(session_key):
-            self._registry.unsubscribe_all(session_key)
+        # Other connections for this session keep the edges alive
+        if self._registry.has_listeners(session_key):
+            return
+
+        self._registry.unsubscribe_all(session_key)
+
+        # When the user's last session goes away, drop the ``user:{id}`` edges
+        # (global + persistent subscriptions) so they don't accumulate. They are
+        # reloaded from the backend on the user's next connection.
+        user_key = self._session_users.pop(session_key, None)
+        if user_key and not self._registry.has_subscribers(user_key):
+            self._registry.unsubscribe_all(user_key)
+            self._loaded_user_subs.discard(user_key)
 
     async def subscribe(self, subscriber_key: str, source_key: str) -> None:
         """Add a persistent subscription (DB + local graph)."""

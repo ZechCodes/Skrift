@@ -70,24 +70,26 @@ class SitemapController(Controller):
         """Generate sitemap.xml with published pages."""
         base_url = _get_base_url(request)
 
-        # Get all published pages (respects scheduling)
-        pages = await page_service.list_pages(db_session, published_only=True)
+        # Published pages (respects scheduling), projected down to the columns
+        # used below — this route is public and crawled, so it must never pull
+        # page bodies or asset relationships into memory.
+        page_rows = await page_service.list_page_sitemap_entries(db_session)
 
         entries: list[SitemapEntry] = []
 
-        for page in pages:
-            slug = page.slug.strip("/")
+        for page_row in page_rows:
+            slug = page_row.slug.strip("/")
             loc = f"{base_url}/{slug}" if slug else base_url
 
             entry = SitemapEntry(
                 loc=loc,
-                lastmod=page.updated_at or page.created_at,
+                lastmod=page_row.updated_at or page_row.created_at,
                 changefreq="weekly",
                 priority=0.8 if slug else 1.0,  # Home page gets higher priority
             )
 
             # Apply sitemap_page filter (can return None to exclude)
-            entry = await hooks.apply_filters(SITEMAP_PAGE, entry, page)
+            entry = await hooks.apply_filters(SITEMAP_PAGE, entry, page_row)
             if entry is not None:
                 entries.append(entry)
 

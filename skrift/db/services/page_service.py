@@ -1,5 +1,6 @@
 """Page service for CRUD operations on pages."""
 
+from dataclasses import dataclass
 from datetime import datetime, UTC
 from typing import Literal
 from uuid import UUID
@@ -14,6 +15,24 @@ from skrift.hooks import hooks, BEFORE_PAGE_SAVE, AFTER_PAGE_SAVE, BEFORE_PAGE_D
 
 
 OrderBy = Literal["order", "created", "published", "title"]
+
+SITEMAP_MAX_URLS = 50_000
+"""Sitemap protocol maximum URLs per file; also bounds the query's memory."""
+
+
+@dataclass(frozen=True, slots=True)
+class PageSitemapEntry:
+    """The only page columns ``/sitemap.xml`` reads.
+
+    Deliberately not a :class:`~skrift.db.models.Page`: loading mapped entities
+    would pull every page body (``Page.content`` is a ``Text`` column) and fan
+    out the ``selectin`` relationships into memory for a publicly reachable,
+    crawler-hammered route.
+    """
+
+    slug: str
+    updated_at: datetime | None
+    created_at: datetime | None
 
 
 def _published_filters() -> list:
@@ -79,6 +98,44 @@ async def list_pages(
 
     result = await db_session.execute(query)
     return list(result.scalars().all())
+
+
+async def list_page_sitemap_entries(
+    db_session: AsyncSession,
+    limit: int = SITEMAP_MAX_URLS,
+) -> list[PageSitemapEntry]:
+    """List published pages as projected sitemap rows.
+
+    Selects columns rather than the mapped entity, so neither page bodies nor
+    the ``selectin`` relationships are ever materialized. Ordering matches
+    :func:`list_pages` with its default ``order_by`` so sitemap output is
+    unchanged.
+
+    Args:
+        db_session: Database session
+        limit: Maximum number of rows to return
+
+    Returns:
+        List of PageSitemapEntry rows, at most ``limit`` of them
+
+    Raises:
+        ValueError: If ``limit`` is not positive
+    """
+    if limit <= 0:
+        raise ValueError(f"Sitemap entry limit must be positive, got {limit}")
+
+    query = (
+        select(Page.slug, Page.updated_at, Page.created_at)
+        .where(and_(*_published_filters()))
+        .order_by(Page.order.asc(), Page.created_at.desc())
+        .limit(limit)
+    )
+
+    result = await db_session.execute(query)
+    return [
+        PageSitemapEntry(slug=slug, updated_at=updated_at, created_at=created_at)
+        for slug, updated_at, created_at in result
+    ]
 
 
 async def get_page_by_slug(

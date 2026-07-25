@@ -7,7 +7,9 @@ a process-local dict (for single-process deployments and tests) or
 Redis (for multi-process / multi-replica deployments).
 
 The store carries opaque string values keyed by ``(namespace, key)``
-tuples. Time-to-live is enforced lazily for the in-memory backend.
+tuples. Time-to-live is enforced lazily for the in-memory backend, which
+also sweeps expired entries and caps its size so abandoned client state
+can't accumulate.
 """
 
 from __future__ import annotations
@@ -28,15 +30,34 @@ class BotStateStore(Protocol):
     async def delete(self, namespace: str, key: str) -> None: ...
 
 
+DEFAULT_SWEEP_EVERY = 256
+DEFAULT_MAX_ENTRIES = 50_000
+
+
 class InMemoryBotStateStore:
     """Process-local store backed by a dict. Not safe across replicas.
 
     TTLs are enforced lazily on read; expired entries are dropped on
-    access.
+    access. Keys are client identities (usually IPs), and a client that
+    trips one metric and never comes back is never read again — so
+    reads alone can't keep the dict bounded. Two guards do:
+
+    * every ``sweep_every`` writes, expired entries are dropped in one
+      amortized pass;
+    * past ``max_entries`` live entries, the oldest writes are evicted.
+      Evicting live state only means that client is measured afresh.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        sweep_every: int = DEFAULT_SWEEP_EVERY,
+        max_entries: int = DEFAULT_MAX_ENTRIES,
+    ) -> None:
         self._data: dict[tuple[str, str], tuple[str, float]] = {}
+        self._sweep_every = sweep_every
+        self._max_entries = max_entries
+        self._writes_since_sweep = 0
 
     async def get(self, namespace: str, key: str) -> str | None:
         entry = self._data.get((namespace, key))
@@ -51,10 +72,31 @@ class InMemoryBotStateStore:
     async def set(
         self, namespace: str, key: str, value: str, *, ttl: int
     ) -> None:
+        # Re-inserting rather than overwriting keeps dict order by write
+        # time, which is the order eviction walks.
+        self._data.pop((namespace, key), None)
         self._data[(namespace, key)] = (value, time.monotonic() + ttl)
+
+        self._writes_since_sweep += 1
+        if self._writes_since_sweep >= self._sweep_every:
+            self._sweep_expired()
+        self._evict_oldest_over_capacity()
 
     async def delete(self, namespace: str, key: str) -> None:
         self._data.pop((namespace, key), None)
+
+    def _sweep_expired(self) -> None:
+        now = time.monotonic()
+        self._writes_since_sweep = 0
+        self._data = {
+            entry_key: entry
+            for entry_key, entry in self._data.items()
+            if entry[1] > now
+        }
+
+    def _evict_oldest_over_capacity(self) -> None:
+        while len(self._data) > self._max_entries:
+            self._data.pop(next(iter(self._data)))
 
 
 class RedisBotStateStore:

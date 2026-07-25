@@ -499,6 +499,23 @@ class SessionConfig(BaseModel):
     idle_timeout: int = 0
 
 
+class CompressionConfig(BaseModel):
+    """Response gzip compression configuration.
+
+    Every in-flight compressed response holds a zlib deflate state costing
+    ~153 KB of RSS that the allocator never returns, so both the size floor and
+    the concurrency cap exist to bound memory. Deployments that compress at the
+    reverse proxy should set ``enabled: false``.
+
+    Defaults mirror ``skrift.middleware.compression`` (kept literal here so
+    config loading stays free of Litestar imports).
+    """
+
+    enabled: bool = True
+    minimum_size: int = Field(default=2048, gt=0)  # bytes; Litestar's default is 500
+    max_concurrent: int = Field(default=20, gt=0)  # live compressors, process-wide
+
+
 # Friendly window-period names → seconds, for rate-limit windows.
 _RATE_LIMIT_PERIODS: dict[str, float] = {
     "second": 1.0,
@@ -1157,6 +1174,14 @@ class StorageConfig(BaseModel):
     stores: dict[str, StoreConfig] = {"default": StoreConfig()}
 
 
+DEFAULT_MAX_REQUEST_BODY_SIZE = 10_485_760  # 10 MB
+"""Body size accepted on routes that do not receive file uploads."""
+
+MULTIPART_FRAMING_OVERHEAD = 1_048_576  # 1 MB
+"""Headroom over the raw file size for multipart boundaries, part headers, and
+any form fields sent alongside the file."""
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -1222,6 +1247,9 @@ class Settings(BaseSettings):
     # Security headers config (loaded from app.yaml)
     security_headers: SecurityHeadersConfig = SecurityHeadersConfig()
 
+    # Response compression config (loaded from app.yaml)
+    compression: CompressionConfig = CompressionConfig()
+
     # Rate limit config (loaded from app.yaml)
     rate_limit: RateLimitConfig = RateLimitConfig()
 
@@ -1261,6 +1289,30 @@ class Settings(BaseSettings):
     # Security contact for /.well-known/security.txt (RFC 9116)
     security_contact: str = ""
 
+    # Floor for the request body cap enforced before Litestar buffers a body.
+    # The effective cap is resolve_request_max_body_size(), which also has to
+    # accommodate the largest upload the configured stores accept.
+    max_request_body_size: int = Field(default=DEFAULT_MAX_REQUEST_BODY_SIZE, gt=0)
+
+
+def resolve_request_max_body_size(settings: Settings) -> int:
+    """Largest request body, in bytes, that an app will buffer before a 413.
+
+    Enforced at the transport layer, so an oversized POST is refused before the
+    body is read into memory. Upload routes share this cap with everything else,
+    so it is lifted to fit the biggest upload any configured store accepts plus
+    multipart framing — otherwise the transport would reject uploads that
+    ``max_upload_size`` allows.
+    """
+    largest_configured_upload = max(
+        (store.max_upload_size for store in settings.storage.stores.values()),
+        default=0,
+    )
+    return max(
+        settings.max_request_body_size,
+        largest_configured_upload + MULTIPART_FRAMING_OVERHEAD,
+    )
+
 
 def _register_builtin_sections() -> None:
     """Built-in sections parse through the same registry extensions use."""
@@ -1269,6 +1321,7 @@ def _register_builtin_sections() -> None:
         "auth": AuthConfig,
         "session": SessionConfig,
         "security_headers": SecurityHeadersConfig,
+        "compression": CompressionConfig,
         "rate_limit": RateLimitConfig,
         "bot_detection": BotDetectionConfig,
         "trusted_proxy": TrustedProxyConfig,
@@ -1412,6 +1465,9 @@ def get_settings() -> Settings:
 
     if "security_contact" in app_config:
         kwargs["security_contact"] = app_config["security_contact"]
+
+    if "max_request_body_size" in app_config:
+        kwargs["max_request_body_size"] = app_config["max_request_body_size"]
 
     if "sites" in app_config:
         kwargs["sites"] = {

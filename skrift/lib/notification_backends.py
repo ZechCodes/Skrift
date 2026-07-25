@@ -12,6 +12,7 @@ import asyncio
 import importlib
 import json
 import logging
+import time
 from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 QUEUED_TTL_HOURS = 24
 TIMESERIES_TTL_DAYS = 7
+CLEANUP_INTERVAL_SECONDS = 600
 
 
 def load_backend(spec: str) -> type:
@@ -77,7 +79,48 @@ class NotificationBackend(Protocol):
     def on_remote_message(self, callback: Callable[[dict], Any]) -> None: ...
 
 
-class InMemoryBackend:
+class _PeriodicCleanupMixin:
+    """Background sweep that expires stored notifications and stale dismissals.
+
+    Subclasses provide the storage-specific ``_delete_old_notifications`` and
+    ``cleanup_dismissed``; the loop itself is shared by every backend so no
+    storage grows without bound.
+    """
+
+    _cleanup_interval_seconds: float = CLEANUP_INTERVAL_SECONDS
+    _cleanup_task: asyncio.Task | None = None
+
+    async def _start_cleanup(self) -> None:
+        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+
+    async def _stop_cleanup(self) -> None:
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
+
+    async def _cleanup_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(self._cleanup_interval_seconds)
+                await self._delete_old_notifications()
+                await self.cleanup_dismissed()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Notification cleanup error", exc_info=True)
+
+    async def _delete_old_notifications(self) -> None:
+        raise NotImplementedError
+
+    async def cleanup_dismissed(self) -> None:
+        raise NotImplementedError
+
+
+class InMemoryBackend(_PeriodicCleanupMixin):
     """Dict-based storage with no cross-replica fanout. Default backend."""
 
     def __init__(self, **kwargs: Any) -> None:
@@ -85,12 +128,45 @@ class InMemoryBackend:
         self._subscriptions: dict[str, set[str]] = {}  # subscriber_key → {source_keys}
         self._dismissed: dict[str, set[UUID]] = {}  # subscriber_key → {notification_ids}
         self._callback: Callable[[dict], Any] | None = None
+        self._cleanup_task = None
 
     async def start(self) -> None:
-        pass
+        await self._start_cleanup()
 
     async def stop(self) -> None:
-        pass
+        await self._stop_cleanup()
+
+    async def _delete_old_notifications(self) -> None:
+        """Drop notifications past their TTL and forget emptied source keys."""
+        now = time.time()
+        queued_cutoff = now - QUEUED_TTL_HOURS * 3600
+        timeseries_cutoff = now - TIMESERIES_TTL_DAYS * 86400
+        for source_key in list(self._queues):
+            queue = self._queues[source_key]
+            expired_ids = [
+                notification_id
+                for notification_id, notification in queue.items()
+                if self._is_expired(
+                    notification,
+                    queued_cutoff=queued_cutoff,
+                    timeseries_cutoff=timeseries_cutoff,
+                )
+            ]
+            for notification_id in expired_ids:
+                del queue[notification_id]
+            if not queue:
+                del self._queues[source_key]
+
+    @staticmethod
+    def _is_expired(
+        notification: Notification, *, queued_cutoff: float, timeseries_cutoff: float
+    ) -> bool:
+        cutoff = (
+            timeseries_cutoff
+            if notification.mode == NotificationMode.TIMESERIES
+            else queued_cutoff
+        )
+        return notification.created_at < cutoff
 
     async def store(self, source_key: str, notification: Notification) -> UUID | None:
         old_id: UUID | None = None
@@ -195,37 +271,14 @@ class InMemoryBackend:
         return None
 
 
-class _DatabaseStorageMixin:
+class _DatabaseStorageMixin(_PeriodicCleanupMixin):
     """Shared DB operations for Redis and PgNotify backends."""
 
     _session_maker: Any
-    _cleanup_task: asyncio.Task | None
 
     def _init_db(self, session_maker: Any) -> None:
         self._session_maker = session_maker
         self._cleanup_task = None
-
-    async def _start_cleanup(self) -> None:
-        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-
-    async def _stop_cleanup(self) -> None:
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
-
-    async def _cleanup_loop(self) -> None:
-        while True:
-            try:
-                await asyncio.sleep(600)  # 10 minutes
-                await self._delete_old_notifications()
-                await self.cleanup_dismissed()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.warning("Notification cleanup error", exc_info=True)
 
     async def _delete_old_notifications(self) -> None:
         from skrift.db.models.notification import StoredNotification

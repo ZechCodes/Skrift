@@ -32,6 +32,19 @@ from skrift.storage import StorageManager
 logger = logging.getLogger(__name__)
 
 
+async def read_and_release(upload: UploadFile) -> bytes:
+    """Read an upload into memory and immediately free its spooled buffer.
+
+    Litestar's multipart parser writes each part to a ``SpooledTemporaryFile``
+    that lives until the request object is garbage collected. Reading copies
+    those bytes, so without this the payload is held twice for the whole
+    storage write and database commit.
+    """
+    content = await upload.read()
+    await upload.close()
+    return content
+
+
 class MediaAdminController(Controller):
     """Controller for the admin media library."""
 
@@ -94,14 +107,19 @@ class MediaAdminController(Controller):
         db_session: AsyncSession,
         data: Annotated[UploadFile, Body(media_type=RequestEncodingType.MULTI_PART)],
     ) -> Redirect:
-        """Handle file upload from the media library form."""
+        """Handle file upload from the media library form.
+
+        Bodies larger than the app's ``request_max_body_size`` are rejected by
+        Litestar before this handler runs; ``upload_asset`` re-checks the
+        per-store limit as defense in depth.
+        """
         storage: StorageManager = request.app.state.storage_manager
         user = getattr(request, "user", None)
         user_id = user.id if user else None
 
-        content = await data.read()
         filename = data.filename or "untitled"
         content_type = data.content_type or "application/octet-stream"
+        content = await read_and_release(data)
 
         try:
             await upload_asset(
@@ -131,14 +149,19 @@ class MediaAdminController(Controller):
         db_session: AsyncSession,
         data: Annotated[UploadFile, Body(media_type=RequestEncodingType.MULTI_PART)],
     ) -> Response:
-        """Handle file upload and return JSON (used by page editor fetch)."""
+        """Handle file upload and return JSON (used by page editor fetch).
+
+        Bodies larger than the app's ``request_max_body_size`` are rejected by
+        Litestar before this handler runs; ``upload_asset`` re-checks the
+        per-store limit as defense in depth.
+        """
         storage: StorageManager = request.app.state.storage_manager
         uid = request.session.get(SESSION_USER_ID)
         user_id = UUID(uid) if uid else None
 
-        content = await data.read()
         filename = data.filename or "untitled"
         content_type = data.content_type or "application/octet-stream"
+        content = await read_and_release(data)
 
         try:
             asset = await upload_asset(

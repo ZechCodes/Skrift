@@ -33,7 +33,12 @@ def cli(config_file):
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--port", default=8080, type=int, help="Port to bind to")
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
-@click.option("--workers", default=1, type=int, help="Number of worker processes")
+@click.option(
+    "--workers",
+    default=1,
+    type=int,
+    help="Number of worker processes (each is a full process using ~150MB RSS)",
+)
 @click.option(
     "--log-level",
     default="info",
@@ -47,11 +52,10 @@ def cli(config_file):
 )
 def serve(host, port, reload, workers, log_level, subdomain):
     """Run the Skrift server."""
-    import asyncio
-    import signal
-
-    from hypercorn.asyncio import serve as hypercorn_serve
     from hypercorn.config import Config
+
+    if workers < 1:
+        raise click.ClickException(f"--workers must be at least 1, got {workers}")
 
     if subdomain:
         os.environ["SKRIFT_SUBDOMAIN"] = subdomain
@@ -66,9 +70,30 @@ def serve(host, port, reload, workers, log_level, subdomain):
 
     if reload:
         config.use_reloader = True
-        from hypercorn.run import run
-        run(config)
+
+    # Hypercorn only spawns worker processes when it owns the application
+    # import (config.application_path); serving an already-built app object
+    # runs a single worker in the current process.
+    if reload or config.workers > 1:
+        _serve_with_worker_processes(config)
         return
+
+    _serve_in_current_process(config)
+
+
+def _serve_with_worker_processes(config) -> None:
+    """Run the server through hypercorn's process manager (reloader/multi-worker)."""
+    from hypercorn.run import run
+
+    run(config)
+
+
+def _serve_in_current_process(config) -> None:
+    """Run a single worker inside this process with graceful signal shutdown."""
+    import asyncio
+    import signal
+
+    from hypercorn.asyncio import serve as hypercorn_serve
 
     from skrift.asgi import app
 

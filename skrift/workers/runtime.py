@@ -47,6 +47,19 @@ from skrift.workers.registry import HandlerDescriptor, HandlerRegistry, registry
 LIFECYCLE_STREAM = "workers:lifecycle"
 QUEUE_WAIT_HISTORY_STATE_KEY = "workers:queue_wait_history"
 QUEUE_TREND_HISTORY_STATE_KEY = "workers:queue_trend_history"
+# How long a finished job's state stays queryable before the store reclaims it.
+# Matches the default of `workers.retention.terminal_job_state_ttl`, which is what
+# the pruner uses for the Redis backend; state stores without a pruner (notably the
+# in-memory one) rely on this write-time TTL plus the reaper's sweep instead.
+TERMINAL_JOB_STATE_TTL_SECONDS = 7 * 24 * 60 * 60
+TERMINAL_JOB_STATUSES = frozenset(
+    {
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.DEAD_LETTERED,
+        JobStatus.CANCELLED,
+    }
+)
 ExecutionMode = Literal["inline", "in_process", "out_of_process"]
 logger = logging.getLogger(__name__)
 
@@ -76,6 +89,7 @@ class WorkerConfig:
     visibility_timeout: float = 30.0
     reaper_interval: float = 5.0
     max_reclaims: int = 3
+    terminal_job_state_ttl: float | None = TERMINAL_JOB_STATE_TTL_SECONDS
 
 
 @dataclass(frozen=True)
@@ -1346,9 +1360,17 @@ class WorkerRuntime:
 
     async def _set_state(self, state: JobState) -> None:
         state.updated_at = utcnow()
-        await self.state_store.set(self._job_key(state.job.id), state)
+        await self.state_store.set(
+            self._job_key(state.job.id), state, ttl=self._job_state_ttl(state)
+        )
         async with self._condition:
             self._condition.notify_all()
+
+    def _job_state_ttl(self, state: JobState) -> float | None:
+        """Expire finished job state after the retention window; keep live jobs."""
+        if state.status not in TERMINAL_JOB_STATUSES:
+            return None
+        return self.config.terminal_job_state_ttl
 
     @staticmethod
     def _job_key(job_id: str) -> str:
@@ -1467,6 +1489,7 @@ def configure_workers(
     visibility_timeout: float = 30.0,
     reaper_interval: float = 5.0,
     max_reclaims: int = 3,
+    terminal_job_state_ttl: float | None = TERMINAL_JOB_STATE_TTL_SECONDS,
     backend_imports: WorkerBackendConfig | Mapping[str, str] | Any | None = None,
     settings: Any | None = None,
     session_maker: Any | None = None,
@@ -1491,6 +1514,7 @@ def configure_workers(
             visibility_timeout=visibility_timeout,
             reaper_interval=reaper_interval,
             max_reclaims=max_reclaims,
+            terminal_job_state_ttl=terminal_job_state_ttl,
         ),
         state_store=state_store
         or _instantiate_backend(
