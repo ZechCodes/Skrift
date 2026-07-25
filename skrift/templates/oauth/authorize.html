@@ -5,47 +5,146 @@
 {% block head %}
 <style nonce="{{ csp_nonce() }}">
     .consent-container {
-        max-width: 400px;
-        margin: 2rem auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: calc(100vh - 4rem);
+        min-height: calc(100svh - 4rem);
+        padding: 1rem;
+    }
+
+    .consent-card {
+        width: 100%;
+        max-width: 28rem;
+    }
+
+    .scope-scroll {
+        overflow-y: auto;
+        max-height: min(50vh, 26rem);
+        border-top: 1px solid var(--sk-color-border, #eee);
+        border-bottom: 1px solid var(--sk-color-border, #eee);
     }
 
     .scope-list {
         list-style: none;
         padding: 0;
-        margin: 1.5rem 0;
+        margin: 0;
     }
 
     .scope-list li {
-        padding: 0.5rem 0;
+        padding: 0.75rem 0;
         border-bottom: 1px solid var(--sk-color-border, #eee);
     }
 
-    .scope-option {
+    .scope-list li:last-child {
+        border-bottom: none;
+    }
+
+    /* .consent-card prefix outweighs the site stylesheet's checkbox-label
+       :has() rule, which centers and re-gaps these labels. */
+    .consent-card .scope-option {
         display: flex;
-        align-items: center;
-        gap: 0.5rem;
+        align-items: flex-start;
+        gap: 0.75rem;
         cursor: pointer;
     }
 
-    .scope-option input {
+    .consent-card .scope-option input {
         flex: none;
-        accent-color: #16a34a;
+        margin: 0.15rem 0 0;
+        accent-color: var(--sk-color-accent, #2563eb);
     }
 
-    .scope-option:has(input:disabled) {
+    .consent-card .scope-option:has(input:disabled) {
         cursor: default;
     }
 
-    .scope-required-hint {
-        display: block;
+    .scope-text {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+    }
+
+    .scope-label {
+        font-weight: 600;
+        color: var(--sk-color-text, #111);
+    }
+
+    .scope-summary {
+        font-size: 0.9em;
+        color: var(--sk-color-text-secondary, #4b5563);
+    }
+
+    .scope-required {
         font-size: 0.85em;
-        font-style: normal;
-        color: var(--sk-color-text-muted, #6b7280);
+        color: var(--sk-color-muted, #6b7280);
+    }
+
+    .scope-required-badge {
+        font-weight: 600;
+        color: var(--sk-color-accent-text, var(--sk-color-accent, #2563eb));
+    }
+
+    .scope-title {
+        display: flex;
+        align-items: baseline;
+        gap: 0.4rem;
+        position: relative;
+    }
+
+    .scope-info {
+        display: inline-flex;
+        padding: 0;
+        margin: 0;
+        border: none;
+        background: none;
+        box-shadow: none;
+        font-size: 0.9em;
+        font-weight: 400;
+        line-height: 1;
+        color: var(--sk-color-accent-text, var(--sk-color-accent, #2563eb));
+        cursor: pointer;
+    }
+
+    .scope-info:hover,
+    .scope-info:active {
+        background: none;
+        box-shadow: none;
+        transform: none;
+    }
+
+    .scope-tooltip {
+        visibility: hidden;
+        opacity: 0;
+        position: absolute;
+        top: calc(100% + 0.5rem);
+        left: 0;
+        z-index: 10;
+        width: min(20rem, 70vw);
+        padding: 0.6rem 0.75rem;
+        border: 1px solid var(--sk-color-border, #d1d5db);
+        border-radius: 0.5rem;
+        background: var(--sk-color-surface, #fff);
+        color: var(--sk-color-text-secondary, #4b5563);
+        font-size: 0.85rem;
+        font-weight: 400;
+        line-height: 1.5;
+        text-align: left;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        transition: opacity 0.15s;
+        cursor: default;
+    }
+
+    .scope-info:hover .scope-tooltip,
+    .scope-info:focus-visible .scope-tooltip,
+    .scope-info.open .scope-tooltip {
+        visibility: visible;
+        opacity: 1;
     }
 
     .client-name {
         font-weight: 600;
-        color: var(--sk-color-primary, #2563eb);
+        color: var(--sk-color-accent, #2563eb);
     }
 
     .consent-buttons {
@@ -56,37 +155,43 @@
 
     .consent-buttons button {
         flex: 1;
-        padding: 0.75rem 1.5rem;
-        border: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 3rem;
+        padding: 0 1.5rem;
+        border: 1px solid transparent;
         border-radius: 0.5rem;
         font-size: 1rem;
         font-weight: 600;
+        line-height: 1;
         cursor: pointer;
     }
 
     .btn-allow {
-        background: #16a34a;
-        color: white;
+        background: var(--sk-color-accent, #2563eb);
+        color: var(--sk-color-on-accent, #fff);
     }
 
     .btn-allow:hover {
-        background: #15803d;
+        background: var(--sk-color-accent-hover, #1d4ed8);
     }
 
     .btn-deny {
-        background: #e5e7eb;
-        color: #374151;
+        background: var(--sk-color-surface, #f3f4f6);
+        color: var(--sk-color-text, #374151);
+        border-color: var(--sk-color-border, #d1d5db);
     }
 
     .btn-deny:hover {
-        background: #d1d5db;
+        background: var(--sk-color-surface-hover, #e5e7eb);
     }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="consent-container">
-    <article>
+    <article class="consent-card">
         <header>
             <h1>Authorize Application</h1>
         </header>
@@ -99,48 +204,172 @@
         <form method="post" action="/oauth/authorize">
             {{ csrf_field() }}
 
-            {% if scope_descriptions %}
+            {% if scope_descriptions or scopes %}
             <p>Choose what to allow:</p>
-            <ul class="scope-list">
-                {% for scope in scope_descriptions %}
-                <li>
-                    <label class="scope-option">
-                        {% if scope.required %}
-                        {# A disabled checkbox submits nothing, so the value
-                           rides in a hidden field; the server re-asserts
-                           required scopes regardless. #}
-                        <input type="checkbox" checked disabled>
-                        <input type="hidden" name="scope" value="{{ scope.name }}">
-                        <span>{{ scope.description }}
-                            <em class="scope-required-hint">Required — the other permissions depend on it</em>
-                        </span>
-                        {% else %}
-                        <input type="checkbox" name="scope" value="{{ scope.name }}" checked>
-                        <span>{{ scope.description }}</span>
-                        {% endif %}
-                    </label>
-                </li>
-                {% endfor %}
-            </ul>
-            {% elif scopes %}
-            <p>Choose what to allow:</p>
-            <ul class="scope-list">
-                {% for scope in scopes %}
-                <li>
-                    <label class="scope-option">
-                        <input type="checkbox" name="scope" value="{{ scope }}" checked>
-                        <span>{{ scope }}</span>
-                    </label>
-                </li>
-                {% endfor %}
-            </ul>
+            <div class="scope-scroll" id="scope-scroll" role="group" aria-label="Requested permissions">
+                {% if scope_descriptions %}
+                <ul class="scope-list">
+                    {% for scope in scope_descriptions %}
+                    <li>
+                        <label class="scope-option">
+                            {% if scope.required %}
+                            {# A disabled checkbox submits nothing, so the value
+                               rides in a hidden field; the server re-asserts
+                               required scopes regardless. #}
+                            <input type="checkbox" checked disabled>
+                            <input type="hidden" name="scope" value="{{ scope.name }}">
+                            {% else %}
+                            <input type="checkbox" name="scope" value="{{ scope.name }}" checked>
+                            {% endif %}
+                            <span class="scope-text">
+                                <span class="scope-title">
+                                    <span class="scope-label">{{ scope.label or scope.description }}</span>
+                                    {% if scope.details %}
+                                    {# Interactive content inside a label does not
+                                       forward activation, so tapping ⓘ never
+                                       toggles the checkbox. #}
+                                    <button type="button" class="scope-info" aria-expanded="false"
+                                            aria-label="More about this permission"
+                                            aria-describedby="scope-tip-{{ loop.index }}">
+                                        <span aria-hidden="true">ⓘ</span>
+                                        <span class="scope-tooltip" role="tooltip" id="scope-tip-{{ loop.index }}">{{ scope.details }}</span>
+                                    </button>
+                                    {% endif %}
+                                </span>
+                                {% if scope.label %}
+                                <span class="scope-summary">{{ scope.description }}</span>
+                                {% endif %}
+                                {% if scope.required %}
+                                <span class="scope-required">
+                                    <span class="scope-required-badge">Required</span>
+                                    {%- if scope.required_hint %}
+                                    <span class="scope-required-hint">— {{ scope.required_hint }}</span>
+                                    {%- endif %}
+                                </span>
+                                {% endif %}
+                            </span>
+                        </label>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <ul class="scope-list">
+                    {% for scope in scopes %}
+                    <li>
+                        <label class="scope-option">
+                            <input type="checkbox" name="scope" value="{{ scope }}" checked>
+                            <span class="scope-text">
+                                <span class="scope-label">{{ scope }}</span>
+                            </span>
+                        </label>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
             {% endif %}
 
             <div class="consent-buttons">
                 <button type="submit" name="action" value="deny" class="btn-deny">Deny</button>
-                <button type="submit" name="action" value="allow" class="btn-allow">Allow</button>
+                <button type="submit" name="action" value="allow" class="btn-allow" id="consent-allow">Allow</button>
             </div>
         </form>
     </article>
 </div>
+
+<script nonce="{{ csp_nonce() }}">
+    (function () {
+        "use strict";
+        // Scroll gate: when the permission list overflows, "Allow" becomes a
+        // "More" button that pages the list down until the bottom has been
+        // seen. Without JS the form degrades to a plain, always-working Allow.
+        var scrollRegion = document.getElementById("scope-scroll");
+        var allowButton = document.getElementById("consent-allow");
+        if (!scrollRegion || !allowButton) {
+            return;
+        }
+
+        var allowLabel = allowButton.textContent;
+        var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+        var seenBottom = false;
+        var gateActive = false;
+
+        function isOverflowing() {
+            return scrollRegion.scrollHeight > scrollRegion.clientHeight + 4;
+        }
+
+        function isAtBottom() {
+            return scrollRegion.scrollTop + scrollRegion.clientHeight >= scrollRegion.scrollHeight - 4;
+        }
+
+        function update() {
+            // Latches open: once every permission has been on screen the gate
+            // never re-engages, even if the window is resized smaller.
+            // The button stays type="submit" throughout — the gate intercepts
+            // the click instead, so styling keyed to [type="submit"] (like the
+            // site stylesheet's form-button margin) never shifts mid-morph.
+            if (seenBottom || !isOverflowing() || isAtBottom()) {
+                seenBottom = true;
+                gateActive = false;
+                allowButton.textContent = allowLabel;
+                allowButton.removeAttribute("aria-label");
+            } else {
+                gateActive = true;
+                allowButton.textContent = "More ↓";
+                allowButton.setAttribute("aria-label", "Scroll to review the remaining permissions");
+            }
+        }
+
+        allowButton.addEventListener("click", function (event) {
+            if (!gateActive) {
+                return;
+            }
+            event.preventDefault();
+            scrollRegion.scrollBy({
+                top: scrollRegion.clientHeight * 0.85,
+                behavior: reducedMotion.matches ? "auto" : "smooth",
+            });
+        });
+
+        scrollRegion.addEventListener("scroll", update);
+        window.addEventListener("resize", update);
+        if (isOverflowing()) {
+            // Keyboard users can scroll the region directly; reaching the
+            // bottom that way unlocks Allow just the same.
+            scrollRegion.tabIndex = 0;
+        }
+        update();
+
+        // ⓘ tooltips show on hover/focus via CSS alone; a tap (or click)
+        // toggles them open for touch devices, one at a time.
+        var infoButtons = document.querySelectorAll(".scope-info");
+
+        function closeTooltips(except) {
+            infoButtons.forEach(function (button) {
+                if (button !== except) {
+                    button.classList.remove("open");
+                    button.setAttribute("aria-expanded", "false");
+                }
+            });
+        }
+
+        infoButtons.forEach(function (button) {
+            button.addEventListener("click", function (event) {
+                event.stopPropagation();
+                var isOpen = button.classList.toggle("open");
+                button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+                closeTooltips(button);
+            });
+        });
+
+        document.addEventListener("click", function () {
+            closeTooltips(null);
+        });
+        document.addEventListener("keydown", function (event) {
+            if (event.key === "Escape") {
+                closeTooltips(null);
+            }
+        });
+    })();
+</script>
 {% endblock %}

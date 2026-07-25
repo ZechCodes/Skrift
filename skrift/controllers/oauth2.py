@@ -351,10 +351,26 @@ class OAuth2Controller(Controller):
             defn = SCOPE_DEFINITIONS.get(s)
             if defn:
                 scope_descriptions.append(
-                    {"name": s, "description": defn.description, "required": defn.required}
+                    {
+                        "name": s,
+                        "description": defn.description,
+                        "required": defn.required,
+                        "label": defn.label,
+                        "details": defn.details,
+                        "required_hint": defn.required_hint,
+                    }
                 )
             else:
-                scope_descriptions.append({"name": s, "description": s, "required": False})
+                scope_descriptions.append(
+                    {
+                        "name": s,
+                        "description": s,
+                        "required": False,
+                        "label": None,
+                        "details": None,
+                        "required_hint": None,
+                    }
+                )
 
         return TemplateResponse(
             "oauth/authorize.html",
