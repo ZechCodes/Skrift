@@ -5,6 +5,7 @@ import hashlib
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
+from litestar.datastructures import FormMultiDict
 from litestar.response import Redirect, Template as TemplateResponse
 
 from skrift.auth.scopes import SCOPE_DEFINITIONS, register_scope, get_scope_definition
@@ -432,7 +433,7 @@ class TestAuthorizePost:
                 "code_challenge": "",
             },
         }
-        form_data = {"action": "allow"}
+        form_data = FormMultiDict([("action", "allow"), ("scope", "openid")])
         request.form = AsyncMock(return_value=form_data)
         db_session = AsyncMock()
 

@@ -7,6 +7,7 @@ identically for the rate-limit middleware and failed-auth tracker.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -29,6 +30,36 @@ async def _make_redis_counter(window: float = 60.0, prefix: str = "test:ratelimi
 @pytest.fixture
 def in_memory():
     return InMemorySlidingWindowCounter(window=60.0)
+
+
+class _FakeClock:
+    """Deterministic stand-in for ``time.monotonic``."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    fake_clock = _FakeClock()
+    monkeypatch.setattr(time, "monotonic", fake_clock)
+    return fake_clock
+
+
+def _retained_entries(counter: InMemorySlidingWindowCounter, key: str) -> int:
+    """Entries the counter keeps for *key* on the multi-window path."""
+    return counter._multi_buckets[key].entry_count
+
+
+def _retained_hits(counter: InMemorySlidingWindowCounter, key: str) -> int:
+    """Hits the counter still remembers for *key* on the multi-window path."""
+    return counter._multi_buckets[key].hit_count
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +219,104 @@ class TestMultiWindowAllOrNothingInMemory:
         allowed, _ = await counter.check_and_record_multi("ip", limits)
         assert allowed is False
         # Exactly one hit was ever recorded for this key.
-        assert sum(len(v) for v in counter._multi_buckets.values()) == 1
+        assert _retained_hits(counter, "ip") == 1
+
+
+class TestMultiWindowMemoryBounds:
+    """Long windows must not cost one retained timestamp per hit, and one
+    key's long window must not pin every other key's history."""
+
+    @pytest.mark.asyncio
+    async def test_long_window_history_grows_with_time_not_hit_volume(self, clock):
+        counter = InMemorySlidingWindowCounter(window=60.0)
+        # A day-long window with plenty of headroom: 600 hits, one per second.
+        limits = [(10_000, 86_400.0)]
+        for _ in range(600):
+            allowed, _ = await counter.check_and_record_multi("ip", limits)
+            assert allowed is True
+            clock.advance(1.0)
+
+        # 600 hits span ten minutes, so a coarse-bucketed history keeps a
+        # handful of entries rather than 600 timestamps.
+        assert _retained_entries(counter, "ip") <= 20
+
+    @pytest.mark.asyncio
+    async def test_short_window_key_is_not_pinned_by_another_keys_long_window(
+        self, clock
+    ):
+        counter = InMemorySlidingWindowCounter(window=60.0, cleanup_interval=0.0)
+        await counter.check_and_record_multi("daily-key", [(100, 86_400.0)])
+        await counter.check_and_record_multi("minute-key", [(5, 60.0)])
+
+        clock.advance(180.0)
+        # Any call runs the sweep (cleanup_interval=0).
+        await counter.check_and_record_multi("other-key", [(5, 60.0)])
+
+        assert "minute-key" not in counter._multi_buckets
+        assert "daily-key" in counter._multi_buckets
+
+    @pytest.mark.asyncio
+    async def test_denied_new_key_leaves_no_history_behind(self, clock):
+        counter = InMemorySlidingWindowCounter(window=60.0)
+        allowed, _ = await counter.check_and_record_multi("blocked", [(0, 60.0)])
+        assert allowed is False
+        assert "blocked" not in counter._multi_buckets
+
+
+class TestMultiWindowCoarseAccuracy:
+    """Coarse bucketing may over-count at a bucket edge; it must never
+    under-count, and short windows must stay exact."""
+
+    @pytest.mark.asyncio
+    async def test_long_window_never_under_counts_near_the_edge(self, clock):
+        counter = InMemorySlidingWindowCounter(window=60.0)
+        limits = [(3, 3600.0)]
+        for _ in range(3):
+            allowed, _ = await counter.check_and_record_multi("ip", limits)
+            assert allowed is True
+            clock.advance(1.0)
+
+        # Just inside the hour: the three hits still count, so a fourth is denied.
+        clock.advance(3500.0)
+        allowed, retry_after = await counter.check_and_record_multi("ip", limits)
+        assert allowed is False
+        assert retry_after >= 1
+
+        # Once retry_after has elapsed the caller is admitted again.
+        clock.advance(retry_after)
+        allowed, _ = await counter.check_and_record_multi("ip", limits)
+        assert allowed is True
+
+    @pytest.mark.asyncio
+    async def test_short_window_stays_exact_alongside_a_long_window(self, clock):
+        counter = InMemorySlidingWindowCounter(window=60.0)
+        limits = [(60, 60.0), (1_000, 86_400.0)]
+        for _ in range(60):
+            allowed, _ = await counter.check_and_record_multi("ip", limits)
+            assert allowed is True
+            clock.advance(0.1)
+
+        allowed, retry_after = await counter.check_and_record_multi("ip", limits)
+        assert allowed is False
+        assert 1 <= retry_after <= 61
+
+        # The minute window empties out; the day window still has room.
+        clock.advance(61.0)
+        allowed, _ = await counter.check_and_record_multi("ip", limits)
+        assert allowed is True
+
+    @pytest.mark.asyncio
+    async def test_long_window_limit_is_still_enforced(self, clock):
+        counter = InMemorySlidingWindowCounter(window=60.0)
+        limits = [(5, 86_400.0)]
+        for _ in range(5):
+            allowed, _ = await counter.check_and_record_multi("ip", limits)
+            assert allowed is True
+            clock.advance(600.0)  # spread across several coarse buckets
+
+        allowed, retry_after = await counter.check_and_record_multi("ip", limits)
+        assert allowed is False
+        assert retry_after > 3600
 
 
 @pytest.mark.skipif(not HAS_FAKEREDIS, reason="fakeredis not installed")

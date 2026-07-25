@@ -48,10 +48,14 @@ Deploy your Skrift site to production.
 
 | Resource | Recommendation |
 |----------|----------------|
-| RAM | 512MB+ |
+| RAM | 512MB minimum (1 worker), 1GB+ recommended (2 workers) |
 | CPU | 1 core+ |
 | Storage | 1GB+ (plus database) |
 | Python | 3.13+ |
+
+Each Skrift worker is a separate process using ~150MB of RSS, so RAM — not CPU
+cores — sets the worker count. See
+[Worker Count and Memory](production.md#worker-count-and-memory).
 
 ## Configuration Differences
 

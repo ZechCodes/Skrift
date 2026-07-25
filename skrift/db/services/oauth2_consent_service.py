@@ -35,16 +35,24 @@ async def upsert_grant(
     client_id: str,
     scopes: list[str],
     granted_at: datetime,
+    declined_scopes: list[str] | None = None,
 ) -> ConsentGrant:
-    """Create or widen a user's remembered consent for a client.
+    """Create or update a user's remembered consent for a client.
 
     Newly approved scopes are unioned with any previously granted scopes so a
     remembered grant only ever grows — a narrower later request never silently
     drops a scope the user already consented to.
+
+    ``declined_scopes`` is the exception: scopes the user was shown and
+    actively unchecked are removed from the grant. Without that, the union
+    would restore a scope the user just refused and the next authorization
+    request would skip the consent screen and hand it back.
     """
     grant = await find_grant(db_session, user_id, client_id)
     existing_scopes = set(grant.scope_list) if grant is not None else set()
-    merged_scopes = "\n".join(sorted(existing_scopes | set(scopes)))
+    merged_scopes = "\n".join(
+        sorted((existing_scopes | set(scopes)) - set(declined_scopes or []))
+    )
     if grant is None:
         grant = ConsentGrant(
             user_id=user_id,

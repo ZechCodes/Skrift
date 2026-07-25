@@ -18,15 +18,18 @@
     .scope-list li {
         padding: 0.5rem 0;
         border-bottom: 1px solid var(--sk-color-border, #eee);
+    }
+
+    .scope-option {
         display: flex;
         align-items: center;
         gap: 0.5rem;
+        cursor: pointer;
     }
 
-    .scope-list li::before {
-        content: "\2713";
-        color: #16a34a;
-        font-weight: bold;
+    .scope-option input {
+        flex: none;
+        accent-color: #16a34a;
     }
 
     .client-name {
@@ -82,24 +85,35 @@
             wants to access your account.
         </p>
 
-        {% if scope_descriptions %}
-        <p>This will allow the application to:</p>
-        <ul class="scope-list">
-            {% for scope in scope_descriptions %}
-            <li>{{ scope.description }}</li>
-            {% endfor %}
-        </ul>
-        {% elif scopes %}
-        <p>This will allow the application to:</p>
-        <ul class="scope-list">
-            {% for scope in scopes %}
-            <li>{{ scope }}</li>
-            {% endfor %}
-        </ul>
-        {% endif %}
-
         <form method="post" action="/oauth/authorize">
             {{ csrf_field() }}
+
+            {% if scope_descriptions %}
+            <p>Choose what to allow:</p>
+            <ul class="scope-list">
+                {% for scope in scope_descriptions %}
+                <li>
+                    <label class="scope-option">
+                        <input type="checkbox" name="scope" value="{{ scope.name }}" checked>
+                        <span>{{ scope.description }}</span>
+                    </label>
+                </li>
+                {% endfor %}
+            </ul>
+            {% elif scopes %}
+            <p>Choose what to allow:</p>
+            <ul class="scope-list">
+                {% for scope in scopes %}
+                <li>
+                    <label class="scope-option">
+                        <input type="checkbox" name="scope" value="{{ scope }}" checked>
+                        <span>{{ scope }}</span>
+                    </label>
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
             <div class="consent-buttons">
                 <button type="submit" name="action" value="deny" class="btn-deny">Deny</button>
                 <button type="submit" name="action" value="allow" class="btn-allow">Allow</button>

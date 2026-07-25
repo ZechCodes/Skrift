@@ -92,6 +92,26 @@ def _extract_resource_values(params) -> list[str]:
     return [value for value in getall("resource", []) if value]
 
 
+def _extract_granted_scopes(form_data) -> list[str]:
+    """Collect the scopes a user left checked on the consent form.
+
+    Browsers submit one ``scope`` field per checked checkbox — and nothing at
+    all when every box is cleared — so this reads every value. A single
+    space-delimited value is accepted too, matching how ``scope`` travels
+    everywhere else in OAuth2. Duplicates and ordering are left to the caller,
+    which intersects the result with the requested scopes.
+    """
+    getall = getattr(form_data, "getall", None)
+    values = getall("scope", []) if getall is not None else [form_data.get("scope", "")]
+    return [scope for value in values for scope in value.split()]
+
+
+def _consent_denied_redirect(redirect_uri: str, state: str) -> Redirect:
+    """Send the user-agent back to the client with an ``access_denied`` error."""
+    sep = "&" if "?" in redirect_uri else "?"
+    return Redirect(path=f"{redirect_uri}{sep}" + urlencode({"error": "access_denied", "state": state}))
+
+
 def _validate_resource_indicator(resource: str, allowed_resources: list[str]) -> bool:
     """Validate an RFC 8707 resource indicator.
 
@@ -407,12 +427,40 @@ class OAuth2Controller(Controller):
         scope = authorize_data.get("scope", "")
         code_challenge = authorize_data.get("code_challenge", "")
         resource = authorize_data.get("resource", "")
+        requested_scopes = scope.split() if scope else []
 
-        # User denied
+        # User denied — the button wins over any still-checked checkbox the
+        # browser submitted alongside it.
         if action == "deny":
-            sep = "&" if "?" in redirect_uri else "?"
-            deny_url = f"{redirect_uri}{sep}" + urlencode({"error": "access_denied", "state": state})
-            return Redirect(path=deny_url)
+            return _consent_denied_redirect(redirect_uri, state)
+
+        # RFC 6749 §3.3: the user may approve a subset of the request, never a
+        # superset. The stored authorization request is the ceiling, so a
+        # submitted scope outside it is a tampered form — rejected outright
+        # rather than quietly dropped, matching the refresh grant's handling of
+        # an out-of-grant scope.
+        granted_scopes = set(_extract_granted_scopes(form_data))
+        if not granted_scopes.issubset(requested_scopes):
+            return _json_error("invalid_scope", "Granted scope exceeds the requested scope")
+
+        # Approving while keeping nothing grants nothing, which is the same
+        # answer as denying — never an empty-scope token. A request that asked
+        # for no scopes at all has nothing to decline and still approves.
+        if requested_scopes and not granted_scopes:
+            return _consent_denied_redirect(redirect_uri, state)
+
+        # Keep the requested ordering so the granted scope string reads the way
+        # the consent screen did.
+        granted_scope = " ".join(
+            requested_scope
+            for requested_scope in requested_scopes
+            if requested_scope in granted_scopes
+        )
+        declined_scopes = [
+            requested_scope
+            for requested_scope in requested_scopes
+            if requested_scope not in granted_scopes
+        ]
 
         # User approved — remember this consent, then issue the auth code.
         settings = get_settings()
@@ -424,7 +472,8 @@ class OAuth2Controller(Controller):
             db_session,
             user_id=user_id,
             client_id=client_id,
-            scopes=scope.split() if scope else [],
+            scopes=granted_scope.split(),
+            declined_scopes=declined_scopes,
             granted_at=datetime.now(tz=timezone.utc),
         )
 
@@ -434,7 +483,7 @@ class OAuth2Controller(Controller):
             client_id=client_id,
             redirect_uri=redirect_uri,
             state=state,
-            scope=scope,
+            scope=granted_scope,
             code_challenge=code_challenge,
             resource=resource,
         )

@@ -17,6 +17,7 @@ import pytest
 import pytest_asyncio
 from joserfc import jwt as jose_jwt
 from joserfc.jwk import ECKey
+from litestar.datastructures import FormMultiDict
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from skrift.auth.jwt_tokens import create_access_token_jwt, verify_access_token_jwt
@@ -379,7 +380,9 @@ class TestAuthorizePostCarriesResource:
                 "resource": RESOURCE,
             },
         }
-        request.form = AsyncMock(return_value={"action": "allow"})
+        request.form = AsyncMock(
+            return_value=FormMultiDict([("action", "allow"), ("scope", "openid")])
+        )
         db_session = AsyncMock()
 
         with patch("skrift.controllers.oauth2.verify_csrf", new_callable=AsyncMock, return_value=True), \
