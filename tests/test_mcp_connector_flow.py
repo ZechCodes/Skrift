@@ -284,7 +284,12 @@ def test_full_claude_connector_flow(client, engine):
 
     approval = client.post(
         "/oauth/authorize",
-        data={"action": "allow", CSRF_FIELD_NAME: CONSENT_CSRF},
+        data={
+            "action": "allow",
+            # Every consent checkbox left checked — what the rendered form posts.
+            "scope": REQUESTED_SCOPE.split(),
+            CSRF_FIELD_NAME: CONSENT_CSRF,
+        },
         follow_redirects=False,
     )
     code = _code_from_redirect(approval, expected_state="first-state")

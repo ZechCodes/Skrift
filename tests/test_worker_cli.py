@@ -399,3 +399,19 @@ def test_worker_config_validation_rejects_invalid_process_backends():
         context="worker",
         allow_memory_backends=True,
     )
+
+
+def test_configure_worker_runtime_uses_retention_ttl_from_settings():
+    from skrift.cli import _configure_worker_runtime
+    from skrift.config import WorkerRetentionConfig, WorkersConfig
+
+    settings = MagicMock()
+    settings.workers = WorkersConfig(
+        retention=WorkerRetentionConfig(terminal_job_state_ttl=123.0)
+    )
+
+    runtime = _configure_worker_runtime(
+        settings, session_maker=None, queues=["default"], concurrency=1
+    )
+
+    assert runtime.config.terminal_job_state_ttl == 123.0

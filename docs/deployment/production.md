@@ -314,6 +314,41 @@ development-only and always runs a single worker.
       in every worker process; moving it to the edge substantially lowers per-process
       memory.
 
+### Response Compression
+
+In-app gzip is on by default and bounded so that traffic spikes cannot ratchet
+process memory: each in-flight compressed response holds ~153KB of zlib state,
+so Skrift compresses lazily, releases the compressor as soon as the response is
+written, and caps the number of simultaneously live compressors process-wide.
+When the cap is reached a response is sent uncompressed rather than queued.
+
+```yaml
+# app.yaml
+compression:
+  enabled: true       # set false when the proxy/CDN compresses (recommended)
+  minimum_size: 2048  # bytes; smaller responses are sent uncompressed
+  max_concurrent: 20  # live compressors per process; excess falls back to identity
+```
+
+Responses smaller than `minimum_size` (default 2048 bytes, up from Litestar's
+500) are never compressed — they fit in one or two TCP packets either way. The
+`/notifications/stream` SSE endpoint is always excluded from compression.
+
+### Request Body Limit
+
+Requests larger than `max_request_body_size` (default 10MB) are refused with
+`413` at the transport layer, before the body is buffered into memory:
+
+```yaml
+# app.yaml
+max_request_body_size: 10485760  # bytes (10MB)
+```
+
+The effective cap is automatically lifted to the largest configured storage
+store's `max_upload_size` plus 1MB of multipart framing, so legitimate uploads
+are never refused by the transport while a runaway or malicious POST cannot
+buffer past the limit.
+
 ### PostgreSQL Tuning
 
 Edit `/etc/postgresql/14/main/postgresql.conf`:
