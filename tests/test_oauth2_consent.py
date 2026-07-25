@@ -831,3 +831,143 @@ class TestRequiredScopes:
         assert 'name="scope" value="documents.create" checked' in html
         assert "disabled" not in html.split("documents.create")[1].split("</label>")[0]
         assert "Required" in html
+
+
+class TestScopeMetadata:
+    """Issue: scopes carry a display label, short description, and details."""
+
+    @pytest.fixture(autouse=True)
+    def scope_registry(self):
+        saved = dict(SCOPE_DEFINITIONS)
+        yield
+        SCOPE_DEFINITIONS.clear()
+        SCOPE_DEFINITIONS.update(saved)
+
+    def test_register_scope_stores_label_details_and_required_hint(self):
+        definition = register_scope(
+            "documents.read",
+            "View your documents",
+            required=True,
+            label="View documents",
+            details="Read documents, attachments, and automations.",
+            required_hint="The other permissions depend on it",
+        )
+
+        assert definition.label == "View documents"
+        assert definition.details == "Read documents, attachments, and automations."
+        assert definition.required_hint == "The other permissions depend on it"
+
+    def test_scope_metadata_defaults_to_none(self):
+        definition = register_scope("documents.create", "Create documents")
+
+        assert definition.label is None
+        assert definition.details is None
+        assert definition.required_hint is None
+
+    @pytest.mark.asyncio
+    async def test_authorize_get_passes_scope_metadata_to_the_template(self, db_session):
+        register_scope(
+            "documents.read",
+            "View your documents",
+            required=True,
+            label="View documents",
+            details="The full explanation.",
+            required_hint="Everything else needs it",
+        )
+        client = await _make_client(db_session)
+        request = _authorize_get_request(client.client_id, "documents.read")
+
+        response = await _authorize_get(db_session, request)
+
+        entry = response.context["scope_descriptions"][0]
+        assert entry["label"] == "View documents"
+        assert entry["details"] == "The full explanation."
+        assert entry["required_hint"] == "Everything else needs it"
+
+
+class TestConsentTemplateChrome:
+    """Consent-screen rendering: labels, details reveal, badge, scroll gate."""
+
+    _render = staticmethod(TestConsentTemplateCheckboxes._render)
+
+    @staticmethod
+    def _scope(**overrides):
+        scope = {
+            "name": "documents.read",
+            "description": "View your documents",
+            "required": False,
+            "label": None,
+            "details": None,
+            "required_hint": None,
+        }
+        scope.update(overrides)
+        return scope
+
+    def _render_scopes(self, *scopes):
+        return self._render(
+            client_id="abc",
+            display_name="Consent App",
+            scopes=[scope["name"] for scope in scopes],
+            scope_descriptions=list(scopes),
+        )
+
+    def test_label_renders_with_description_as_summary(self):
+        html = self._render_scopes(
+            self._scope(label="View documents", details="Everything readable, explained.")
+        )
+
+        assert "View documents" in html
+        assert "View your documents" in html
+        assert "Everything readable, explained." in html
+
+    def test_details_render_as_an_info_tooltip_beside_the_title(self):
+        html = self._render_scopes(
+            self._scope(label="View documents", details="Everything readable, explained.")
+        )
+
+        # A real button (never a submit) toggles the tooltip on tap; the
+        # tooltip content is tied to it for assistive tech.
+        assert 'class="scope-info"' in html
+        assert 'type="button"' in html
+        assert 'aria-expanded="false"' in html
+        assert 'role="tooltip"' in html
+        assert "aria-describedby" in html
+        # ⓘ sits on the title line, before the summary text in the markup
+        # (compare inside the form so the style block doesn't match first).
+        form_markup = html[html.index("<form") :]
+        assert form_markup.index('class="scope-info"') < form_markup.index('class="scope-summary"')
+
+    def test_scope_without_details_renders_no_info_button(self):
+        html = self._render_scopes(self._scope())
+
+        assert html.count("View your documents") == 1
+        assert 'class="scope-info"' not in html
+        assert 'role="tooltip"' not in html
+
+    def test_required_badge_without_hint_is_just_required(self):
+        html = self._render_scopes(self._scope(required=True))
+
+        assert "Required" in html
+        assert "scope-required-hint" not in html
+
+    def test_required_hint_text_comes_from_the_registration(self):
+        html = self._render_scopes(
+            self._scope(required=True, required_hint="Do needs this to find documents")
+        )
+
+        assert "Required" in html
+        assert "Do needs this to find documents" in html
+
+    def test_scroll_gate_scaffolding_is_present(self):
+        html = self._render_scopes(self._scope())
+
+        assert 'id="scope-scroll"' in html
+        assert 'id="consent-allow"' in html
+        assert '<script nonce="test-nonce">' in html
+
+    def test_page_colors_come_from_theme_variables(self):
+        html = self._render_scopes(self._scope())
+
+        assert "#16a34a" not in html
+        assert "--sk-color-accent" in html
+        assert "--sk-color-primary" not in html
