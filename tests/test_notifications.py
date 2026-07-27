@@ -11,6 +11,7 @@ from skrift.notifications import (
     NotificationMode,
     NotificationService,
     SourceRegistry,
+    _notification_from_wire,
     dismiss_session_group,
     dismiss_user_group,
     notify_broadcast,
@@ -379,8 +380,100 @@ class TestNotificationGroupField:
         n = Notification(type="generic", group="deploy", payload={"title": "Hi"})
         d = n.to_dict()
         assert d["group"] == "deploy"
-        assert d["title"] == "Hi"
+        assert d["payload"] == {"title": "Hi"}
         assert d["type"] == "generic"
+
+
+# ===========================================================================
+# Wire format
+# ===========================================================================
+
+
+class TestWireFormat:
+    def test_payload_is_nested(self):
+        n = Notification(type="generic", payload={"title": "Hi"})
+        assert n.to_dict()["payload"] == {"title": "Hi"}
+
+    def test_payload_keys_do_not_shadow_envelope(self):
+        n = Notification(
+            type="document.change",
+            payload={
+                "id": "email-42",
+                "type": "custom",
+                "mode": "nonsense",
+                "created_at": "yesterday",
+                "group": "payload-group",
+            },
+        )
+        d = n.to_dict()
+
+        assert d["id"] == str(n.id)
+        assert d["type"] == "document.change"
+        assert d["mode"] == "queued"
+        assert d["created_at"] == n.created_at
+        assert "group" not in d
+
+    def test_to_dict_copies_payload(self):
+        """Mutating the serialized payload must not reach back into the source."""
+        n = Notification(type="generic", payload={"title": "Hi"})
+        n.to_dict()["payload"]["title"] = "Changed"
+        assert n.payload["title"] == "Hi"
+
+    def test_round_trip_preserves_colliding_payload_keys(self):
+        n = Notification(
+            type="document.change",
+            group="docs",
+            mode=NotificationMode.TIMESERIES,
+            payload={"id": "email-42", "type": "custom"},
+        )
+        restored = _notification_from_wire(n.to_dict())
+
+        assert restored.id == n.id
+        assert restored.type == "document.change"
+        assert restored.group == "docs"
+        assert restored.mode == NotificationMode.TIMESERIES
+        assert restored.created_at == n.created_at
+        assert restored.payload == {"id": "email-42", "type": "custom"}
+
+    def test_round_trip_empty_payload(self):
+        n = Notification(type="generic")
+        assert _notification_from_wire(n.to_dict()).payload == {}
+
+    def test_decodes_legacy_flat_shape(self):
+        """Rolling-deploy compat: a pre-nesting replica sends a flat envelope."""
+        n = Notification(type="generic", group="docs", payload={"title": "Hi"})
+        flat = {
+            "type": "generic",
+            "id": str(n.id),
+            "mode": "queued",
+            "created_at": n.created_at,
+            "group": "docs",
+            "title": "Hi",
+        }
+        restored = _notification_from_wire(flat)
+
+        assert restored.id == n.id
+        assert restored.group == "docs"
+        assert restored.created_at == n.created_at
+        assert restored.payload == {"title": "Hi"}
+
+    def test_legacy_flat_payload_key_named_payload_is_not_nested(self):
+        """A flat message whose payload held a non-dict `payload` key stays flat."""
+        n = Notification(type="generic")
+        restored = _notification_from_wire({
+            "type": "generic",
+            "id": str(n.id),
+            "payload": "not-a-dict",
+        })
+        assert restored.payload == {"payload": "not-a-dict"}
+
+    def test_default_mode_applies_when_absent(self):
+        n = Notification(type="generic")
+        restored = _notification_from_wire(
+            {"type": "generic", "id": str(n.id), "payload": {}},
+            default_mode=NotificationMode.EPHEMERAL,
+        )
+        assert restored.mode == NotificationMode.EPHEMERAL
 
 
 # ===========================================================================
@@ -1308,3 +1401,89 @@ class TestPerSubscriberDismissals:
 
         assert NotificationService._subscriber_key_for("s1", "alice") == "user:alice"
         assert NotificationService._subscriber_key_for("s1", None) == "session:s1"
+
+
+# ===========================================================================
+# Redis reader loop resilience
+# ===========================================================================
+
+
+class _FakePubSub:
+    """Yields a scripted sequence of messages, then blocks."""
+
+    def __init__(self, messages):
+        self._messages = list(messages)
+
+    async def get_message(self, **kwargs):
+        if self._messages:
+            return self._messages.pop(0)
+        await asyncio.sleep(10)
+
+
+def _redis_backend_with(messages, callback):
+    from skrift.lib.notification_backends import RedisBackend
+
+    backend = RedisBackend.__new__(RedisBackend)
+    backend._pubsub = _FakePubSub(messages)
+    backend._callback = callback
+    return backend
+
+
+class TestRedisReaderLoop:
+    @pytest.mark.asyncio
+    async def test_undecodable_message_does_not_stall_the_loop(self):
+        """A poison message is skipped immediately, not backed off on.
+
+        The loop used to sleep a second on any error, so a burst of bad
+        messages drained at one per second and delayed everything queued
+        behind them.
+        """
+        seen = []
+
+        async def callback(data):
+            if data["n"] == "poison":
+                raise ValueError("badly formed hexadecimal UUID string")
+            seen.append(data["n"])
+
+        backend = _redis_backend_with(
+            [
+                {"type": "message", "data": '{"n": "poison"}'},
+                {"type": "message", "data": "{not json"},
+                {"type": "message", "data": '{"n": "good"}'},
+            ],
+            callback,
+        )
+
+        task = asyncio.create_task(backend._reader_loop())
+        try:
+            for _ in range(50):
+                if seen:
+                    break
+                await asyncio.sleep(0.005)
+        finally:
+            task.cancel()
+
+        assert seen == ["good"]
+
+    @pytest.mark.asyncio
+    async def test_non_message_frames_are_ignored(self):
+        seen = []
+
+        async def callback(data):
+            seen.append(data)
+
+        backend = _redis_backend_with(
+            [None, {"type": "subscribe", "data": 1}, {"type": "message", "data": "{}"}],
+            callback,
+        )
+
+        task = asyncio.create_task(backend._reader_loop())
+        try:
+            for _ in range(50):
+                if seen:
+                    break
+                await asyncio.sleep(0.005)
+        finally:
+            task.cancel()
+
+        assert seen == [{}]

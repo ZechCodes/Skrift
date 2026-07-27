@@ -151,15 +151,33 @@ Every incoming notification dispatches a cancelable `sk:notification` CustomEven
 
 ```javascript
 document.addEventListener('sk:notification', (e) => {
-    const data = e.detail;  // { type, id, mode, ...payload }
+    const data = e.detail;  // { type, id, mode, created_at, group, payload }
     if (data.type === 'my_custom_type') {
         // Handle custom notification — build your own UI
+        console.log(data.payload.title);
         e.preventDefault();  // Prevents default generic toast
     }
 });
 ```
 
 Only `"generic"` type notifications render the built-in toast UI. All other types must be handled via event listeners.
+
+!!! warning "Payload keys moved under `payload`"
+
+    Payload entries used to sit directly on the notification next to the
+    envelope fields, so a payload key named `type`, `id`, `mode`, `created_at`,
+    or `group` silently overwrote the envelope value of the same name. Nesting
+    the payload makes that collision impossible.
+
+    Reading a payload key off the envelope — `notification.title` instead of
+    `notification.payload.title` — still returns the value and logs a
+    `console.error` naming the key and its new path. The fallback will be
+    removed in a later release. Keys absent from the payload return `undefined`
+    as before, so `if (notification.someOptionalKey)` is unaffected.
+
+    The five envelope names are reserved: `notification.group` always means the
+    envelope's group, never a payload entry of the same name. Reach those
+    through `notification.payload.group`.
 
 ### Reactive Watchers
 
@@ -181,7 +199,7 @@ window.App = {
     Notifications: {
         render(element, notification, event) {
             event.preventDefault();  // Optional: suppresses the generic toast
-            element.textContent = notification.message || "";
+            element.textContent = notification.payload.message || "";
         },
     },
 };
