@@ -15,3 +15,13 @@ jobs:
       - name: Verify all imports resolve
         run: uv run --all-extras python -c "import pkgutil, importlib; [importlib.import_module(m.name) for m in pkgutil.walk_packages(['skrift'], prefix='skrift.')]"
       - run: uv run --all-extras pytest -m "not integration"
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm test

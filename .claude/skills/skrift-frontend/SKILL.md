@@ -173,6 +173,21 @@ nonce = csp_nonce_var.get("")  # empty string if not in request context
 
 For form rendering and CSRF tokens, see `/skrift-forms`.
 
+## Testing Browser JavaScript
+
+The JS in `skrift/static/js/` is covered by Vitest running against jsdom:
+
+```bash
+npm install   # first time
+npm test
+```
+
+Specs live in `tests/js/*.test.js`. The scripts are browser IIFEs with no
+module exports, so a spec reads the real source and evaluates it against the
+jsdom document, then drives it through stubbed browser APIs (jsdom has no
+`EventSource`). Assert through the public surface — rendered DOM, dispatched
+events, registered callbacks — rather than reaching for internals.
+
 ## Key Files
 
 | File | Purpose |

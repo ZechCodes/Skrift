@@ -14,6 +14,85 @@
         ephemeral:  { dismiss: false,    autoClear: 5000 },
     };
 
+    // Property names the runtime itself probes on any object. Reporting these
+    // as moved payload keys would break string coercion, JSON.stringify, and
+    // thenable checks (`await notification`).
+    const _passthroughProps = new Set([
+        "then", "toJSON", "constructor", "inspect", "nodeType",
+    ]);
+
+    // Names owned by the envelope. A payload entry can share one of these
+    // names, but reading it off the notification always means the envelope
+    // field — otherwise the shadowing this nesting exists to prevent would
+    // come straight back through the compatibility path.
+    const _envelopeProps = new Set([
+        "type", "id", "mode", "created_at", "group", "payload",
+    ]);
+
+    const _warnedKeys = new Set();
+
+    function _warnOnce(key, message) {
+        if (_warnedKeys.has(key)) return;
+        _warnedKeys.add(key);
+        console.error(message);
+    }
+
+    function _warnMovedKey(key) {
+        _warnOnce(
+            key,
+            `[skrift] notification.${key} has moved to notification.payload.${key}. ` +
+            `The value is being forwarded for now, but this fallback will be removed — ` +
+            `update your sk:notification listener or skrift:render function.`
+        );
+    }
+
+    function _warnReservedKey(key) {
+        _warnOnce(
+            key,
+            `[skrift] notification.${key} is the envelope's ${key} and is not set on ` +
+            `this notification. Your payload entry named "${key}" is at ` +
+            `notification.payload.${key}.`
+        );
+    }
+
+    /**
+     * Wrap a notification for delivery to application code.
+     *
+     * Payload entries used to sit directly on the notification alongside the
+     * envelope fields, which meant a payload key named `id` or `type` silently
+     * shadowed the envelope. They are nested under `payload` now, so code
+     * written against the old shape would read `undefined` with no clue why.
+     * Forward the value instead and name the fix.
+     *
+     * Only keys that actually exist in the payload are reported: reading a key
+     * that is absent everywhere returns undefined as it always has, so
+     * feature-detection like `if (notification.title)` keeps working. Envelope
+     * names are reported but never forwarded — see `_envelopeProps`.
+     */
+    function _wrapNotification(notification) {
+        return new Proxy(notification, {
+            get(target, prop, receiver) {
+                if (
+                    typeof prop === "symbol" ||
+                    prop in target ||
+                    _passthroughProps.has(prop)
+                ) {
+                    return Reflect.get(target, prop, receiver);
+                }
+                const payload = target.payload;
+                if (payload && Object.prototype.hasOwnProperty.call(payload, prop)) {
+                    if (_envelopeProps.has(prop)) {
+                        _warnReservedKey(prop);
+                        return undefined;
+                    }
+                    _warnMovedKey(prop);
+                    return payload[prop];
+                }
+                return undefined;
+            },
+        });
+    }
+
     class SkriftNotifications {
         constructor() {
             this._es = null;
@@ -259,7 +338,9 @@
 
         _handleNotification(data) {
             if (data.type === "dismissed") {
-                this._removeDismissed(data.notification_id || data.id);
+                this._removeDismissed(
+                    (data.payload && data.payload.notification_id) || data.id
+                );
                 return;
             }
             if (data.type === "disconnecting") {
@@ -291,7 +372,7 @@
 
             // Dispatch cancelable custom event
             const event = new CustomEvent("sk:notification", {
-                detail: data,
+                detail: _wrapNotification(data),
                 cancelable: true,
                 bubbles: true,
             });
@@ -441,6 +522,7 @@
             const container = this._ensureContainer();
             this._visibleCount++;
 
+            const payload = data.payload || {};
             const mode = data.mode || "queued";
             const { dismiss: dismissMode, autoClear } = this._getModeConfig(mode);
 
@@ -451,17 +533,17 @@
             const content = document.createElement("div");
             content.className = "sk-notification-content";
 
-            if (data.title) {
+            if (payload.title) {
                 const title = document.createElement("div");
                 title.className = "sk-notification-title";
-                title.textContent = data.title;
+                title.textContent = payload.title;
                 content.appendChild(title);
             }
 
-            if (data.message) {
+            if (payload.message) {
                 const message = document.createElement("div");
                 message.className = "sk-notification-message";
-                message.textContent = data.message;
+                message.textContent = payload.message;
                 content.appendChild(message);
             }
 

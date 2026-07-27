@@ -1,0 +1,13 @@
+{
+  "name": "skrift-frontend-tests",
+  "private": true,
+  "description": "Test harness for the browser JavaScript shipped in skrift/static/js.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0",
+    "vitest": "^3.0.0"
+  }
+}

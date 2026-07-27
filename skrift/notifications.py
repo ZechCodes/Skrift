@@ -58,12 +58,18 @@ class Notification:
     mode: NotificationMode = NotificationMode.QUEUED
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to the wire format used for SSE and cross-replica fanout.
+
+        The payload is nested under its own key so that a payload entry named
+        ``type``/``id``/``mode``/``created_at``/``group`` cannot shadow the
+        envelope field of the same name.
+        """
         d = {
             "type": self.type,
             "id": str(self.id),
             "mode": self.mode.value,
             "created_at": self.created_at,
-            **self.payload,
+            "payload": dict(self.payload),
         }
         if self.group is not None:
             d["group"] = self.group
@@ -495,15 +501,25 @@ class NotificationService:
 def _notification_from_wire(
     n_data: dict, *, default_mode: NotificationMode = NotificationMode.QUEUED
 ) -> Notification:
-    """Deserialize a notification from a cross-replica wire message."""
+    """Deserialize a notification from a cross-replica wire message.
+
+    Accepts both the nested shape written by :meth:`Notification.to_dict` and
+    the legacy flat shape, where the payload shared a namespace with the
+    envelope. The fallback lets a rolling deploy run replicas on both shapes
+    at once; it can be dropped once no pre-nesting replica is in service.
+    """
     mode_val = n_data.get("mode", default_mode.value)
+    if isinstance(n_data.get("payload"), dict):
+        payload = dict(n_data["payload"])
+    else:
+        payload = {
+            k: v for k, v in n_data.items()
+            if k not in ("type", "id", "group", "mode", "created_at")
+        }
     notification = Notification(
         type=n_data.get("type", ""),
         id=UUID(n_data["id"]),
-        payload={
-            k: v for k, v in n_data.items()
-            if k not in ("type", "id", "group", "mode", "created_at")
-        },
+        payload=payload,
         group=n_data.get("group"),
         mode=NotificationMode(mode_val),
     )

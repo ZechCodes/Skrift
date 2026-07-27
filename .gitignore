@@ -38,3 +38,6 @@ demo/*/uploads/
 /mockups/
 /security-review-auth.md
 /skrift-s3-design.md
+
+# Frontend test harness (see package.json)
+node_modules/

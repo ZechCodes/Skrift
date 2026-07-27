@@ -591,15 +591,30 @@ class RedisBackend(_DatabaseStorageMixin):
                 message = await self._pubsub.get_message(
                     ignore_subscribe_messages=True, timeout=1.0
                 )
-                if message and message["type"] == "message":
-                    data = json.loads(message["data"])
-                    if self._callback:
-                        await self._callback(data)
             except asyncio.CancelledError:
                 raise
             except Exception:
+                # Transport failure — back off before retrying the connection.
                 logger.warning("Redis reader error", exc_info=True)
                 await asyncio.sleep(1)
+                continue
+
+            if not message or message.get("type") != "message":
+                continue
+
+            try:
+                data = json.loads(message["data"])
+                if self._callback:
+                    await self._callback(data)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A message this replica cannot decode will never decode. Backing
+                # off would stall every notification queued behind it, so drop
+                # this one and keep reading.
+                logger.warning(
+                    "Discarding undecodable notification message", exc_info=True
+                )
 
 
 class PgNotifyBackend(_DatabaseStorageMixin):
@@ -646,9 +661,18 @@ class PgNotifyBackend(_DatabaseStorageMixin):
         if self._callback:
             try:
                 data = json.loads(payload)
-                asyncio.get_event_loop().create_task(self._callback(data))
+                asyncio.get_event_loop().create_task(self._dispatch(data))
             except Exception:
                 logger.warning("PgNotify parse error", exc_info=True)
+
+    async def _dispatch(self, data: dict) -> None:
+        """Deliver one remote message, containing decode failures to that message."""
+        try:
+            await self._callback(data)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Discarding undecodable notification message", exc_info=True)
 
     async def _keepalive_loop(self) -> None:
         """Keep the listener connection alive, reconnecting with backoff on failure."""
