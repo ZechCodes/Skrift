@@ -141,6 +141,30 @@ The notification service uses a pluggable backend system for storage and cross-r
 
 All DB-backed backends persist notifications in the `stored_notifications` table and share a `_DatabaseStorageMixin` that provides store, remove, group replacement, and background cleanup.
 
+### Backend Lifecycle Outside the ASGI App
+
+The web app starts and stops the configured backend as part of its ASGI lifecycle, and `skrift workers run` does the same for standalone worker processes — notifications published from job handlers reach web replicas out of the box.
+
+Processes with nonstandard lifecycles (scripts, custom entry points) can manage the backend through the public API on the `notifications` service singleton:
+
+```python
+from skrift.notifications import notifications
+
+# Idempotently load and start the backend configured in app.yaml.
+# Returns True when a configured backend is running, False when
+# notifications.backend is not set (in-process fallback stays in effect).
+await notifications.ensure_backend_started(settings=settings, session_maker=session_maker)
+
+# True once a backend was explicitly started and not yet stopped;
+# False while relying on the lazy in-process InMemoryBackend fallback.
+notifications.backend_started
+
+# Stop the backend on shutdown.
+await notifications.stop_backend()
+```
+
+Without a started backend, `notify_user()` and friends fall back to a process-local `InMemoryBackend` — notifications are delivered within the process but never reach other replicas.
+
 ## Client-Side JavaScript
 
 The `notifications.js` script auto-initializes on page load and manages the SSE connection.

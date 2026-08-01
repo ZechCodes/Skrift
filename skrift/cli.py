@@ -331,11 +331,16 @@ def workers_run(
         settings.workers.max_reclaims = max_reclaims
 
     async def _run():
+        from skrift.notifications import notifications
+
         db_config = _build_db_config(settings)
         if settings.webhooks.enabled:
             from skrift.webhooks import configure_webhooks
 
             configure_webhooks(settings.webhooks, session_maker=db_config.get_session)
+        await notifications.ensure_backend_started(
+            settings=settings, session_maker=db_config.get_session
+        )
         selected_queues = queues or tuple(settings.workers.queues)
         runtime = _configure_worker_runtime(
             settings,
@@ -356,6 +361,7 @@ def workers_run(
             await shutdown_event.wait()
         finally:
             await runtime.stop()
+            await notifications.stop_backend()
             await db_config.get_engine().dispose()
 
     asyncio.run(_run())

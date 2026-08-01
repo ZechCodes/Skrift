@@ -232,6 +232,8 @@ class NotificationService:
     def __init__(self) -> None:
         self._registry = SourceRegistry()
         self._backend: NotificationBackend | None = None
+        self._backend_started: bool = False
+        self._backend_lock = asyncio.Lock()
         self._publisher_id: str = str(uuid4())
         self._loaded_user_subs: set[str] = set()
         self._session_users: dict[str, str] = {}  # session_key -> user_key
@@ -239,6 +241,64 @@ class NotificationService:
     def set_backend(self, backend: NotificationBackend) -> None:
         self._backend = backend
         backend.on_remote_message(self._handle_remote)
+
+    @property
+    def backend_started(self) -> bool:
+        """True once a backend was started via :meth:`start_backend` or
+        :meth:`ensure_backend_started` and not yet stopped.
+
+        False while the service is relying on the lazy in-process
+        ``InMemoryBackend`` fallback, which cannot reach other replicas.
+        """
+        return self._backend_started
+
+    async def start_backend(self, backend: NotificationBackend) -> None:
+        """Install *backend* and start it, marking the lifecycle as running."""
+        self.set_backend(backend)
+        await backend.start()
+        self._backend_started = True
+
+    async def stop_backend(self) -> None:
+        """Stop the current backend (if any) and clear the started flag."""
+        self._backend_started = False
+        if self._backend is not None:
+            await self._backend.stop()
+
+    async def ensure_backend_started(
+        self, settings=None, session_maker=None
+    ) -> bool:
+        """Idempotently load and start the backend configured in settings.
+
+        For processes with nonstandard lifecycles (standalone workers,
+        scripts) that publish notifications outside the ASGI app. Safe to
+        call concurrently and repeatedly; only the first call does work.
+
+        Args:
+            settings: Skrift ``Settings``; defaults to ``get_settings()``.
+            session_maker: Async session maker for database-backed backends.
+
+        Returns:
+            True when a configured backend is running after the call,
+            False when ``notifications.backend`` is not configured (the
+            in-process fallback remains in effect).
+        """
+        if self._backend_started:
+            return True
+        async with self._backend_lock:
+            if self._backend_started:
+                return True
+            if settings is None:
+                from skrift.config import get_settings
+
+                settings = get_settings()
+            if not settings.notifications.backend:
+                return False
+            from skrift.lib.notification_backends import load_backend
+
+            backend_cls = load_backend(settings.notifications.backend)
+            backend = backend_cls(settings=settings, session_maker=session_maker)
+            await self.start_backend(backend)
+            return True
 
     def _get_backend(self) -> NotificationBackend:
         if self._backend is None:
