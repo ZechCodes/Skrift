@@ -225,6 +225,10 @@ notifications:
 
 Database-backed backends auto-clean: queued notifications after 24h, timeseries after 7 days.
 
+### Backend Lifecycle
+
+The ASGI app and `skrift workers run` both start/stop the configured backend automatically. Nonstandard processes use the public API on the `notifications` singleton: `await notifications.ensure_backend_started(settings=..., session_maker=...)` (idempotent; False when no backend configured), `notifications.backend_started` (False while on the lazy InMemoryBackend fallback), `await notifications.stop_backend()`.
+
 ---
 
 ## Client-Side SSE JS

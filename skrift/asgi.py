@@ -1079,8 +1079,7 @@ def create_app() -> ASGIApp:
         from skrift.hooks import APP_STARTUP, LOGFIRE_CONFIGURED, hooks
         await hooks.do_action(LOGFIRE_CONFIGURED)
 
-        notification_service.set_backend(backend)
-        await backend.start()
+        await notification_service.start_backend(backend)
 
         await email_backend.start()
 
@@ -1167,7 +1166,7 @@ def create_app() -> ASGIApp:
             await get_runtime().stop()
 
         await notification_service.disconnect_active_connections()
-        await notification_service._get_backend().stop()
+        await notification_service.stop_backend()
         await email_backend.stop()
         await storage_manager.close()
         await trusted_proxy_manager.stop()

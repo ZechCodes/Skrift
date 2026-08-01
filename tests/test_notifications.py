@@ -1487,3 +1487,131 @@ class TestRedisReaderLoop:
             task.cancel()
 
         assert seen == [{}]
+
+
+# ===========================================================================
+# Public backend lifecycle API
+# ===========================================================================
+
+
+class _RecordingBackend:
+    """Minimal backend stub that records lifecycle calls."""
+
+    def __init__(self, **kwargs):
+        self.started = False
+        self.stopped = False
+        self.callback = None
+
+    async def start(self):
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+    def on_remote_message(self, callback):
+        self.callback = callback
+
+
+class TestBackendLifecycle:
+    """Test backend_started / start_backend / stop_backend / ensure_backend_started."""
+
+    def test_backend_started_false_on_fresh_service(self, svc):
+        assert svc.backend_started is False
+
+    @pytest.mark.asyncio
+    async def test_lazy_fallback_does_not_mark_started(self, svc):
+        svc._get_backend()
+        assert svc.backend_started is False
+
+    @pytest.mark.asyncio
+    async def test_start_backend_starts_and_marks(self, svc):
+        backend = _RecordingBackend()
+        await svc.start_backend(backend)
+
+        assert backend.started is True
+        assert backend.callback is not None
+        assert svc.backend_started is True
+
+    @pytest.mark.asyncio
+    async def test_stop_backend_stops_and_clears(self, svc):
+        backend = _RecordingBackend()
+        await svc.start_backend(backend)
+        await svc.stop_backend()
+
+        assert backend.stopped is True
+        assert svc.backend_started is False
+
+    @pytest.mark.asyncio
+    async def test_stop_backend_without_backend_is_noop(self, svc):
+        await svc.stop_backend()
+        assert svc.backend_started is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_unconfigured_returns_false(self, svc):
+        from skrift.config import Settings
+
+        settings = Settings(secret_key="test")
+        result = await svc.ensure_backend_started(settings=settings)
+
+        assert result is False
+        assert svc.backend_started is False
+        assert svc._backend is None
+
+    @pytest.mark.asyncio
+    async def test_ensure_configured_loads_and_starts(self, svc):
+        from skrift.config import NotificationsConfig, Settings
+        from skrift.lib.notification_backends import InMemoryBackend
+
+        settings = Settings(
+            secret_key="test",
+            notifications=NotificationsConfig(
+                backend="skrift.lib.notification_backends:InMemoryBackend"
+            ),
+        )
+        try:
+            result = await svc.ensure_backend_started(settings=settings)
+
+            assert result is True
+            assert svc.backend_started is True
+            assert isinstance(svc._backend, InMemoryBackend)
+        finally:
+            await svc.stop_backend()
+
+    @pytest.mark.asyncio
+    async def test_ensure_is_idempotent(self, svc):
+        from skrift.config import NotificationsConfig, Settings
+
+        settings = Settings(
+            secret_key="test",
+            notifications=NotificationsConfig(
+                backend="skrift.lib.notification_backends:InMemoryBackend"
+            ),
+        )
+        try:
+            await svc.ensure_backend_started(settings=settings)
+            first = svc._backend
+            result = await svc.ensure_backend_started(settings=settings)
+
+            assert result is True
+            assert svc._backend is first
+        finally:
+            await svc.stop_backend()
+
+    @pytest.mark.asyncio
+    async def test_ensure_concurrent_calls_start_one_backend(self, svc):
+        from skrift.config import NotificationsConfig, Settings
+
+        settings = Settings(
+            secret_key="test",
+            notifications=NotificationsConfig(
+                backend="skrift.lib.notification_backends:InMemoryBackend"
+            ),
+        )
+        try:
+            results = await asyncio.gather(
+                *(svc.ensure_backend_started(settings=settings) for _ in range(5))
+            )
+            assert all(results)
+            assert svc.backend_started is True
+        finally:
+            await svc.stop_backend()
