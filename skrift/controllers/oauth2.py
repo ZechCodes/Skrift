@@ -284,8 +284,16 @@ class OAuth2Controller(Controller):
         requested_scopes = scope.split() if scope else []
         allowed = client.allowed_scope_list
         for s in requested_scopes:
-            if s not in SCOPE_DEFINITIONS:
+            definition = SCOPE_DEFINITIONS.get(s)
+            if definition is None:
                 return _json_error("invalid_scope", f"Unknown scope: {s}")
+            # An empty allowed_scopes is a wildcard: it predates per-client
+            # scope configuration, so it cannot mean "deny everything" without
+            # breaking clients registered before the checkboxes existed. A
+            # sensitive scope discloses authorization state, so it never rides
+            # along on that wildcard — it has to be granted on purpose.
+            if definition.sensitive and s not in allowed:
+                return _json_error("invalid_scope", f"Scope not allowed for this client: {s}")
             if allowed and s not in allowed:
                 return _json_error("invalid_scope", f"Scope not allowed for this client: {s}")
 
@@ -952,6 +960,20 @@ class OAuth2Controller(Controller):
             return _json_error("invalid_token", "Missing or invalid Bearer token", status_code=401)
 
         token = auth_header[7:]  # Strip "Bearer "
+
+        # Both token paths may need the same `User` row: the JWT path for the
+        # profile claims its token does not carry, and either path for claims
+        # that are authorization state and so must be read live rather than
+        # trusted from a token. Memoizing the load keeps a request that needs
+        # several such claims down to one query, and lets a claim add its own
+        # lookup without either branch growing a duplicate of it.
+        loaded_users: dict[str, User | None] = {}
+
+        async def load_user(subject: str) -> User | None:
+            if subject not in loaded_users:
+                loaded_users[subject] = await db_session.get(User, UUID(subject))
+            return loaded_users[subject]
+
         payload = await verify_oauth_token(token, settings.secret_key, db_session)
         if payload is not None and payload.get("type") == "access":
             # Legacy HMAC access token — the profile travels in the payload.
@@ -970,7 +992,7 @@ class OAuth2Controller(Controller):
             # user record so userinfo stays authoritative.
             subject = jwt_claims["sub"]
             scope_str = jwt_claims.get("scope", "")
-            user = await db_session.get(User, UUID(subject))
+            user = await load_user(subject)
             profile = {
                 "email": (user.email if user else "") or "",
                 "name": (user.name if user else "") or "",
@@ -1004,6 +1026,14 @@ class OAuth2Controller(Controller):
             claims["name"] = profile["name"]
         if "picture" in allowed_claims:
             claims["picture"] = profile["picture"]
+        if "groups" in allowed_claims:
+            # Group membership is authorization state, so it is read live from
+            # the user record on both token paths rather than trusted from a
+            # token payload — a role revoked a moment ago must not still let
+            # someone in. The load is memoized and gated on the scope, so a
+            # token that did not ask for groups still makes no query.
+            user = await load_user(subject)
+            claims["groups"] = sorted(role.name for role in user.roles) if user else []
 
         return Response(
             content=claims,

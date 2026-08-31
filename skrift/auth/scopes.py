@@ -13,6 +13,7 @@ class ScopeDefinition:
     description: str
     claims: list[str] = field(default_factory=list)
     required: bool = False
+    sensitive: bool = False
     label: str | None = None
     details: str | None = None
     required_hint: str | None = None
@@ -27,6 +28,7 @@ def register_scope(
     description: str,
     claims: list[str] | None = None,
     required: bool = False,
+    sensitive: bool = False,
     label: str | None = None,
     details: str | None = None,
     required_hint: str | None = None,
@@ -42,6 +44,11 @@ def register_scope(
             depend on — the consent screen renders it locked instead of
             user-declinable, and consent submission always grants it when
             it was requested
+        sensitive: Whether the scope discloses authorization state and so must
+            be granted to a client explicitly. A client with an empty
+            ``allowed_scopes`` is otherwise treated as allowed every scope;
+            a sensitive scope is refused for such a client instead of riding
+            along on that wildcard
         label: Short display name for the scope (e.g. "View documents"); when
             given, the consent screen shows it as the heading with
             ``description`` as the summary line beneath
@@ -58,6 +65,7 @@ def register_scope(
         description=description,
         claims=claims or [],
         required=required,
+        sensitive=sensitive,
         label=label,
         details=details,
         required_hint=required_hint,
@@ -75,3 +83,16 @@ def get_scope_definition(name: str) -> ScopeDefinition | None:
 register_scope("openid", "Verify your identity", claims=["sub"])
 register_scope("profile", "Access your name and picture", claims=["name", "picture"])
 register_scope("email", "Access your email address", claims=["email", "email_verified"])
+register_scope(
+    "groups",
+    "Share which groups you belong to",
+    claims=["groups"],
+    sensitive=True,
+    label="View your group memberships",
+    details=(
+        "Applications use this to decide what you are allowed to access. Only "
+        "the names of your groups are shared — never the permissions they "
+        "carry. Declining means an app that gates access on group membership "
+        "will not let you in."
+    ),
+)

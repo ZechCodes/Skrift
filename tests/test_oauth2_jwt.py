@@ -578,16 +578,23 @@ class TestRefreshKeepsAudience:
         assert "aud" not in claims
 
 
-async def _userinfo(token, jwks, *, user="default", revoked=False, email_verified=True):
+async def _userinfo(
+    token, jwks, *, user="default", revoked=False, email_verified=True, record_session=None
+):
     if user == "default":
         user = MagicMock(email="u@example.com", picture_url="https://x/p.png")
         user.name = "U User"
+        # `roles` must be a real sequence: a bare MagicMock is iterable-looking
+        # to attribute access but explodes when actually iterated.
+        user.roles = []
     controller = OAuth2Controller(owner=MagicMock())
     request = MagicMock()
     request.headers = {"authorization": f"Bearer {token}"}
     request.base_url = "http://localhost:8000/"
     db_session = AsyncMock()
     db_session.get = AsyncMock(return_value=user)
+    if record_session is not None:
+        record_session.append(db_session)
 
     with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()), \
          patch("skrift.controllers.oauth2.oauth2_service") as mock_svc, \
@@ -631,6 +638,77 @@ class TestUserinfoWithJwt:
         key = _signing_key()
         result = await _userinfo(_mint(key, issuer="https://evil.example.com"), _jwks_for(key))
         assert result.status_code == 401
+
+
+def _user_with_roles(*names):
+    user = MagicMock(email="u@example.com", picture_url="https://x/p.png")
+    user.name = "U User"
+    roles = []
+    for name in names:
+        role = MagicMock()
+        role.name = name
+        roles.append(role)
+    user.roles = roles
+    return user
+
+
+class TestGroupsClaimWithJwt:
+    """The `groups` claim on the JWT path, read from `User.roles`."""
+
+    @pytest.mark.asyncio
+    async def test_groups_scope_grants_the_claim(self):
+        key = _signing_key()
+        result = await _userinfo(
+            _mint(key, scope="openid groups"), _jwks_for(key), user=_user_with_roles("llm-users")
+        )
+        assert result.status_code == 200
+        assert result.content == {"sub": USER_ID, "groups": ["llm-users"]}
+
+    @pytest.mark.asyncio
+    async def test_multiple_roles_all_appear_sorted(self):
+        key = _signing_key()
+        result = await _userinfo(
+            _mint(key, scope="openid groups"),
+            _jwks_for(key),
+            user=_user_with_roles("editor", "admin", "llm-users"),
+        )
+        assert result.content["groups"] == ["admin", "editor", "llm-users"]
+
+    @pytest.mark.asyncio
+    async def test_user_with_no_roles_yields_empty_list(self):
+        key = _signing_key()
+        result = await _userinfo(
+            _mint(key, scope="openid groups"), _jwks_for(key), user=_user_with_roles()
+        )
+        assert result.content == {"sub": USER_ID, "groups": []}
+
+    @pytest.mark.asyncio
+    async def test_missing_user_row_yields_empty_list(self):
+        key = _signing_key()
+        result = await _userinfo(_mint(key, scope="openid groups"), _jwks_for(key), user=None)
+        assert result.content == {"sub": USER_ID, "groups": []}
+
+    @pytest.mark.asyncio
+    async def test_without_the_scope_the_claim_is_omitted(self):
+        key = _signing_key()
+        result = await _userinfo(
+            _mint(key, scope="openid email"), _jwks_for(key), user=_user_with_roles("llm-users")
+        )
+        assert "groups" not in result.content
+
+    @pytest.mark.asyncio
+    async def test_profile_and_groups_share_one_user_query(self):
+        """The memoized load means the extra claim costs no extra round trip."""
+        key = _signing_key()
+        sessions = []
+        result = await _userinfo(
+            _mint(key, scope="openid profile email groups"),
+            _jwks_for(key),
+            user=_user_with_roles("llm-users"),
+            record_session=sessions,
+        )
+        assert result.content["groups"] == ["llm-users"]
+        assert sessions[0].get.await_count == 1
 
 
 async def _revoke(token, jwks):
