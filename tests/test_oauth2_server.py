@@ -1038,6 +1038,15 @@ class TestScopeRegistry:
         defn = SCOPE_DEFINITIONS["email"]
         assert "email" in defn.claims
 
+    def test_groups_scope_claims(self):
+        defn = SCOPE_DEFINITIONS["groups"]
+        assert defn.claims == ["groups"]
+
+    def test_groups_scope_is_declinable(self):
+        """A locked groups scope would force disclosure on every client, not
+        just the one that gates on it. Declining must stay possible."""
+        assert SCOPE_DEFINITIONS["groups"].required is False
+
     def test_register_custom_scope(self):
         register_scope("custom", "Custom scope", claims=["custom_claim"])
         defn = get_scope_definition("custom")
@@ -1090,3 +1099,56 @@ class TestDiscovery:
         with patch("skrift.config.get_settings", return_value=settings), \
              pytest.raises(NotFoundException):
             await SitemapController.openid_configuration.fn(controller, request)
+
+
+class TestSensitiveScopeWildcardGate:
+    """A client with an empty ``allowed_scopes`` is a wildcard for ordinary
+    scopes — it predates per-client scope configuration. A *sensitive* scope
+    discloses authorization state and must never ride along on that wildcard.
+    """
+
+    def _request(self, scope: str):
+        request = MagicMock()
+        request.query_params = {
+            "response_type": "code",
+            "client_id": "abc",
+            "redirect_uri": "http://localhost/cb",
+            "state": "xyz",
+            "scope": scope,
+            "code_challenge": "challenge",
+            "code_challenge_method": "S256",
+        }
+        request.session = {}
+        return request
+
+    async def _authorize(self, scope: str, allowed_scopes):
+        controller = OAuth2Controller(owner=MagicMock())
+        db_session = AsyncMock()
+        client = _mock_client(
+            redirect_uris=["http://localhost/cb"], allowed_scopes=allowed_scopes
+        )
+        with patch("skrift.controllers.oauth2.oauth2_service") as mock_svc:
+            mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
+            return await OAuth2Controller.authorize_get.fn(
+                controller, self._request(scope), db_session
+            )
+
+    @pytest.mark.asyncio
+    async def test_wildcard_client_is_refused_the_groups_scope(self):
+        result = await self._authorize("openid groups", allowed_scopes=[])
+        assert result.status_code == 400
+        assert "groups" in result.content["error_description"]
+
+    @pytest.mark.asyncio
+    async def test_wildcard_client_still_gets_ordinary_scopes(self):
+        # The wildcard must keep working for non-sensitive scopes, or every
+        # client registered before the scope checkboxes existed breaks.
+        result = await self._authorize("openid profile email", allowed_scopes=[])
+        assert result.status_code != 400
+
+    @pytest.mark.asyncio
+    async def test_explicitly_granted_client_gets_groups(self):
+        result = await self._authorize(
+            "openid groups", allowed_scopes=["openid", "groups"]
+        )
+        assert result.status_code != 400

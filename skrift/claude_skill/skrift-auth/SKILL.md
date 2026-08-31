@@ -216,7 +216,8 @@ Multiple hubs: use the `provider` field to decouple key from type (see Provider 
 ```python
 from skrift.auth.scopes import register_scope
 
-# Built-in: openid (sub), profile (name, picture), email (email)
+# Built-in: openid (sub), profile (name, picture), email (email, email_verified),
+#           groups (groups — sorted Role.name list, read live from User.roles)
 register_scope("custom", "Access custom data", claims=["custom_field"])
 ```
 

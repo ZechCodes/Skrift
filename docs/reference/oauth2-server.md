@@ -100,9 +100,17 @@ Requires `Authorization: Bearer <access_token>` header. Returns claims filtered 
 |-------|----------------|
 | `openid` | `sub` |
 | `profile` | `name`, `picture` |
-| `email` | `email` |
+| `email` | `email`, `email_verified` |
+| `groups` | `groups` |
 
-If no scopes were specified, all claims are returned for backwards compatibility.
+Filtering is strict: a token minted with no scopes gets only `sub`.
+
+`groups` is a list of the user's `Role.name` values, sorted, read live from the
+user record on every request rather than carried on the token — a role revoked
+a moment ago stops granting access immediately. Users hold many roles and all
+of them are reported; a user with no roles gets `[]`. Because the names are
+what relying parties match on (e.g. LiteLLM's `restricted_sso_group`),
+**renaming a role is a breaking change for any client gating on it**.
 
 ### Revocation (`POST /oauth/revoke`)
 
@@ -130,7 +138,8 @@ Built-in scopes:
 |-------|-------------|--------|
 | `openid` | Verify your identity | `sub` |
 | `profile` | Access your name and picture | `name`, `picture` |
-| `email` | Access your email address | `email` |
+| `email` | Access your email address | `email`, `email_verified` |
+| `groups` | Share which groups you belong to | `groups` |
 
 ### Custom Scopes
 

@@ -310,6 +310,22 @@ class TestRegisterScopeDefaults:
         assert client.allowed_scope_list == ["openid", "profile", "email"]
 
     @pytest.mark.asyncio
+    async def test_defaults_exclude_groups(self, db_session):
+        """A client that never asked for group membership must not be handed
+        it. `groups` is opt-in even though it is a built-in scope."""
+        result = await _register(db_session, {"redirect_uris": ["https://app.example.com/cb"]})
+        assert "groups" not in result.content["scope"]
+
+    @pytest.mark.asyncio
+    async def test_groups_is_registrable_when_asked_for(self, db_session):
+        result = await _register(
+            db_session,
+            {"redirect_uris": ["https://app.example.com/cb"], "scope": "openid groups"},
+        )
+        assert result.status_code == 201
+        assert result.content["scope"] == "openid groups"
+
+    @pytest.mark.asyncio
     async def test_empty_scope_defaults_to_identity_scopes(self, db_session):
         result = await _register(
             db_session,
@@ -591,6 +607,32 @@ class TestClientNameInjection:
         # The dict serializes to valid JSON with no smuggled keys.
         encoded = json.dumps(result.content)
         assert json.loads(encoded)["client_name"] == payload
+
+
+class TestDiscoveryClaims:
+    """Characterization: what the discovery document advertises it can emit.
+
+    `claims_supported` is hand-maintained while `scopes_supported` derives
+    from the scope registry, so the two drift independently and each needs
+    its own assertion.
+    """
+
+    def test_claims_supported(self):
+        metadata = build_authorization_server_metadata(ISSUER)
+        assert metadata["claims_supported"] == [
+            "sub",
+            "name",
+            "email",
+            "email_verified",
+            "picture",
+            "groups",
+        ]
+
+    def test_scopes_supported_derives_from_the_registry(self):
+        metadata = build_authorization_server_metadata(ISSUER)
+        assert metadata["scopes_supported"] == sorted(SCOPE_DEFINITIONS)
+        for builtin in ("openid", "profile", "email", "groups"):
+            assert builtin in metadata["scopes_supported"]
 
 
 class TestDiscoveryRegistrationEndpoint:

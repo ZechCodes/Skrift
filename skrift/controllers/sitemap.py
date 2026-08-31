@@ -34,7 +34,7 @@ def build_authorization_server_metadata(issuer: str, *, registration_enabled: bo
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "scopes_supported": sorted(SCOPE_DEFINITIONS),
-        "claims_supported": ["sub", "name", "email", "email_verified", "picture"],
+        "claims_supported": ["sub", "name", "email", "email_verified", "picture", "groups"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
     }
