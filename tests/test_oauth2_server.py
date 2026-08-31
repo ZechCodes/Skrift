@@ -12,6 +12,7 @@ from skrift.auth.scopes import SCOPE_DEFINITIONS, register_scope, get_scope_defi
 from skrift.config import SecurityHeadersConfig
 from skrift.auth.tokens import create_signed_token, verify_signed_token
 from skrift.controllers.oauth2 import (
+    _client_credentials,
     OAuth2Controller,
     _verify_pkce,
     _json_error,
@@ -1152,3 +1153,45 @@ class TestSensitiveScopeWildcardGate:
             "openid groups", allowed_scopes=["openid", "groups"]
         )
         assert result.status_code != 400
+
+
+class TestTokenEndpointBasicAuth:
+    """RFC 6749 §2.3.1 makes `client_secret_basic` the preferred client
+    authentication method and requires servers to support it. Reading the
+    form body alone rejected every Basic-only client — anything built on
+    fastapi-sso, LiteLLM included — with an opaque invalid_client.
+    """
+
+    def test_basic_header_is_decoded(self):
+        request = MagicMock()
+        request.headers = {"authorization": "Basic " + base64.b64encode(b"cid:sec").decode()}
+        assert _client_credentials(request, {}) == ("cid", "sec")
+
+    def test_form_body_still_works(self):
+        request = MagicMock()
+        request.headers = {}
+        form = {"client_id": "cid", "client_secret": "sec"}
+        assert _client_credentials(request, form) == ("cid", "sec")
+
+    def test_basic_takes_precedence_over_body(self):
+        request = MagicMock()
+        request.headers = {"authorization": "Basic " + base64.b64encode(b"hdr:hsec").decode()}
+        form = {"client_id": "body", "client_secret": "bsec"}
+        assert _client_credentials(request, form) == ("hdr", "hsec")
+
+    def test_percent_encoded_credentials_are_decoded(self):
+        # RFC 6749 form-urlencodes each half before joining with ':'.
+        raw = base64.b64encode(b"a%40b:p%2Bw").decode()
+        request = MagicMock()
+        request.headers = {"authorization": "Basic " + raw}
+        assert _client_credentials(request, {}) == ("a@b", "p+w")
+
+    def test_malformed_basic_yields_empty_credentials(self):
+        request = MagicMock()
+        request.headers = {"authorization": "Basic !!!not-base64!!!"}
+        assert _client_credentials(request, {}) == ("", "")
+
+    def test_basic_without_colon_yields_empty_credentials(self):
+        request = MagicMock()
+        request.headers = {"authorization": "Basic " + base64.b64encode(b"nocolon").decode()}
+        assert _client_credentials(request, {}) == ("", "")
