@@ -11,7 +11,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote_plus, urlencode, urlsplit
 
 from litestar import Controller, Request, get, post
 from litestar.exceptions import NotFoundException
@@ -72,6 +72,31 @@ def _verify_pkce(code_verifier: str, code_challenge: str) -> bool:
     digest = hashlib.sha256(code_verifier.encode()).digest()
     computed = base64.urlsafe_b64encode(digest).decode().rstrip("=")
     return computed == code_challenge
+
+
+
+def _client_credentials(request: Request, form_data) -> tuple[str, str]:
+    """Client id and secret for the token endpoint.
+
+    RFC 6749 §2.3.1 requires the authorization server to support HTTP Basic
+    (`client_secret_basic`) and permits the form body (`client_secret_post`).
+    We read Basic first, since the spec names it the preferred method, then
+    fall back to the body. Many clients — anything built on fastapi-sso, for
+    one — send Basic only, and reading the body alone rejects them with an
+    opaque 400.
+    """
+    header = request.headers.get("authorization", "")
+    if header[:6].lower() == "basic ":
+        try:
+            decoded = base64.b64decode(header[6:].strip(), validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return "", ""
+        client_id, sep, client_secret = decoded.partition(":")
+        if sep:
+            # Per RFC 6749 the two halves are form-urlencoded before joining.
+            return unquote_plus(client_id), unquote_plus(client_secret)
+        return "", ""
+    return form_data.get("client_id", ""), form_data.get("client_secret", "")
 
 
 def _resolve_issuer(settings, request: Request) -> str:
@@ -537,20 +562,21 @@ class OAuth2Controller(Controller):
         issuer = _resolve_issuer(get_settings(), request)
 
         if grant_type == "authorization_code":
-            return await self._handle_authorization_code(form_data, db_session, issuer)
+            return await self._handle_authorization_code(request, form_data, db_session, issuer)
         elif grant_type == "refresh_token":
-            return await self._handle_refresh_token(form_data, db_session, issuer)
+            return await self._handle_refresh_token(request, form_data, db_session, issuer)
         else:
             return _json_error("unsupported_grant_type", f"Unsupported grant_type: {grant_type}")
 
-    async def _handle_authorization_code(self, form_data, db_session: AsyncSession, issuer: str) -> Response:
+    async def _handle_authorization_code(
+        self, request: Request, form_data, db_session: AsyncSession, issuer: str
+    ) -> Response:
         """Handle grant_type=authorization_code."""
         settings = get_settings()
 
         code = form_data.get("code", "")
         redirect_uri = form_data.get("redirect_uri", "")
-        client_id = form_data.get("client_id", "")
-        client_secret = form_data.get("client_secret", "")
+        client_id, client_secret = _client_credentials(request, form_data)
         code_verifier = form_data.get("code_verifier", "")
 
         # Verify auth code — revocation-aware so replays of a consumed code fail.
@@ -651,7 +677,9 @@ class OAuth2Controller(Controller):
             media_type="application/json",
         )
 
-    async def _handle_refresh_token(self, form_data, db_session: AsyncSession, issuer: str) -> Response:
+    async def _handle_refresh_token(
+        self, request: Request, form_data, db_session: AsyncSession, issuer: str
+    ) -> Response:
         """Handle grant_type=refresh_token with RFC 6749 §10.4 reuse detection.
 
         Three outcomes for a presented refresh token:
@@ -670,8 +698,7 @@ class OAuth2Controller(Controller):
         settings = get_settings()
 
         refresh_token_str = form_data.get("refresh_token", "")
-        client_id = form_data.get("client_id", "")
-        client_secret = form_data.get("client_secret", "")
+        client_id, client_secret = _client_credentials(request, form_data)
 
         # Signature-only verify (don't conflate "expired/bad" with "revoked").
         payload = verify_signed_token(refresh_token_str, settings.secret_key)
@@ -1072,8 +1099,7 @@ class OAuth2Controller(Controller):
         """Token introspection endpoint (RFC 7662). Requires client auth."""
         form_data = await request.form()
         token_str = form_data.get("token", "")
-        client_id = form_data.get("client_id", "")
-        client_secret = form_data.get("client_secret", "")
+        client_id, client_secret = _client_credentials(request, form_data)
 
         # Require client authentication
         if not client_id:
