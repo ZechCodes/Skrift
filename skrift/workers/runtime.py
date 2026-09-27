@@ -507,6 +507,7 @@ class WorkerRuntime:
                     status=JobStatus.SUBMITTED,
                     attempt=state.attempt,
                     paused_state=state.paused_state,
+                    attempt_history=state.attempt_history,
                 )
             )
             await self.queue.submit(state.job, job_id=job_id)
@@ -781,6 +782,7 @@ class WorkerRuntime:
         job.attempt += 1
         started_at = utcnow()
         previous_state = await self.get_job_state(job.id)
+        attempt_history = previous_state.attempt_history if previous_state is not None else []
         await self.emit_lifecycle(LifecycleEventType.JOB_CLAIMED, job)
         if previous_state is not None and previous_state.status == JobStatus.PAUSED:
             await self.emit_lifecycle(LifecycleEventType.JOB_RESUMED, job)
@@ -790,9 +792,7 @@ class WorkerRuntime:
                 status=JobStatus.RUNNING,
                 attempt=job.attempt,
                 paused_state=previous_state.paused_state if previous_state is not None else {},
-                attempt_history=(
-                    previous_state.attempt_history if previous_state is not None else []
-                ),
+                attempt_history=attempt_history,
             )
         )
         await self.emit_lifecycle(LifecycleEventType.JOB_STARTED, job)
@@ -830,6 +830,7 @@ class WorkerRuntime:
                 status=JobStatus.COMPLETED,
                 attempt=job.attempt,
                 result=result,
+                attempt_history=attempt_history,
             )
         )
         await self.emit_lifecycle(LifecycleEventType.JOB_COMPLETED, job)
@@ -1046,9 +1047,15 @@ class WorkerRuntime:
         inline: bool,
     ) -> None:
         job = claimed.job
+        previous_state = await self.get_job_state(job.id)
         if not inline:
             await self._nack(job, claimed.token, dead_letter=True)
-        await self._dead_letter(job, cause=cause, attempts=[], error=error)
+        await self._dead_letter(
+            job,
+            cause=cause,
+            attempts=previous_state.attempt_history if previous_state is not None else [],
+            error=error,
+        )
 
     async def _dead_letter(
         self,

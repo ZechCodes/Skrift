@@ -25,6 +25,7 @@ from skrift.workers import (
     InMemoryQueue,
     InMemoryStateStore,
     Job,
+    DeadJobAttempt,
     DeadJobEntry,
     DeadLetterCause,
     DeadLetterState,
@@ -1178,6 +1179,93 @@ async def test_in_process_attempt_history_survives_pause_and_wake(
     dead = await runtime.inspect_dlq()
     assert len(dead) == 1
     assert [attempt.error for attempt in dead[0].attempts] == ["boom 1", "boom 3"]
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_in_process_completed_state_keeps_attempt_history(
+    backend,
+    worker_session_maker,
+    fake_redis_client,
+):
+    runs = 0
+
+    @skrift.handler("fails_then_succeeds", max_attempts=3)
+    async def fails_then_succeeds(job: Greeting):
+        nonlocal runs
+        runs += 1
+        if runs == 1:
+            raise RuntimeError("first")
+        return "ok"
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        **_worker_backends(
+            backend,
+            {"session_maker": worker_session_maker, "redis_client": fake_redis_client},
+        ),
+    )
+    await runtime.start()
+    try:
+        handle = await runtime.submit(Greeting(name="Ada"))
+        assert await handle.result(timeout=5) == "ok"
+    finally:
+        await runtime.stop()
+
+    state = await handle.status()
+    assert state.status == JobStatus.COMPLETED
+    assert [attempt.error for attempt in state.attempt_history] == ["first"]
+
+
+async def test_reclaim_loop_dead_letter_keeps_attempt_history():
+    @skrift.handler("fails_then_loops", max_attempts=3)
+    async def fails_then_loops(job: Greeting):
+        raise RuntimeError("first")
+
+    runtime = skrift.configure_workers(mode="out_of_process")
+    handle = await runtime.submit(Greeting(name="Ada"))
+    await runtime.execute_claim(await runtime.queue.claim(["default"], visibility_timeout=30))
+
+    claimed = await runtime.queue.claim(["default"], visibility_timeout=30)
+    claimed.job.reclaim_count = claimed.job.max_reclaims
+    await runtime.execute_claim(claimed)
+
+    state = await handle.status()
+    assert state.status == JobStatus.DEAD_LETTERED
+    assert [attempt.error for attempt in state.attempt_history] == ["first"]
+    dead = await runtime.inspect_dlq()
+    assert dead[0].cause == DeadLetterCause.RECLAIM_LOOP
+    assert [attempt.error for attempt in dead[0].attempts] == ["first"]
+
+
+async def test_inline_then_queued_wake_keeps_attempt_history():
+    @skrift.handler("paused_inline")
+    async def paused_inline(job: Greeting):
+        return "ok"
+
+    runtime = skrift.configure_workers(mode="out_of_process")
+    job = JobEnvelope(
+        type="paused_inline",
+        payload={"name": "Ada"},
+        metadata={"skrift_dispatch": "inline_then_queued"},
+    )
+    history = [
+        DeadJobAttempt(
+            attempt=1,
+            started_at=utcnow(),
+            finished_at=utcnow(),
+            exception_type="RuntimeError",
+            error="first",
+        )
+    ]
+    await runtime._set_state(
+        JobState(job=job, status=JobStatus.PAUSED, attempt=1, attempt_history=history)
+    )
+
+    assert await runtime.wake(job.id)
+
+    state = await runtime.get_job_state(job.id)
+    assert state.status == JobStatus.SUBMITTED
+    assert [attempt.error for attempt in state.attempt_history] == ["first"]
 
 
 async def test_queue_with_legacy_nack_signature_still_releases_claims():
