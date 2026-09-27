@@ -13,7 +13,7 @@ from collections import deque
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
@@ -42,6 +42,7 @@ from skrift.workers.models import (
     Pause,
     RetryPolicy,
     WorkerLifecycleEvent,
+    micros_since_epoch,
     utcnow,
 )
 from skrift.workers.registry import HandlerDescriptor, HandlerRegistry, registry
@@ -108,10 +109,14 @@ class WorkerBackendConfig:
 
 @dataclass
 class _Run:
-    """One execution of a claim: its RUNNING state and the job state it replaced."""
+    """One execution of a claim: its id, its claim's order, and the state it replaced.
 
-    running: JobState
-    replaced: JobState | None
+    ``order`` is None for inline runs, which no other run can overlap.
+    """
+
+    run_id: str | None
+    order: int | None
+    replaced: JobState | None = None
 
 
 @dataclass
@@ -800,9 +805,6 @@ class WorkerRuntime:
         started_at = utcnow()
         previous_state = await self.get_job_state(job.id)
         attempt_history = previous_state.attempt_history if previous_state is not None else []
-        await self.emit_lifecycle(LifecycleEventType.JOB_CLAIMED, job)
-        if previous_state is not None and previous_state.status == JobStatus.PAUSED:
-            await self.emit_lifecycle(LifecycleEventType.JOB_RESUMED, job)
         run = await self._start_run(
             JobState(
                 job=job,
@@ -810,9 +812,18 @@ class WorkerRuntime:
                 attempt=job.attempt,
                 paused_state=previous_state.paused_state if previous_state is not None else {},
                 attempt_history=attempt_history,
-                run_id=uuid4().hex,
-            )
+            ),
+            order=None if inline else self._claim_order(claimed),
         )
+        if run is None:
+            logger.warning(
+                "Job %s was claimed again after this worker's claim; skipping the run",
+                job.id,
+            )
+            return
+        await self.emit_lifecycle(LifecycleEventType.JOB_CLAIMED, job)
+        if previous_state is not None and previous_state.status == JobStatus.PAUSED:
+            await self.emit_lifecycle(LifecycleEventType.JOB_RESUMED, job)
         await self.emit_lifecycle(LifecycleEventType.JOB_STARTED, job)
         try:
             result = await self._call_handler(descriptor, job)
@@ -1051,7 +1062,10 @@ class WorkerRuntime:
         except ValueError:
             self._log_claim_lost(job)
             if run is not None and run.replaced is not None:
-                await self._set_run_state(run.replaced.model_copy(), run, keep_run_id=True)
+                await self._write_state_if(
+                    run.replaced.model_copy(),
+                    lambda current: current is not None and current.run_id == run.run_id,
+                )
             return False
         return True
 
@@ -1067,40 +1081,40 @@ class WorkerRuntime:
         expires_at = claimed.claimed_at + timedelta(seconds=claimed.visibility_timeout)
         return utcnow() >= expires_at
 
-    async def _start_run(self, running: JobState) -> _Run:
-        """Write a run's RUNNING state, whoever wrote the state before it.
+    @staticmethod
+    def _claim_order(claimed: ClaimedJob) -> int:
+        """Order of this claim among the job's claims; a later claim's run wins.
 
-        A new run always owns the job's state. What it replaced is kept so a run
-        whose claim turns out to be lost can put it back.
+        A queue that does not supply one is ordered by when this host received
+        the claim, which workers on skewed clocks can get wrong.
         """
-        running.updated_at = utcnow()
-        replaced: list[JobState | None] = []
+        if claimed.claim_order is not None:
+            return claimed.claim_order
+        return micros_since_epoch(claimed.claimed_at)
 
-        def write(current: JobState | None) -> JobState:
-            replaced[:] = [current]
-            return running
+    async def _start_run(self, running: JobState, *, order: int | None) -> _Run | None:
+        """Write a run's RUNNING state unless a later claim's run has written.
 
-        await self.state_store.update(
-            self._job_key(running.job.id), write, ttl=self._job_state_ttl
+        Returns None, writing nothing, if it has: this worker's claim expired and
+        the job was claimed again. What the write replaced is kept so a run whose
+        claim turns out to be lost can put it back.
+        """
+        run = _Run(run_id=uuid4().hex, order=order)
+        running.run_id, running.run_order = run.run_id, order
+        written, run.replaced = await self._write_state_if(
+            running, lambda current: self._not_superseded(current, order)
         )
-        async with self._condition:
-            self._condition.notify_all()
-        return _Run(running=running, replaced=replaced[0])
+        return run if written else None
 
     async def _set_settled_state(self, state: JobState, run: _Run | None) -> None:
         """Write a job's outcome after the queue accepted its ack or dead-letter nack.
 
         The queue's token check made this run the job's owner, so the write wins
-        over any run id stored since: a worker that started late on an expired
-        claim may have written RUNNING over this run's state.
+        whatever is stored.
         """
-        state.run_id = run.running.run_id if run is not None else None
-        state.updated_at = utcnow()
-        await self.state_store.update(
-            self._job_key(state.job.id), lambda current: state, ttl=self._job_state_ttl
-        )
-        async with self._condition:
-            self._condition.notify_all()
+        if run is not None:
+            state.run_id, state.run_order = run.run_id, run.order
+        await self._write_state_if(state, lambda current: True)
 
     @staticmethod
     def _log_claim_lost(job: JobEnvelope) -> None:
@@ -1110,37 +1124,56 @@ class WorkerRuntime:
             job.id,
         )
 
-    async def _set_run_state(
-        self, state: JobState, run: _Run, *, keep_run_id: bool = False
-    ) -> bool:
-        """Write a run's state only while the stored state is still that run's.
+    async def _set_run_state(self, state: JobState, run: _Run) -> bool:
+        """Write a state a run records before its claim is settled (a retry, a pause).
 
-        Used for the writes a run makes before its claim is settled. Returns
-        False, writing nothing, once another run has recorded its own state:
-        this run's claim was lost.
+        Returns False, writing nothing, once a later claim's run has written the
+        job's state: this run's claim was lost.
         """
-        running = run.running
-        if not keep_run_id:
-            state.run_id = running.run_id
-        state.updated_at = utcnow()
+        state.run_id, state.run_order = run.run_id, run.order
+        written, _ = await self._write_state_if(
+            state, lambda current: self._not_superseded(current, run.order)
+        )
+        return written
 
-        class Superseded(Exception):
+    @staticmethod
+    def _not_superseded(current: JobState | None, order: int | None) -> bool:
+        """Whether the stored state was written by no run of a later claim."""
+        return (
+            order is None
+            or current is None
+            or current.run_order is None
+            or current.run_order <= order
+        )
+
+    async def _write_state_if(
+        self, state: JobState, allowed: Callable[[JobState | None], bool]
+    ) -> tuple[bool, JobState | None]:
+        """Write ``state`` in one state-store update if ``allowed`` accepts the stored one.
+
+        Returns whether it was written and the state it found.
+        """
+        state.updated_at = utcnow()
+        found: list[JobState | None] = [None]
+
+        class Refused(Exception):
             pass
 
         def write(current: JobState | None) -> JobState:
-            if current is None or current.run_id != running.run_id:
-                raise Superseded
+            found[0] = current
+            if not allowed(current):
+                raise Refused
             return state
 
         try:
             await self.state_store.update(
                 self._job_key(state.job.id), write, ttl=self._job_state_ttl
             )
-        except Superseded:
-            return False
+        except Refused:
+            return False, found[0]
         async with self._condition:
             self._condition.notify_all()
-        return True
+        return True, found[0]
 
     async def _nack(self, job: JobEnvelope, token: str, **kwargs: Any) -> None:
         if self._queue_nack_accepts_job():
@@ -1220,6 +1253,8 @@ class WorkerRuntime:
             cause=cause,
             attempts=previous_state.attempt_history if previous_state is not None else [],
             error=error,
+            # Stamped with this claim's order so no earlier claim's run writes over it.
+            run=_Run(run_id=None, order=None if inline else self._claim_order(claimed)),
         )
 
     async def _dead_letter(

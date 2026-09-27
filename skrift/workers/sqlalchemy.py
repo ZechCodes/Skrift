@@ -32,6 +32,7 @@ from skrift.workers.models import (
     JobState,
     JobStatus,
     QueueStats,
+    micros_since_epoch,
 )
 
 RECLAIM_BATCH_SIZE = 200
@@ -568,7 +569,14 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
                     .execution_options(synchronize_session=False)
                 )
                 await session.commit()
-                return ClaimedJob(job=job, token=token, visibility_timeout=visibility_timeout)
+                # Claims of one job are ordered by the lease clock: a job is
+                # claimed again only after its previous claim ended.
+                return ClaimedJob(
+                    job=job,
+                    token=token,
+                    visibility_timeout=visibility_timeout,
+                    claim_order=micros_since_epoch(_utc(row.db_now)),
+                )
             return None
 
     async def ack(self, queue: str, job_id: str, token: str) -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field
 def utcnow() -> datetime:
     """Return an aware UTC timestamp."""
     return datetime.now(timezone.utc)
+
+
+def micros_since_epoch(value: datetime) -> int:
+    """Whole microseconds since the Unix epoch, for ordering claims by time."""
+    return (value - datetime(1970, 1, 1, tzinfo=timezone.utc)) // timedelta(microseconds=1)
 
 
 class Job(BaseModel):
@@ -117,6 +122,9 @@ class ClaimedJob(BaseModel):
     # has granted it, so claimed_at + visibility_timeout is never before the
     # lease really ends. None if the queue does not report it.
     visibility_timeout: float | None = None
+    # Orders the claims of one job: a later claim has a greater value. None if
+    # the queue does not supply one.
+    claim_order: int | None = None
 
 
 class JobState(BaseModel):
@@ -131,10 +139,11 @@ class JobState(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
     paused_state: dict[str, Any] = Field(default_factory=dict)
     attempt_history: list["DeadJobAttempt"] = Field(default_factory=list)
-    # The run (one execution of a claim) that wrote this state. A run records
-    # its outcome only while the stored state is still its own, so a worker
-    # whose claim expired and was taken over cannot overwrite the new run.
+    # The run (one execution of a claim) that wrote this state, and its claim's
+    # order. A run writes the job's state only while no later claim's run has,
+    # so a worker whose claim expired and was taken over cannot overwrite it.
     run_id: str | None = None
+    run_order: int | None = None
 
 
 class WorkerLifecycleEvent(BaseModel):

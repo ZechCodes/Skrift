@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from itertools import islice
+from itertools import count, islice
 from typing import Any
 from uuid import uuid4
 
@@ -315,6 +315,7 @@ class InMemoryQueue:
     def __init__(self) -> None:
         self._entries: dict[str, dict[str, _QueueEntry]] = defaultdict(dict)
         self._condition = asyncio.Condition()
+        self._claim_orders = count(1)
 
     async def submit(self, job: JobEnvelope, *, job_id: str | None = None) -> JobEnvelope:
         if job_id is not None:
@@ -382,7 +383,10 @@ class InMemoryQueue:
                 entry.claim_expires_at = _now() + timedelta(seconds=visibility_timeout)
                 entry.job.ready_since = None
                 return ClaimedJob(
-                    job=entry.job, token=token, visibility_timeout=visibility_timeout
+                    job=entry.job,
+                    token=token,
+                    visibility_timeout=visibility_timeout,
+                    claim_order=next(self._claim_orders),
                 )
             return None
 

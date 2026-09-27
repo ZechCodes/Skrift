@@ -33,9 +33,10 @@ def _now() -> datetime:
 # a stalled worker or reaper from writing over a claim made after its lock ran
 # out.
 
-# KEYS: ready, claimed, claim, job
+# KEYS: ready, claimed, claim, job, claim order counter
 # ARGV: job_id, ready cutoff score, lease expiry score, queue, token, lease expiry iso
-# Returns the stored envelope, or nil if the job is no longer ready and unclaimed.
+# Returns the stored envelope and the claim's order, or nil if the job is no
+# longer ready and unclaimed.
 _CLAIM_SCRIPT = """
 local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if not score or tonumber(score) > tonumber(ARGV[2]) then return false end
@@ -45,7 +46,7 @@ if not job then return false end
 redis.call('ZREM', KEYS[1], ARGV[1])
 redis.call('ZADD', KEYS[2], ARGV[3], ARGV[1])
 redis.call('HSET', KEYS[3], 'queue', ARGV[4], 'token', ARGV[5], 'expires_at', ARGV[6])
-return job
+return {job, redis.call('INCR', KEYS[5])}
 """
 
 # KEYS: claim, job, ready, claimed, dead, dead_at, jobs_by_queue
@@ -702,11 +703,12 @@ class RedisQueue(_RedisBackend):
                 # and hands back the envelope as stored at that moment.
                 stored = await self._client.eval(
                     _CLAIM_SCRIPT,
-                    4,
+                    5,
                     self._ready_key(queue),
                     self._claimed_key(queue),
                     self._claim_key(job_id),
                     self._job_key(job_id),
+                    self._key("queue", "claim_order"),
                     job_id,
                     repr(_score(now)),
                     repr(_score(expires_at)),
@@ -716,9 +718,15 @@ class RedisQueue(_RedisBackend):
                 )
                 if stored is None:
                     continue
-                job = _job_from_json(stored)
+                stored_job, claim_order = stored
+                job = _job_from_json(stored_job)
                 job.ready_since = None
-                return ClaimedJob(job=job, token=token, visibility_timeout=visibility_timeout)
+                return ClaimedJob(
+                    job=job,
+                    token=token,
+                    visibility_timeout=visibility_timeout,
+                    claim_order=int(claim_order),
+                )
             return None
 
     async def ack(self, queue: str, job_id: str, token: str) -> None:
