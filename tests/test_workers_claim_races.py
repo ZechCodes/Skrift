@@ -15,7 +15,9 @@ from redis.exceptions import LockNotOwnedError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import skrift.workers.memory as memory_backend
 import skrift.workers.redis as redis_backend
+import skrift.workers.sqlalchemy as sqlalchemy_backend
 from skrift.db.base import Base
 from skrift.db.models.worker import WorkerQueueRecord
 from skrift.workers import InMemoryQueue, RedisQueue, SQLAlchemyQueue
@@ -540,6 +542,28 @@ async def test_wake_of_a_claimed_job_is_applied_by_its_nack(
     assert (resumed is not None) is ready_now
     stats = await queue.stats("default")
     assert (stats.claimed, stats.delayed) == ((1, 0) if ready_now else (0, 1))
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_ready_age_counts_from_the_applied_wake(
+    worker_session_maker, fake_redis_client, backend, monkeypatch
+):
+    queue = _queue_for(backend, worker_session_maker, fake_redis_client)
+    job = JobEnvelope(type="race")
+    await queue.submit(job)
+    worker_a = await queue.claim(["default"], visibility_timeout=60)
+    wake_at = utcnow() + LATER
+    assert await queue.wake("default", job.id, resume_at=wake_at)
+    await queue.nack("default", job.id, worker_a.token, job=worker_a.job)  # immediate retry
+    assert (await queue.stats("default")).delayed == 1
+
+    # Ten seconds after the wake time the job has been ready for ten seconds.
+    later = wake_at + timedelta(seconds=10)
+    module = {"memory": memory_backend, "sqlalchemy": sqlalchemy_backend, "redis": redis_backend}[backend]
+    monkeypatch.setattr(module, "_now", lambda: later)
+    stats = await queue.stats("default")
+    assert stats.ready == 1
+    assert 9 <= stats.oldest_ready_age_seconds <= 11
 
 
 @pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])

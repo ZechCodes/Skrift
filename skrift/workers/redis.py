@@ -142,13 +142,19 @@ return 1
 """
 
 # KEYS: claim, job, ready, claimed, dead, dead_at
-# ARGV: queue, token, job_id, job_json, dead_letter ("1"/"0"), score
-# A wake recorded on the claim (see _WAKE_SCRIPT) replaces the retry score.
+# ARGV: queue, token, job_id, job_json, dead_letter ("1"/"0"), score,
+#       job_json without ready_since
+# A wake recorded on the claim (see _WAKE_SCRIPT) replaces the retry score; the
+# envelope then carries no ready_since, which stats derives from that score.
 _NACK_SCRIPT = """
 local claim = redis.call('HMGET', KEYS[1], 'queue', 'token')
 if claim[1] ~= ARGV[1] or claim[2] ~= ARGV[2] then return 0 end
 local pending_wake = redis.call('HGET', KEYS[1], 'wake_at')
-redis.call('SET', KEYS[2], ARGV[4])
+if pending_wake and ARGV[5] ~= '1' then
+    redis.call('SET', KEYS[2], ARGV[7])
+else
+    redis.call('SET', KEYS[2], ARGV[4])
+end
 redis.call('DEL', KEYS[1])
 redis.call('ZREM', KEYS[4], ARGV[3])
 if ARGV[5] == '1' then
@@ -768,6 +774,7 @@ class RedisQueue(_RedisBackend):
                 _job_to_json(job),
                 "1" if dead_letter else "0",
                 repr(_score(_now() if dead_letter else visible_at)),
+                _job_to_json(job.model_copy(update={"ready_since": None})),
             )
             if not nacked:
                 raise ValueError(f"Invalid claim token for job {job_id}")
