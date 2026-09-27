@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
@@ -296,6 +296,18 @@ class DatabaseConfig(BaseModel):
     db_schema: str | None = Field(default=None, validation_alias="schema")
     statement_cache_size: int | None = None  # asyncpg statement cache size; 0 disables prepared statements
     pgbouncer_transaction_mode: bool = False  # Disable prepared statements + pooling for pgbouncer transaction mode
+
+    def engine_execution_options(self) -> dict[str, Any]:
+        """Engine execution options that place Skrift's tables in ``db_schema``.
+
+        Every engine that serves app or worker queries must carry these: the
+        schema is applied through ``schema_translate_map``, never through
+        ``Base.metadata.schema``, so app models' ``ForeignKey("users.id")``
+        still resolve (#116).
+        """
+        if not self.db_schema:
+            return {}
+        return {"schema_translate_map": {None: self.db_schema}}
 
 
 class OAuthProviderConfig(BaseModel):

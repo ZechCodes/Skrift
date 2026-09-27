@@ -134,12 +134,16 @@ def _validate_worker_process_backends(
         raise click.ClickException(str(exc)) from exc
 
 
-def _build_db_config(settings):
+def _build_db_config(settings, *, echo: bool | None = None):
+    """Database config for CLI commands, including the configured ``db.schema``."""
     from advanced_alchemy.config import EngineConfig
     from advanced_alchemy.extensions.litestar import AsyncSessionConfig, SQLAlchemyAsyncConfig
     from sqlalchemy.pool import NullPool
 
-    engine_kwargs = {"echo": settings.db.echo}
+    engine_kwargs = {"echo": settings.db.echo if echo is None else echo}
+    execution_options = settings.db.engine_execution_options()
+    if execution_options:
+        engine_kwargs["execution_options"] = execution_options
     disable_prepared_statements = (
         settings.db.pgbouncer_transaction_mode or settings.db.statement_cache_size == 0
     )
@@ -1661,14 +1665,7 @@ def storage_ls(store, prefix, limit):
     settings = get_settings()
 
     async def _run():
-        from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, AsyncSessionConfig
-        from advanced_alchemy.config import EngineConfig
-
-        db_config = SQLAlchemyAsyncConfig(
-            connection_string=settings.db.url,
-            session_config=AsyncSessionConfig(expire_on_commit=False),
-            engine_config=EngineConfig(echo=False),
-        )
+        db_config = _build_db_config(settings, echo=False)
         async with db_config.get_session() as session:
             assets = await list_assets(
                 session,
@@ -1699,19 +1696,13 @@ def storage_orphans(store, do_delete):
     settings = get_settings()
 
     async def _run():
-        from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, AsyncSessionConfig
-        from advanced_alchemy.config import EngineConfig
         from sqlalchemy import select
         from skrift.db.models.asset import Asset
 
         manager = StorageManager(settings.storage)
         store_name = store or manager.default_store
 
-        db_config = SQLAlchemyAsyncConfig(
-            connection_string=settings.db.url,
-            session_config=AsyncSessionConfig(expire_on_commit=False),
-            engine_config=EngineConfig(echo=False),
-        )
+        db_config = _build_db_config(settings, echo=False)
 
         backend = await manager.get(store_name)
 
@@ -1761,8 +1752,6 @@ def storage_sync(source, store, dry_run, do_delete):
     source_path = Path(source)
 
     async def _run():
-        from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, AsyncSessionConfig
-        from advanced_alchemy.config import EngineConfig
         from sqlalchemy import select, and_
         from skrift.db.models.asset import Asset
         import mimetypes
@@ -1771,11 +1760,7 @@ def storage_sync(source, store, dry_run, do_delete):
         store_name = store or manager.default_store
         backend = await manager.get(store_name)
 
-        db_config = SQLAlchemyAsyncConfig(
-            connection_string=settings.db.url,
-            session_config=AsyncSessionConfig(expire_on_commit=False),
-            engine_config=EngineConfig(echo=False),
-        )
+        db_config = _build_db_config(settings, echo=False)
 
         files = [p for p in source_path.rglob("*") if p.is_file()]
         uploaded = 0
@@ -1840,8 +1825,6 @@ def storage_migrate(from_store, to_store, dry_run):
     settings = get_settings()
 
     async def _run():
-        from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, AsyncSessionConfig
-        from advanced_alchemy.config import EngineConfig
         from sqlalchemy import select, and_
         from skrift.db.models.asset import Asset
 
@@ -1849,11 +1832,7 @@ def storage_migrate(from_store, to_store, dry_run):
         source = await manager.get(from_store)
         dest = await manager.get(to_store)
 
-        db_config = SQLAlchemyAsyncConfig(
-            connection_string=settings.db.url,
-            session_config=AsyncSessionConfig(expire_on_commit=False),
-            engine_config=EngineConfig(echo=False),
-        )
+        db_config = _build_db_config(settings, echo=False)
 
         migrated = 0
         async with db_config.get_session() as session:
