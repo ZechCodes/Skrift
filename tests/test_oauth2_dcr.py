@@ -445,6 +445,100 @@ class TestConfidentialRegistration:
         assert result.content["error"] == "invalid_client"
 
 
+def _response_shape(response):
+    return response.status_code, dict(response.headers or {}), response.media_type, response.content
+
+
+async def _introspect_as(db_session, client_id, secret):
+    request = MagicMock()
+    request.headers = {}
+    request.form = AsyncMock(
+        return_value={"token": "anything", "client_id": client_id, "client_secret": secret}
+    )
+    controller = OAuth2Controller(owner=MagicMock())
+    with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()):
+        return await OAuth2Controller.introspect.fn(controller, request, db_session)
+
+
+async def _refresh_as(db_session, client_id, secret):
+    refresh_token = create_signed_token(
+        {
+            "type": "refresh",
+            "user_id": USER_ID,
+            "client_id": client_id,
+            "scope": "openid",
+            "jti": "refresh-jti",
+            "family_id": "family",
+        },
+        SECRET,
+        3600,
+    )
+    request = MagicMock()
+    request.base_url = "http://localhost:8000/"
+    request.headers = {}
+    request.form = AsyncMock(
+        return_value={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": secret,
+        }
+    )
+    controller = OAuth2Controller(owner=MagicMock())
+    with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()):
+        return await OAuth2Controller.token_exchange.fn(controller, request, db_session)
+
+
+class TestClientAuthFailuresAreIndistinguishable:
+    """A caller cannot tell an unknown client_id from a wrong secret, or learn what
+    kind of client an id belongs to, from a failed client authentication."""
+
+    @pytest.mark.asyncio
+    async def test_introspection_failures_share_one_response(self, db_session, caplog):
+        admin = await oauth2_service.create_client(
+            db_session, display_name="Admin", redirect_uris=["https://a.example.com/cb"], allowed_scopes=[]
+        )
+        dynamic = (await _register_confidential(db_session, "client_secret_post")).content
+        public = (
+            await _register(
+                db_session,
+                {"redirect_uris": ["https://app.example.com/cb"], "token_endpoint_auth_method": "none"},
+            )
+        ).content
+
+        with caplog.at_level(logging.DEBUG, logger="skrift.controllers.oauth2"):
+            responses = [
+                await _introspect_as(db_session, "no-such-client", "whatever"),
+                await _introspect_as(db_session, admin.client.client_id, "wrong"),
+                await _introspect_as(db_session, public["client_id"], ""),
+                await _introspect_as(db_session, dynamic["client_id"], "wrong"),
+                await _introspect_as(db_session, dynamic["client_id"], dynamic["client_secret"]),
+            ]
+
+        shapes = {repr(_response_shape(response)) for response in responses}
+        assert len(shapes) == 1, shapes
+        assert responses[0].status_code == 401
+        assert responses[0].content == {
+            "error": "invalid_client",
+            "error_description": "Client authentication failed",
+        }
+        # The reason is only in the server log, and never with the secret.
+        assert "dynamically registered client" in caplog.text
+        assert dynamic["client_secret"] not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_token_endpoint_unknown_client_and_wrong_secret_share_one_response(
+        self, db_session
+    ):
+        dynamic = (await _register_confidential(db_session, "client_secret_post")).content
+
+        unknown = await _refresh_as(db_session, "no-such-client", "whatever")
+        wrong_secret = await _refresh_as(db_session, dynamic["client_id"], "wrong")
+
+        assert _response_shape(unknown) == _response_shape(wrong_secret)
+        assert unknown.content["error"] == "invalid_client"
+
+
 class TestRegisterMetadataValidation:
     """RFC 7591 — unsupported grant/response types are rejected, not echoed."""
 

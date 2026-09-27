@@ -959,7 +959,8 @@ class TestIntrospect:
             mock_svc.get_client_by_client_id = AsyncMock(return_value=client)
             result = await OAuth2Controller.introspect.fn(controller, request, db_session)
 
-        assert result.status_code == 400
+        # RFC 7662 §2.3: failed client authentication is a 401.
+        assert result.status_code == 401
         assert result.content["error"] == "invalid_client"
 
     @pytest.mark.asyncio

@@ -7,6 +7,7 @@ instance can act as an identity hub for spoke sites.
 
 import base64
 import hashlib
+import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -37,6 +38,8 @@ from skrift.middleware.security import add_form_action_source, apply_csp_nonce, 
 
 # Token lifetimes
 AUTH_CODE_TTL = 600        # 10 minutes
+logger = logging.getLogger(__name__)
+
 ACCESS_TOKEN_TTL = 900     # 15 minutes
 REFRESH_TOKEN_TTL = 2592000  # 30 days
 
@@ -73,6 +76,17 @@ def _json_error(error: str, description: str, status_code: int = 400) -> Respons
         status_code=status_code,
         media_type="application/json",
     )
+
+
+def _client_auth_failed(client_id: str, reason: str, *, status_code: int = 400) -> Response:
+    """The one response for every client-authentication failure.
+
+    An unknown client_id, a wrong secret and a client that may not use the
+    endpoint all look the same to the caller, so the response cannot be used
+    to find out which client ids exist. The reason is logged at debug level.
+    """
+    logger.debug("OAuth2 client authentication failed for client_id %r: %s", client_id, reason)
+    return _json_error("invalid_client", "Client authentication failed", status_code=status_code)
 
 
 def _verify_pkce(code_verifier: str, code_challenge: str) -> bool:
@@ -601,12 +615,12 @@ class OAuth2Controller(Controller):
         # Look up client
         client = await oauth2_service.get_client_by_client_id(db_session, client_id)
         if not client:
-            return _json_error("invalid_client", "Unknown client_id")
+            return _client_auth_failed(client_id, "unknown client_id")
 
         # Confidential client: validate secret (constant-time)
         if client.client_secret:
             if not verify_client_secret(client_secret, client.client_secret):
-                return _json_error("invalid_client", "Invalid client_secret")
+                return _client_auth_failed(client_id, "wrong client_secret")
 
         # PKCE validation: `code_challenge` is stamped on every code by
         # `authorize_get`, so the code-grant path always requires a
@@ -719,12 +733,12 @@ class OAuth2Controller(Controller):
         # Look up client
         client = await oauth2_service.get_client_by_client_id(db_session, client_id)
         if not client:
-            return _json_error("invalid_client", "Unknown client_id")
+            return _client_auth_failed(client_id, "unknown client_id")
 
         # Confidential client: validate secret (constant-time)
         if client.client_secret:
             if not verify_client_secret(client_secret, client.client_secret):
-                return _json_error("invalid_client", "Invalid client_secret")
+                return _client_auth_failed(client_id, "wrong client_secret")
 
         old_jti = payload.get("jti")
         family_id = payload.get("family_id", "")
@@ -1127,28 +1141,26 @@ class OAuth2Controller(Controller):
         if not client_id:
             return _json_error("invalid_client", "client_id required")
 
+        # Every failure below gets the same 401, so the endpoint does not
+        # reveal which client ids exist or what kind of client they are.
         client = await oauth2_service.get_client_by_client_id(db_session, client_id)
         if not client:
-            return _json_error("invalid_client", "Unknown client_id")
+            return _client_auth_failed(client_id, "unknown client_id", status_code=401)
 
         # RFC 7662 §2.1: introspection must be limited to authenticated
         # callers. Public (secretless) clients cannot authenticate here, so they
         # may not introspect at all; anything less turns this endpoint into an
         # unauthenticated token-validity oracle.
         if not client.client_secret:
-            return _json_error(
-                "invalid_client", "Public clients may not introspect tokens", status_code=401
-            )
+            return _client_auth_failed(client_id, "public client", status_code=401)
         # Anyone can self-register a confidential client, so its secret proves
         # nothing about who the caller is: the same oracle applies.
         if client.is_dynamically_registered:
-            return _json_error(
-                "invalid_client",
-                "Dynamically registered clients may not introspect tokens",
-                status_code=401,
+            return _client_auth_failed(
+                client_id, "dynamically registered client", status_code=401
             )
         if not verify_client_secret(client_secret, client.client_secret):
-            return _json_error("invalid_client", "Invalid client_secret")
+            return _client_auth_failed(client_id, "wrong client_secret", status_code=401)
 
         if not token_str:
             return Response(content={"active": False}, status_code=200, media_type="application/json")
