@@ -728,9 +728,7 @@ def _build_database_engine_config(db: DatabaseConfig) -> EngineConfig:
     if db.pool_recycle is not None:
         engine_kwargs["pool_recycle"] = db.pool_recycle
     if db.db_schema:
-        engine_kwargs["execution_options"] = {
-            "schema_translate_map": {None: db.db_schema},
-        }
+        engine_kwargs["execution_options"] = db.engine_execution_options()
 
     return EngineConfig(**engine_kwargs)
 

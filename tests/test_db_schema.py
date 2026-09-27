@@ -5,6 +5,7 @@ time, so the configured schema is applied by the engine's
 ``schema_translate_map`` rather than ``Base.metadata.schema`` (#116).
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -12,9 +13,13 @@ import pytest
 from sqlalchemy import Column, ForeignKey, Table, Uuid, create_engine, event, insert, inspect, select
 
 import skrift.asgi as asgi
+from skrift.cli import _build_db_config
 from skrift.config import DatabaseConfig, Settings
 from skrift.db.base import Base
 from skrift.db.models.user import User
+from skrift.db.models.worker import WorkerQueueRecord
+from skrift.workers import SQLAlchemyQueue
+from skrift.workers.models import JobEnvelope
 
 SCHEMA = "runhacks"
 POSTGRES_URL = "postgresql+asyncpg://user:pass@localhost/skrift"
@@ -124,3 +129,47 @@ def test_schema_translate_map_routes_builtin_and_app_tables_to_the_schema(
     assert {"users", "schema_fk_probe"} <= set(inspector.get_table_names(schema=SCHEMA))
     assert inspector.get_table_names() == []
     engine.dispose()
+
+
+def test_cli_engine_config_carries_the_schema_translate_map():
+    settings = SimpleNamespace(db=DatabaseConfig(url=POSTGRES_URL, schema=SCHEMA))
+
+    for config in (_build_db_config(settings), _build_db_config(settings, echo=False)):
+        assert config.engine_config.execution_options == {
+            "schema_translate_map": {None: SCHEMA}
+        }
+
+
+async def test_cli_engine_routes_worker_tables_to_the_schema(tmp_path):
+    settings = SimpleNamespace(
+        db=DatabaseConfig(url=f"sqlite+aiosqlite:///{tmp_path / 'main.db'}", schema=SCHEMA)
+    )
+    db_config = _build_db_config(settings)
+    engine = db_config.get_engine()
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def attach_schema(dbapi_connection, _record):
+        dbapi_connection.execute(f"ATTACH DATABASE '{tmp_path / 'schema.db'}' AS {SCHEMA}")
+
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(
+                Base.metadata.create_all, tables=[WorkerQueueRecord.__table__]
+            )
+
+        # `skrift workers run` hands this session factory to the worker backends.
+        queue = SQLAlchemyQueue(session_maker=db_config.get_session)
+        job = await queue.submit(JobEnvelope(type="schema_probe"))
+        claimed = await queue.claim(["default"], visibility_timeout=60)
+        assert claimed is not None and claimed.job.id == job.id
+
+        def table_names(connection):
+            inspector = inspect(connection)
+            return inspector.get_table_names(schema=SCHEMA), inspector.get_table_names()
+
+        async with engine.connect() as connection:
+            in_schema, in_main = await connection.run_sync(table_names)
+        assert in_schema == ["worker_queue"]
+        assert in_main == []
+    finally:
+        await engine.dispose()
