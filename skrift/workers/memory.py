@@ -301,6 +301,8 @@ class _QueueEntry:
     claim_token: str | None = None
     claim_expires_at: datetime | None = None
     dead_lettered: bool = False
+    # A wake for the claimed job; its worker's nack applies it.
+    pending_wake: datetime | None = None
 
 
 class InMemoryQueue:
@@ -350,6 +352,7 @@ class InMemoryQueue:
                 ):
                     entry.claim_token = None
                     entry.claim_expires_at = None
+                    entry.pending_wake = None
                     entry.visible_at = now
                     entry.job.ready_since = now
                     entry.job.reclaim_count += 1
@@ -405,10 +408,13 @@ class InMemoryQueue:
                 raise ValueError(f"Invalid claim token for job {job_id}")
             if job is not None:
                 entry.job = job
+            pending_wake, entry.pending_wake = entry.pending_wake, None
             entry.claim_token = None
             entry.claim_expires_at = None
             entry.dead_lettered = dead_letter
             entry.visible_at = retry_at or _now()
+            if pending_wake is not None and not dead_letter:
+                entry.visible_at = pending_wake
             entry.job.ready_since = (
                 entry.visible_at if entry.visible_at <= _now() and not dead_letter else None
             )
@@ -428,9 +434,13 @@ class InMemoryQueue:
     ) -> bool:
         async with self._condition:
             entry = self._entries.get(queue, {}).get(job_id)
-            # A claimed job is not woken, as in the other queues.
-            if entry is None or entry.dead_lettered or entry.claim_token is not None:
+            if entry is None or entry.dead_lettered:
                 return False
+            if entry.claim_token is not None:
+                # Its worker's nack applies the latest such wake; ack,
+                # dead-lettering or a lost claim drops it.
+                entry.pending_wake = resume_at or _now()
+                return True
             entry.visible_at = resume_at or _now()
             entry.job.scheduled_for = entry.visible_at
             entry.job.ready_since = entry.visible_at if entry.visible_at <= _now() else None

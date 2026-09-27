@@ -317,7 +317,7 @@ async def test_sqlalchemy_wake_racing_a_takeover_keeps_the_new_envelope(worker_s
     worker_b = await _take_over(queue)
     sessions.release.set()
 
-    assert await wake is False  # B holds the job now
+    assert await wake is True  # recorded on B's claim for B's nack
     assert await _queue_row(worker_session_maker, job.id) == (worker_b.token, 1)
 
 
@@ -501,25 +501,73 @@ async def test_sqlalchemy_wake_racing_a_claim_and_retry_keeps_the_new_envelope(
     assert (await _stored_job(worker_session_maker, job.id)).attempt == 1
 
 
-@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
-async def test_wake_leaves_a_claimed_job_alone(worker_session_maker, fake_redis_client, backend):
+def _queue_for(backend, worker_session_maker, fake_redis_client):
     if backend == "memory":
-        queue = InMemoryQueue()
-    elif backend == "sqlalchemy":
-        queue = SQLAlchemyQueue(session_maker=worker_session_maker)
-    else:
-        queue = RedisQueue(client=fake_redis_client, prefix="test:claim-races")
+        return InMemoryQueue()
+    if backend == "sqlalchemy":
+        return SQLAlchemyQueue(session_maker=worker_session_maker)
+    return RedisQueue(client=fake_redis_client, prefix="test:claim-races")
+
+
+LATER = timedelta(hours=2)
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+@pytest.mark.parametrize(
+    ("wakes", "ready_now"),
+    [
+        (["now"], True),
+        (["later", "now"], True),  # the latest wake wins
+        (["now", "later"], False),
+    ],
+)
+async def test_wake_of_a_claimed_job_is_applied_by_its_nack(
+    worker_session_maker, fake_redis_client, backend, wakes, ready_now
+):
+    queue = _queue_for(backend, worker_session_maker, fake_redis_client)
     job = JobEnvelope(type="race")
     await queue.submit(job)
     worker_a = await queue.claim(["default"], visibility_timeout=60)
 
-    # Its worker's ack or nack decides what happens next, not a wake.
-    assert await queue.wake("default", job.id, resume_at=utcnow() + timedelta(hours=1)) is False
-    assert worker_a.job.scheduled_for is None
-    await queue.nack("default", job.id, worker_a.token, job=worker_a.job)
+    for wake in wakes:
+        resume_at = None if wake == "now" else utcnow() + LATER
+        assert await queue.wake("default", job.id, resume_at=resume_at) is True
+    # The claim is untouched until the worker settles it.
+    assert await queue.claim(["default"], visibility_timeout=60) is None
+    await queue.nack("default", job.id, worker_a.token, retry_at=utcnow() + timedelta(days=30), job=worker_a.job)
+
+    resumed = await queue.claim(["default"], visibility_timeout=60)
+    assert (resumed is not None) is ready_now
+    stats = await queue.stats("default")
+    assert (stats.claimed, stats.delayed) == ((1, 0) if ready_now else (0, 1))
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+@pytest.mark.parametrize("outcome", ["ack", "dead_letter", "reaped"])
+async def test_wake_of_a_claimed_job_is_dropped_when_the_claim_ends_otherwise(
+    worker_session_maker, fake_redis_client, backend, outcome
+):
+    queue = _queue_for(backend, worker_session_maker, fake_redis_client)
+    job = JobEnvelope(type="race")
+    await queue.submit(job)
+    worker_a = await queue.claim(["default"], visibility_timeout=0.05 if outcome == "reaped" else 60)
+    assert await queue.wake("default", job.id, resume_at=utcnow() + LATER) is True
+
+    if outcome == "ack":
+        await queue.ack("default", job.id, worker_a.token)
+        assert await queue.claim(["default"], visibility_timeout=60) is None
+        return
+    if outcome == "dead_letter":
+        await queue.nack("default", job.id, worker_a.token, dead_letter=True, job=worker_a.job)
+        assert (await queue.stats("default")).dead_lettered == 1
+        return
+    await asyncio.sleep(0.1)
+    await queue._release_expired_claims(utcnow())
     worker_b = await queue.claim(["default"], visibility_timeout=60)
-    assert worker_b is not None  # the nack's retry time stood
-    await queue.ack("default", job.id, worker_b.token)
+    assert worker_b is not None  # released now, not at the dropped wake's time
+    # And B's own nack is not redirected by A's old wake.
+    await queue.nack("default", job.id, worker_b.token, job=worker_b.job)
+    assert await queue.claim(["default"], visibility_timeout=60) is not None
 
 
 @pytest.mark.parametrize("same_payload", [True, False])

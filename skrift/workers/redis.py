@@ -63,10 +63,15 @@ return 1
 
 # KEYS: job, claim, ready, claimed, dead
 # ARGV: envelope as read, job_id, new envelope, ready score
-# Returns -1 if the job is dead-lettered or claimed, 0 if its envelope changed.
+# Returns -1 if the job is dead-lettered, 0 if its envelope changed, 2 if it is
+# claimed: the wake is then recorded on the claim for its worker's nack to
+# apply (the latest one wins; ack or a lost claim drops it).
 _WAKE_SCRIPT = """
 if redis.call('SISMEMBER', KEYS[5], ARGV[2]) == 1 then return -1 end
-if redis.call('EXISTS', KEYS[2]) == 1 then return -1 end
+if redis.call('EXISTS', KEYS[2]) == 1 then
+    redis.call('HSET', KEYS[2], 'wake_at', ARGV[4])
+    return 2
+end
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
 redis.call('SET', KEYS[1], ARGV[3])
 redis.call('ZREM', KEYS[4], ARGV[2])
@@ -138,9 +143,11 @@ return 1
 
 # KEYS: claim, job, ready, claimed, dead, dead_at
 # ARGV: queue, token, job_id, job_json, dead_letter ("1"/"0"), score
+# A wake recorded on the claim (see _WAKE_SCRIPT) replaces the retry score.
 _NACK_SCRIPT = """
 local claim = redis.call('HMGET', KEYS[1], 'queue', 'token')
 if claim[1] ~= ARGV[1] or claim[2] ~= ARGV[2] then return 0 end
+local pending_wake = redis.call('HGET', KEYS[1], 'wake_at')
 redis.call('SET', KEYS[2], ARGV[4])
 redis.call('DEL', KEYS[1])
 redis.call('ZREM', KEYS[4], ARGV[3])
@@ -149,7 +156,7 @@ if ARGV[5] == '1' then
     redis.call('SADD', KEYS[5], ARGV[3])
     redis.call('ZADD', KEYS[6], ARGV[6], ARGV[3])
 else
-    redis.call('ZADD', KEYS[3], ARGV[6], ARGV[3])
+    redis.call('ZADD', KEYS[3], pending_wake or ARGV[6], ARGV[3])
 end
 return 1
 """
@@ -784,12 +791,14 @@ class RedisQueue(_RedisBackend):
     async def wake(
         self, queue: str, job_id: str, *, resume_at: datetime | None = None
     ) -> bool:
-        """Make an unclaimed job ready at ``resume_at`` (default now).
+        """Make the job ready at ``resume_at`` (default now).
 
-        Returns ``False`` for a missing, dead-lettered or claimed job. The
-        envelope is rewritten only if it is unchanged since it was read; after
-        ``_WAKE_ATTEMPTS`` reads that each lost to a concurrent write, ``False``
-        is returned rather than retrying without bound.
+        A claimed job keeps running; the wake is recorded on its claim and its
+        worker's nack applies it. Returns ``False`` for a missing or
+        dead-lettered job. The envelope is rewritten only if it is unchanged
+        since it was read; after ``_WAKE_ATTEMPTS`` reads that each lost to a
+        concurrent write, ``False`` is returned rather than retrying without
+        bound.
         """
         async with self._queue_lock():
             for _ in range(_WAKE_ATTEMPTS):
@@ -813,7 +822,7 @@ class RedisQueue(_RedisBackend):
                     _job_to_json(job),
                     repr(_score(visible_at)),
                 )
-                if woken == 1:
+                if woken in (1, 2):
                     return True
                 if woken == -1:
                     return False

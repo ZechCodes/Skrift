@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ from skrift.agents.session import AgentSessionError
 from skrift.agents.blob import ArchiveBlobStore, BLOB_STREAM_PREFIX, InMemoryBlobStore, get_blob_store
 from skrift.agents.config import configure_agent_runtime
 from skrift.agents.registry import registry as agent_registry
+import skrift.agents.runtime as agents_runtime
 from skrift.agents.runtime import (
     _formatted_tool_events_from_messages,
     _tool_events_from_messages,
@@ -631,6 +633,90 @@ async def test_session_send_revives_failed_or_cancelled_session(terminal_status)
     assert state.status == "completed"
     assert state.error is None
     assert [message.get("content") for message in state.messages if message.get("role") == "user"][-1] == "recover"
+
+
+async def _agent_worker_runtime(backend, stack, tmp_path):
+    """An in-process worker runtime on the given queue/state backend."""
+    if backend == "memory":
+        return skrift.configure_workers(mode="in_process", queues=("agents",))
+
+    from skrift.workers import (
+        RedisEventLog,
+        RedisQueue,
+        RedisStateStore,
+        SQLAlchemyEventLog,
+        SQLAlchemyQueue,
+        SQLAlchemyStateStore,
+    )
+
+    if backend == "sqlalchemy":
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from skrift.db import models as _models  # noqa: F401 - register the worker tables
+        from skrift.db.base import Base
+
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'agents.db'}")
+        stack.push_async_callback(engine.dispose)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_maker = async_sessionmaker(engine, expire_on_commit=False)
+        return skrift.configure_workers(
+            mode="in_process",
+            queues=("agents",),
+            state_store=SQLAlchemyStateStore(session_maker=session_maker),
+            event_log=SQLAlchemyEventLog(session_maker=session_maker),
+            queue=SQLAlchemyQueue(session_maker=session_maker),
+        )
+    import fakeredis.aioredis as fake_aioredis
+
+    client = fake_aioredis.FakeRedis()
+    stack.push_async_callback(client.aclose)
+    await client.flushall()
+    return skrift.configure_workers(
+        mode="in_process",
+        queues=("agents",),
+        state_store=RedisStateStore(client=client, prefix="test:agents"),
+        event_log=RedisEventLog(client=client, prefix="test:agents"),
+        queue=RedisQueue(client=client, prefix="test:agents"),
+    )
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_approval_that_lands_before_the_run_pauses_still_resumes_it(
+    backend, tmp_path, monkeypatch
+):
+    # agents_run_handler records awaiting_approval and drains its outbox before
+    # it returns Pause, so an approval can wake the job while it is still
+    # claimed and RUNNING. That wake must not be lost.
+    agent = skrift.Agent(TestModel(), name="demo")
+
+    @agent.tool_plain(approval=True, policy_description="approval required")
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    real_drain = agents_runtime.drain_outbox
+    awaiting, resume_handler = asyncio.Event(), asyncio.Event()
+
+    async def drain_then_hold(session_id):
+        await real_drain(session_id)
+        if (await load_runstate(session_id)).status == "awaiting_approval" and not awaiting.is_set():
+            awaiting.set()
+            await resume_handler.wait()
+
+    monkeypatch.setattr(agents_runtime, "drain_outbox", drain_then_hold)
+    async with AsyncExitStack() as stack:
+        runtime = await _agent_worker_runtime(backend, stack, tmp_path)
+        session = await agent.run("use the tool", actor="ada")
+        await runtime.start()
+        stack.push_async_callback(runtime.stop)
+        await asyncio.wait_for(awaiting.wait(), 10)
+        state = await session.state()
+        assert (await runtime.get_job_state(state.current_run_job_id)).status.value == "running"
+
+        await session.approve(state.pending_approvals[0]["tool_call_id"], actor="ada", note="ok")
+        resume_handler.set()
+
+        assert await asyncio.wait_for(session.result(), 10) == '{"add":0}'
 
 
 async def test_send_cancels_pending_approvals_and_queues_message():

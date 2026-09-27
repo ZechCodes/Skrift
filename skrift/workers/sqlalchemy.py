@@ -36,6 +36,10 @@ from skrift.workers.models import (
 
 RECLAIM_BATCH_SIZE = 200
 
+# Envelope metadata key holding a wake for a claimed job (ISO timestamp). The
+# worker's nack applies it; ack, dead-lettering and a reaped claim drop it.
+_PENDING_WAKE_KEY = "skrift_pending_wake"
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -592,17 +596,20 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
         job: JobEnvelope | None = None,
     ) -> None:
         async with self._session_maker() as session:
-            if job is not None:
-                job = job.model_copy(deep=True)
-            else:
-                if not await _lock_queue_row(session, *self._claimed_by(queue, job_id, token)):
-                    await session.rollback()
-                    raise ValueError(f"Invalid claim token for job {job_id}")
-                result = await session.execute(
-                    select(WorkerQueueRecord.job).where(WorkerQueueRecord.job_id == job_id)
-                )
-                job = JobEnvelope.model_validate(result.scalar_one())
+            if not await _lock_queue_row(session, *self._claimed_by(queue, job_id, token)):
+                await session.rollback()
+                raise ValueError(f"Invalid claim token for job {job_id}")
+            result = await session.execute(
+                select(WorkerQueueRecord.job).where(WorkerQueueRecord.job_id == job_id)
+            )
+            stored = JobEnvelope.model_validate(result.scalar_one())
+            pending_wake = stored.metadata.pop(_PENDING_WAKE_KEY, None)
+            job = job.model_copy(deep=True) if job is not None else stored
+            job.metadata.pop(_PENDING_WAKE_KEY, None)
             visible_at = retry_at or _now()
+            if pending_wake is not None and not dead_letter:
+                # A wake that arrived while this job was claimed (see wake).
+                visible_at = _utc(datetime.fromisoformat(pending_wake))
             job.ready_since = (
                 visible_at if visible_at <= _now() and not dead_letter else None
             )
@@ -652,13 +659,10 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
     async def wake(
         self, queue: str, job_id: str, *, resume_at: datetime | None = None
     ) -> bool:
-        # A claimed job is not woken: its worker's ack or nack decides what
-        # happens next (WorkerRuntime.wake handles a job that is pausing).
         matches = (
             WorkerQueueRecord.queue == queue,
             WorkerQueueRecord.job_id == job_id,
             WorkerQueueRecord.dead_lettered.is_(False),
-            WorkerQueueRecord.claim_token.is_(None),
         )
         async with self._session_maker() as session:
             # Lock first: a claim and nack in between the read and the write
@@ -672,6 +676,14 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
             ).scalar_one()
             visible_at = resume_at or _now()
             job = JobEnvelope.model_validate(record.job)
+            if record.claim_token is not None:
+                # Claimed (running, or pausing before its nack): the worker's
+                # nack applies the latest such wake; ack, dead-lettering or a
+                # lost claim drops it.
+                job.metadata[_PENDING_WAKE_KEY] = visible_at.isoformat()
+                record.job = _job_to_json(job)
+                await session.commit()
+                return True
             job.scheduled_for = visible_at
             job.ready_since = visible_at if visible_at <= _now() else None
             record.job = _job_to_json(job)
@@ -754,6 +766,7 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
                     select(WorkerQueueRecord.job).where(WorkerQueueRecord.id == row.id)
                 )
                 job = JobEnvelope.model_validate(stored.scalar_one())
+                job.metadata.pop(_PENDING_WAKE_KEY, None)
                 job.reclaim_count += 1
                 job.ready_since = now
                 await session.execute(
