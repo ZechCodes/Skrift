@@ -760,16 +760,16 @@ def create_app() -> ASGIApp:
     observability.configure(settings)
     observability.instrument_httpx()
 
-    # Database schema configuration — must run BEFORE load_controllers(),
-    # otherwise ForeignKey("users.id") in downstream models resolves against
-    # the wrong (None) schema and later lookups fail with NoReferencedTableError.
-    if settings.db.db_schema:
-        if "sqlite" in settings.db.url:
-            raise ValueError(
-                f"Database schema '{settings.db.db_schema}' is configured but SQLite does not support schemas. "
-                "For dev environments, use app.dev.yaml to override the database configuration."
-            )
-        Base.metadata.schema = settings.db.db_schema
+    # The configured schema is applied by the engine's schema_translate_map
+    # (see _build_database_engine_config). Base.metadata.schema stays unset:
+    # Skrift's tables are registered under bare keys at import time, so a
+    # metadata schema would make ForeignKey("users.id") in app models look up
+    # "<schema>.users" and fail with NoReferencedTableError.
+    if settings.db.db_schema and "sqlite" in settings.db.url:
+        raise ValueError(
+            f"Database schema '{settings.db.db_schema}' is configured but SQLite does not support schemas. "
+            "For dev environments, use app.dev.yaml to override the database configuration."
+        )
 
     # Load controllers from app.yaml
     controllers = load_controllers()
@@ -1402,11 +1402,10 @@ def create_setup_app() -> Litestar:
     db_config: SQLAlchemyAsyncConfig | None = None
 
     if db_url:
-        # Database schema configuration (mirrors create_app)
+        # Database schema configuration (mirrors create_app): applied through
+        # the engine's schema_translate_map, never Base.metadata.schema.
         from skrift.setup.state import get_database_schema_from_yaml
         db_schema = get_database_schema_from_yaml()
-        if db_schema and "sqlite" not in db_url:
-            Base.metadata.schema = db_schema
 
         # Database is configured, add SQLAlchemy plugin
         if "sqlite" in db_url:

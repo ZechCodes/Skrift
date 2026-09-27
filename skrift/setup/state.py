@@ -128,13 +128,12 @@ def create_setup_engine(db_url: str):
     This mirrors the schema setup from the main app's create_app() to ensure
     setup operations target the correct database schema.
     """
-    from skrift.db.base import Base
-
     schema = get_database_schema_from_yaml()
     kwargs: dict = {}
 
+    # schema_translate_map only; Base.metadata.schema would break app
+    # ForeignKey("users.id") references (see create_app).
     if schema and "sqlite" not in db_url:
-        Base.metadata.schema = schema
         kwargs["execution_options"] = {
             "schema_translate_map": {None: schema},
         }
