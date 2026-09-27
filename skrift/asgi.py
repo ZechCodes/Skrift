@@ -55,6 +55,7 @@ from skrift.ratelimit import RateLimiter, set_limiter
 from skrift.lib.trusted_proxy import TrustedProxyManager
 from skrift.middleware.client_ip import ClientIPMiddleware
 from skrift.middleware.rate_limit import RateLimitMiddleware
+from skrift.middleware.oauth_cors import build_oauth_cors_middleware
 from skrift.middleware.security import SecurityHeadersMiddleware
 from skrift.db.base import Base
 from skrift.db.services.setting_service import (
@@ -1192,7 +1193,7 @@ def create_app() -> ASGIApp:
         on_shutdown=[on_shutdown],
         route_handlers=[NotificationsController, SitemapController, AccountController, *oauth2_handlers, *api_auth_handlers, *republish_handlers, *webhook_handlers, *bot_detection_handlers, *controllers],
         plugins=[SQLAlchemyPlugin(config=db_config)],
-        middleware=[*build_compression_middleware(settings.compression), DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, *bot_detection_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
+        middleware=[*build_compression_middleware(settings.compression), *build_oauth_cors_middleware(settings), DefineMiddleware(SessionCleanupMiddleware), *client_ip_middleware, *security_middleware, *rate_limit_middleware, *bot_detection_middleware, session_config.middleware, *session_idle_middleware, *user_middleware],
         template_config=template_config,
         exception_handlers=EXCEPTION_HANDLERS,
         request_max_body_size=resolve_request_max_body_size(settings),
