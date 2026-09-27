@@ -253,6 +253,7 @@ class Queue:
 ```
 
 The runtime passes the claimed envelope to `nack` as `job`; store it in place of the queued copy so the incremented `attempt` survives the retry, otherwise `max_attempts` never dead-letters.
+A `nack` without the `job` parameter is deprecated: the runtime still calls it without the envelope and emits a `DeprecationWarning`, but such a queue cannot persist attempts.
 
 ```python
 class DeadLetterStore:

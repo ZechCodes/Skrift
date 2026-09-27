@@ -8,6 +8,7 @@ import inspect
 import logging
 import random
 import traceback
+import warnings
 from collections import deque
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
@@ -240,6 +241,7 @@ class WorkerRuntime:
         self._queue_history_lock = asyncio.Lock()
         self._queue_history_task: asyncio.Task | None = None
         self._reaper_task: asyncio.Task | None = None
+        self._nack_accepts_job: tuple[Queue, bool] | None = None
         self._queue_history_interval = 2.0
         self._queue_history_idle_interval = 30.0
         self._queue_history_current_interval = self._queue_history_interval
@@ -919,9 +921,7 @@ class WorkerRuntime:
         await self.emit_lifecycle(LifecycleEventType.JOB_FAILED, job, error=error)
         if permanent or job.attempt >= job.max_attempts:
             if not inline:
-                await self.queue.nack(
-                    job.queue, job.id, claimed.token, dead_letter=True, job=job
-                )
+                await self._nack(job, claimed.token, dead_letter=True)
             await self._dead_letter(
                 job,
                 cause=(
@@ -947,18 +947,22 @@ class WorkerRuntime:
         if inline:
             await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
         else:
-            await self.queue.nack(job.queue, job.id, claimed.token, retry_at=retry_at, job=job)
+            await self._nack(job, claimed.token, retry_at=retry_at)
 
     async def _handle_pause(self, claimed: ClaimedJob, pause: Pause, *, inline: bool) -> None:
         job = claimed.job
         job.attempt = max(0, job.attempt - 1)
         job.scheduled_for = pause.resume_at
+        previous_state = await self.get_job_state(job.id)
         await self._set_state(
             JobState(
                 job=job,
                 status=JobStatus.PAUSED,
                 attempt=job.attempt,
                 paused_state=pause.state,
+                attempt_history=(
+                    previous_state.attempt_history if previous_state is not None else []
+                ),
             )
         )
         await self.emit_lifecycle(LifecycleEventType.JOB_PAUSED, job)
@@ -972,7 +976,38 @@ class WorkerRuntime:
             await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
             return
         retry_at = pause.resume_at or datetime.max.replace(tzinfo=utcnow().tzinfo)
-        await self.queue.nack(job.queue, job.id, claimed.token, retry_at=retry_at, job=job)
+        await self._nack(job, claimed.token, retry_at=retry_at)
+
+    async def _nack(self, job: JobEnvelope, token: str, **kwargs: Any) -> None:
+        if self._queue_nack_accepts_job():
+            await self.queue.nack(job.queue, job.id, token, job=job, **kwargs)
+        else:
+            await self.queue.nack(job.queue, job.id, token, **kwargs)
+
+    def _queue_nack_accepts_job(self) -> bool:
+        queue = self.queue
+        if self._nack_accepts_job is not None and self._nack_accepts_job[0] is queue:
+            return self._nack_accepts_job[1]
+        accepts = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            or (
+                parameter.name == "job"
+                and parameter.kind
+                in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            )
+            for parameter in inspect.signature(queue.nack).parameters.values()
+        )
+        if not accepts:
+            warnings.warn(
+                f"{type(queue).__qualname__}.nack() does not accept job=. Custom queues "
+                "should accept the claimed envelope as job= and store it; without it the "
+                "queue cannot persist a job's attempt, so max_attempts may never "
+                "dead-letter a failing job.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        self._nack_accepts_job = (queue, accepts)
+        return accepts
 
     def _retry_delay(self, retry_policy: RetryPolicy, attempt: int) -> float:
         delay = retry_policy.backoff_seconds * max(0, attempt - 1)
@@ -1012,7 +1047,7 @@ class WorkerRuntime:
     ) -> None:
         job = claimed.job
         if not inline:
-            await self.queue.nack(job.queue, job.id, claimed.token, dead_letter=True, job=job)
+            await self._nack(job, claimed.token, dead_letter=True)
         await self._dead_letter(job, cause=cause, attempts=[], error=error)
 
     async def _dead_letter(
