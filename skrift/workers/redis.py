@@ -28,6 +28,56 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Claim writes run as scripts that re-check the claim first. `_queue_lock`
+# expires after 10 s, so it cannot by itself stop a stalled worker or reaper
+# from writing over a claim made after its lock ran out.
+
+# KEYS: claim, job, ready, claimed, dead, dead_at, jobs_by_queue
+# ARGV: queue, token, job_id
+_ACK_SCRIPT = """
+local claim = redis.call('HMGET', KEYS[1], 'queue', 'token')
+if claim[1] ~= ARGV[1] or claim[2] ~= ARGV[2] then return 0 end
+redis.call('DEL', KEYS[2], KEYS[1])
+redis.call('ZREM', KEYS[3], ARGV[3])
+redis.call('ZREM', KEYS[4], ARGV[3])
+redis.call('SREM', KEYS[5], ARGV[3])
+redis.call('ZREM', KEYS[6], ARGV[3])
+redis.call('SREM', KEYS[7], ARGV[3])
+return 1
+"""
+
+# KEYS: claim, job, ready, claimed, dead, dead_at
+# ARGV: queue, token, job_id, job_json, dead_letter ("1"/"0"), score
+_NACK_SCRIPT = """
+local claim = redis.call('HMGET', KEYS[1], 'queue', 'token')
+if claim[1] ~= ARGV[1] or claim[2] ~= ARGV[2] then return 0 end
+redis.call('SET', KEYS[2], ARGV[4])
+redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[4], ARGV[3])
+if ARGV[5] == '1' then
+    redis.call('ZREM', KEYS[3], ARGV[3])
+    redis.call('SADD', KEYS[5], ARGV[3])
+    redis.call('ZADD', KEYS[6], ARGV[6], ARGV[3])
+else
+    redis.call('ZADD', KEYS[3], ARGV[6], ARGV[3])
+end
+return 1
+"""
+
+# KEYS: claim, job, ready, claimed
+# ARGV: token read by the reaper ("" if none), job_id, job_json, lease cutoff, ready score
+_RELEASE_SCRIPT = """
+if (redis.call('HGET', KEYS[1], 'token') or '') ~= ARGV[1] then return 0 end
+local expires = redis.call('ZSCORE', KEYS[4], ARGV[2])
+if not expires or tonumber(expires) > tonumber(ARGV[4]) then return 0 end
+redis.call('SET', KEYS[2], ARGV[3])
+redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[4], ARGV[2])
+redis.call('ZADD', KEYS[3], ARGV[5], ARGV[2])
+return 1
+"""
+
+
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
@@ -514,8 +564,9 @@ class RedisQueue(_RedisBackend):
         self, queues: list[str], *, visibility_timeout: float
     ) -> ClaimedJob | None:
         async with self._queue_lock():
-            now = await self._server_now()
-            await self._release_expired_claims_locked(now)
+            now = _now()
+            lease_now = await self._server_now()
+            await self._release_expired_claims_locked(now, lease_now)
             for queue in queues:
                 ids = await self._client.zrangebyscore(
                     self._ready_key(queue),
@@ -540,7 +591,7 @@ class RedisQueue(_RedisBackend):
                     )
                 job.ready_since = None
                 token = uuid4().hex
-                expires_at = now + timedelta(seconds=visibility_timeout)
+                expires_at = lease_now + timedelta(seconds=visibility_timeout)
                 await self._client.set(self._job_key(job_id), _job_to_json(job))
                 await self._client.zrem(self._ready_key(queue), job_id)
                 await self._client.zadd(self._claimed_key(queue), {job_id: _score(expires_at)})
@@ -557,8 +608,22 @@ class RedisQueue(_RedisBackend):
 
     async def ack(self, queue: str, job_id: str, token: str) -> None:
         async with self._queue_lock():
-            await self._assert_claim(queue, job_id, token)
-            await self._delete_job(queue, job_id)
+            acked = await self._client.eval(
+                _ACK_SCRIPT,
+                7,
+                self._claim_key(job_id),
+                self._job_key(job_id),
+                self._ready_key(queue),
+                self._claimed_key(queue),
+                self._dead_key(queue),
+                self._dead_at_key(queue),
+                self._queue_jobs_key(queue),
+                queue,
+                token,
+                job_id,
+            )
+            if not acked:
+                raise ValueError(f"Invalid claim token for job {job_id}")
 
     async def nack(
         self,
@@ -571,7 +636,6 @@ class RedisQueue(_RedisBackend):
         job: JobEnvelope | None = None,
     ) -> None:
         async with self._queue_lock():
-            await self._assert_claim(queue, job_id, token)
             visible_at = retry_at or _now()
             if job is not None:
                 job = job.model_copy(deep=True)
@@ -580,15 +644,24 @@ class RedisQueue(_RedisBackend):
             if job is None:
                 raise ValueError(f"Invalid claim token for job {job_id}")
             job.ready_since = visible_at if visible_at <= _now() and not dead_letter else None
-            await self._client.set(self._job_key(job_id), _job_to_json(job))
-            await self._client.delete(self._claim_key(job_id))
-            await self._client.zrem(self._claimed_key(queue), job_id)
-            if dead_letter:
-                await self._client.zrem(self._ready_key(queue), job_id)
-                await self._client.sadd(self._dead_key(queue), job_id)
-                await self._client.zadd(self._dead_at_key(queue), {job_id: _score(_now())})
-            else:
-                await self._client.zadd(self._ready_key(queue), {job_id: _score(visible_at)})
+            nacked = await self._client.eval(
+                _NACK_SCRIPT,
+                6,
+                self._claim_key(job_id),
+                self._job_key(job_id),
+                self._ready_key(queue),
+                self._claimed_key(queue),
+                self._dead_key(queue),
+                self._dead_at_key(queue),
+                queue,
+                token,
+                job_id,
+                _job_to_json(job),
+                "1" if dead_letter else "0",
+                repr(_score(_now() if dead_letter else visible_at)),
+            )
+            if not nacked:
+                raise ValueError(f"Invalid claim token for job {job_id}")
 
     async def cancel(self, queue: str, job_id: str) -> bool:
         async with self._queue_lock():
@@ -620,7 +693,7 @@ class RedisQueue(_RedisBackend):
     async def stats(self, queue: str) -> QueueStats:
         async with self._queue_lock():
             now = _now()
-            await self._release_expired_claims_locked(await self._server_now())
+            await self._release_expired_claims_locked(now, await self._server_now())
             ready_ids = await self._client.zrangebyscore(self._ready_key(queue), "-inf", _score(now))
             delayed_ids = await self._client.zrangebyscore(
                 self._ready_key(queue),
@@ -681,12 +754,6 @@ class RedisQueue(_RedisBackend):
         value = await self._client.get(self._job_key(job_id))
         return _job_from_json(value) if value is not None else None
 
-    async def _assert_claim(self, queue: str, job_id: str, token: str) -> None:
-        claim = await self._client.hgetall(self._claim_key(job_id))
-        decoded = {self._decode(key): self._decode(value) for key, value in claim.items()}
-        if decoded.get("queue") != queue or decoded.get("token") != token:
-            raise ValueError(f"Invalid claim token for job {job_id}")
-
     async def _server_now(self) -> datetime:
         """The Redis server's clock, which claim leases are set and judged by.
 
@@ -698,35 +765,46 @@ class RedisQueue(_RedisBackend):
         )
 
     async def _release_expired_claims(self, now: datetime) -> None:
-        """Release claims whose lease has lapsed.
+        """Release claims whose lease has lapsed, making the jobs ready at ``now``.
 
-        Holds the queue lock like claim, ack and nack, so a claim made between
-        this reaper's read and its write is never erased. ``now`` is accepted for
-        parity with the other backends; expiry is judged by the server clock.
+        Expiry itself is judged by the server clock. Takes the queue lock like
+        claim, ack and nack; each release is also conditional (see
+        ``_RELEASE_SCRIPT``), so a claim made after this reaper read the job is
+        never erased, even if the lock has expired by then.
         """
         async with self._queue_lock():
-            await self._release_expired_claims_locked(await self._server_now())
+            await self._release_expired_claims_locked(now, await self._server_now())
 
-    async def _release_expired_claims_locked(self, now: datetime) -> None:
+    async def _release_expired_claims_locked(self, now: datetime, lease_now: datetime) -> None:
         queue_names = [self._decode(raw) for raw in await self._client.smembers(self._queue_names_key())]
         for queue in queue_names:
             expired = await self._client.zrangebyscore(
                 self._claimed_key(queue),
                 "-inf",
-                _score(now),
+                _score(lease_now),
             )
             for raw_id in expired:
                 job_id = self._decode(raw_id)
+                token = await self._client.hget(self._claim_key(job_id), "token")
                 job = await self._get_job(job_id)
                 if job is None:
                     await self._remove_job_indexes(queue, job_id)
                     continue
                 job.reclaim_count += 1
                 job.ready_since = now
-                await self._client.set(self._job_key(job_id), _job_to_json(job))
-                await self._client.delete(self._claim_key(job_id))
-                await self._client.zrem(self._claimed_key(queue), job_id)
-                await self._client.zadd(self._ready_key(queue), {job_id: _score(now)})
+                await self._client.eval(
+                    _RELEASE_SCRIPT,
+                    4,
+                    self._claim_key(job_id),
+                    self._job_key(job_id),
+                    self._ready_key(queue),
+                    self._claimed_key(queue),
+                    self._decode(token) if token is not None else "",
+                    job_id,
+                    _job_to_json(job),
+                    repr(_score(lease_now)),
+                    repr(_score(now)),
+                )
 
     async def _delete_job(self, queue: str, job_id: str) -> None:
         await self._client.delete(self._job_key(job_id), self._claim_key(job_id))

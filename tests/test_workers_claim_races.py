@@ -11,6 +11,7 @@ import asyncio
 from datetime import timedelta
 
 import pytest
+from redis.exceptions import LockNotOwnedError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -236,3 +237,135 @@ async def test_redis_lease_uses_the_server_clock(fake_redis_client, monkeypatch)
 
     assert (await queue.stats("default")).claimed == 1
     await queue.ack("default", job.id, claimed.token)
+
+
+async def test_sqlalchemy_claim_that_lost_a_race_does_not_overwrite_the_envelope(
+    worker_session_maker,
+):
+    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    job = JobEnvelope(type="race")
+    await queue.submit(job)
+
+    sessions = PausingSessions(worker_session_maker)
+    worker_a_claim = asyncio.create_task(
+        SQLAlchemyQueue(session_maker=sessions).claim(["default"], visibility_timeout=60)
+    )
+    await sessions.paused.wait()  # A has picked the ready row
+    worker_b = await queue.claim(["default"], visibility_timeout=60)
+    assert worker_b is not None
+    worker_b.job.attempt = 1
+    await queue.nack(
+        "default", job.id, worker_b.token, retry_at=utcnow() - timedelta(seconds=60), job=worker_b.job
+    )
+    sessions.release.set()
+    worker_a = await worker_a_claim
+
+    # A may still claim the job B released, but with B's attempt, not its stale copy.
+    assert worker_a is not None
+    assert worker_a.job.attempt == 1
+    async with worker_session_maker() as session:
+        stored = (
+            await session.execute(select(WorkerQueueRecord.job).where(WorkerQueueRecord.job_id == job.id))
+        ).scalar_one()
+    assert stored["attempt"] == 1
+
+
+async def test_sqlalchemy_claim_loses_to_a_concurrent_claim(worker_session_maker):
+    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    job = JobEnvelope(type="race")
+    await queue.submit(job)
+
+    sessions = PausingSessions(worker_session_maker)
+    worker_a_claim = asyncio.create_task(
+        SQLAlchemyQueue(session_maker=sessions).claim(["default"], visibility_timeout=60)
+    )
+    await sessions.paused.wait()
+    worker_b = await queue.claim(["default"], visibility_timeout=60)
+    sessions.release.set()
+
+    assert worker_b is not None
+    assert await worker_a_claim is None
+    await queue.ack("default", job.id, worker_b.token)
+
+
+async def test_sqlalchemy_cancel_racing_a_claim_does_not_delete_it(worker_session_maker):
+    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    job = JobEnvelope(type="race")
+    await queue.submit(job)
+
+    sessions = PausingSessions(worker_session_maker)
+    cancel = asyncio.create_task(
+        SQLAlchemyQueue(session_maker=sessions).cancel("default", job.id)
+    )
+    await sessions.paused.wait()  # the job was unclaimed when cancel looked
+    worker_b = await queue.claim(["default"], visibility_timeout=60)
+    assert worker_b is not None
+    sessions.release.set()
+
+    assert await cancel is False
+    await queue.ack("default", job.id, worker_b.token)
+
+
+async def test_sqlalchemy_wake_racing_a_takeover_keeps_the_new_envelope(worker_session_maker):
+    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    job = JobEnvelope(type="race")
+    await _expired_claim(queue, job)
+
+    sessions = PausingSessions(worker_session_maker)
+    wake = asyncio.create_task(SQLAlchemyQueue(session_maker=sessions).wake("default", job.id))
+    await sessions.paused.wait()  # wake read A's expired claim
+    worker_b = await _take_over(queue)
+    sessions.release.set()
+
+    assert await wake is True
+    assert await _queue_row(worker_session_maker, job.id) == (worker_b.token, 1)
+
+
+async def test_redis_release_is_conditional_after_the_queue_lock_expires(
+    fake_redis_client, monkeypatch
+):
+    def short_lock(self):
+        return self._client.lock(self._key("queue", "lock"), timeout=0.2)
+
+    monkeypatch.setattr(RedisQueue, "_queue_lock", short_lock)
+    queue = RedisQueue(client=fake_redis_client, prefix="test:claim-races")
+    job = JobEnvelope(type="race")
+    await _expired_claim(queue, job)
+
+    reaper_queue = RedisQueue(client=fake_redis_client, prefix="test:claim-races")
+    read_job = reaper_queue._get_job
+    paused, release = asyncio.Event(), asyncio.Event()
+
+    async def get_job_then_pause(job_id):
+        found = await read_job(job_id)
+        paused.set()
+        await release.wait()
+        return found
+
+    reaper_queue._get_job = get_job_then_pause
+    reaper_1 = asyncio.create_task(reaper_queue._release_expired_claims(utcnow()))
+    await paused.wait()
+    await asyncio.sleep(0.3)  # reaper 1's lock expires while it is stalled
+    worker_b = await queue.claim(["default"], visibility_timeout=60)
+    assert worker_b is not None
+    release.set()
+    with pytest.raises(LockNotOwnedError):
+        await reaper_1
+
+    assert worker_b.job.reclaim_count == 1
+    assert await queue.claim(["default"], visibility_timeout=60) is None  # worker C
+    await queue.ack("default", job.id, worker_b.token)
+
+
+async def test_redis_readiness_stays_on_the_host_clock(fake_redis_client, monkeypatch):
+    # The submitting and claiming host runs a minute ahead of the Redis server.
+    real_now = redis_backend._now
+    monkeypatch.setattr(redis_backend, "_now", lambda: real_now() + timedelta(seconds=60))
+    queue = RedisQueue(client=fake_redis_client, prefix="test:claim-races")
+    job = JobEnvelope(type="skewed")
+    await queue.submit(job)
+
+    assert (await queue.stats("default")).ready == 1
+    claimed = await queue.claim(["default"], visibility_timeout=60)
+    assert claimed is not None and claimed.job.id == job.id
+

@@ -254,9 +254,9 @@ class Queue:
 
 The runtime passes the claimed envelope to `nack` as `job`; store it in place of the queued copy so the incremented `attempt` survives the retry, otherwise `max_attempts` never dead-letters.
 A `nack` without the `job` parameter is deprecated: the runtime still calls it without the envelope and emits a `DeprecationWarning`, but such a queue cannot persist attempts.
-`ack` and `nack` must check the claim token in the same atomic step as the write (a conditional `DELETE`/`UPDATE`, a row lock, or a queue-wide lock) and raise `ValueError` when it no longer matches. Once a claim expires, the reaper in another worker process can release it and a second worker can claim the job; a late `ack` or `nack` from the first worker must then change nothing.
+`ack` and `nack` must check the claim token in the same atomic step as the write (a conditional `DELETE`/`UPDATE`, a row lock, or a server-side script; a lock with a timeout is not enough on its own) and raise `ValueError` when it no longer matches. Once a claim expires, the reaper in another worker process can release it and a second worker can claim the job; a late `ack` or `nack` from the first worker must then change nothing.
 
-The built-in SQLAlchemy and Redis queues set and judge claim leases on the server's clock (`clock_timestamp()` on Postgres, `TIME` on Redis), so worker hosts with skewed clocks agree on when a claim expires. SQLite uses the local clock, which every process sharing the file already shares. Upgrading from a release before this change: until every worker process runs the new reaper, an old one can still overwrite a newer claim, so a rolling deploy carries that risk until it completes.
+The built-in SQLAlchemy and Redis queues set and judge claim leases on the server's clock (`clock_timestamp()` on Postgres, `TIME` on Redis), so worker hosts with skewed clocks agree on when a claim expires. When a job becomes ready (`scheduled_for`, retry and wake times) is still judged on the host clock that wrote it. SQLite uses the local clock throughout, which every process sharing the file already shares. Upgrading from a release before this change: until every worker process runs the new reaper, an old one can still overwrite a newer claim, so a rolling deploy carries that risk until it completes.
 
 ```python
 class DeadLetterStore:

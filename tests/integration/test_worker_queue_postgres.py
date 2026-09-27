@@ -98,3 +98,36 @@ async def test_lease_uses_the_database_clock(queue_session_maker, monkeypatch):
 
     assert (await queue.stats("default")).claimed == 1
     await queue.ack("default", job.id, claimed.token)
+
+
+async def test_readiness_stays_on_the_host_clock(queue_session_maker, monkeypatch):
+    # The submitting and claiming host runs a minute ahead of the database.
+    real_now = sqlalchemy_backend._now
+    monkeypatch.setattr(sqlalchemy_backend, "_now", lambda: real_now() + timedelta(seconds=60))
+    queue = SQLAlchemyQueue(session_maker=queue_session_maker)
+    job = JobEnvelope(type="skewed")
+    await queue.submit(job)
+
+    assert (await queue.stats("default")).ready == 1
+    claimed = await queue.claim(["default"], visibility_timeout=60)
+    assert claimed is not None and claimed.job.id == job.id
+    await queue.ack("default", job.id, claimed.token)
+
+
+async def test_concurrent_claims_leave_one_owner(queue_session_maker):
+    queue = SQLAlchemyQueue(session_maker=queue_session_maker)
+    job = JobEnvelope(type="race")
+    await queue.submit(job)
+
+    sessions = PausingSessions(queue_session_maker)
+    worker_a_claim = asyncio.create_task(
+        SQLAlchemyQueue(session_maker=sessions).claim(["default"], visibility_timeout=60)
+    )
+    await sessions.paused.wait()  # A holds the row lock
+    worker_b = await asyncio.wait_for(queue.claim(["default"], visibility_timeout=60), timeout=5)
+    sessions.release.set()
+    worker_a = await worker_a_claim
+
+    assert (worker_a is None) != (worker_b is None)
+    winner = worker_a or worker_b
+    await queue.ack("default", job.id, winner.token)
