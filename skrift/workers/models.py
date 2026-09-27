@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
@@ -17,7 +17,7 @@ def utcnow() -> datetime:
 
 def micros_since_epoch(value: datetime) -> int:
     """Whole microseconds since the Unix epoch, for ordering claims by time."""
-    return (value - datetime(1970, 1, 1, tzinfo=timezone.utc)) // timedelta(microseconds=1)
+    return (value - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(microseconds=1)
 
 
 class Job(BaseModel):
