@@ -514,8 +514,8 @@ class RedisQueue(_RedisBackend):
         self, queues: list[str], *, visibility_timeout: float
     ) -> ClaimedJob | None:
         async with self._queue_lock():
-            now = _now()
-            await self._release_expired_claims(now)
+            now = await self._server_now()
+            await self._release_expired_claims_locked(now)
             for queue in queues:
                 ids = await self._client.zrangebyscore(
                     self._ready_key(queue),
@@ -620,7 +620,7 @@ class RedisQueue(_RedisBackend):
     async def stats(self, queue: str) -> QueueStats:
         async with self._queue_lock():
             now = _now()
-            await self._release_expired_claims(now)
+            await self._release_expired_claims_locked(await self._server_now())
             ready_ids = await self._client.zrangebyscore(self._ready_key(queue), "-inf", _score(now))
             delayed_ids = await self._client.zrangebyscore(
                 self._ready_key(queue),
@@ -687,7 +687,27 @@ class RedisQueue(_RedisBackend):
         if decoded.get("queue") != queue or decoded.get("token") != token:
             raise ValueError(f"Invalid claim token for job {job_id}")
 
+    async def _server_now(self) -> datetime:
+        """The Redis server's clock, which claim leases are set and judged by.
+
+        Worker processes with skewed clocks then agree on when a lease expires.
+        """
+        seconds, microseconds = await self._client.time()
+        return datetime.fromtimestamp(int(seconds), tz=timezone.utc) + timedelta(
+            microseconds=int(microseconds)
+        )
+
     async def _release_expired_claims(self, now: datetime) -> None:
+        """Release claims whose lease has lapsed.
+
+        Holds the queue lock like claim, ack and nack, so a claim made between
+        this reaper's read and its write is never erased. ``now`` is accepted for
+        parity with the other backends; expiry is judged by the server clock.
+        """
+        async with self._queue_lock():
+            await self._release_expired_claims_locked(await self._server_now())
+
+    async def _release_expired_claims_locked(self, now: datetime) -> None:
         queue_names = [self._decode(raw) for raw in await self._client.smembers(self._queue_names_key())]
         for queue in queue_names:
             expired = await self._client.zrangebyscore(
