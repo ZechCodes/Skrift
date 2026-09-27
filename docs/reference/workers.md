@@ -71,6 +71,19 @@ An idle worker no longer polls at a flat `poll_interval`. After each empty claim
 
 If you are on an older release and need to blunt idle query volume immediately, raising `poll_interval` (for example to `1.0`) cuts the spin without deploying, at the cost of uniform pickup latency; the backoff above makes that stopgap unnecessary.
 
+#### When a claim expires mid-run
+
+A handler that outlives `visibility_timeout` (slow work, a blocked event loop, a paused process) loses its claim. The reaper releases it, and another worker can claim and run the job while the first handler is still going. When the first handler finally returns, raises or pauses, its worker records nothing for the job:
+- Its `ack` or `nack` is refused, because the queue checks the claim token atomically with the write.
+- It emits no lifecycle events and creates no dead letter.
+- It leaves the job's state to the new run. Each run tags the state it writes with its own run id, and later writes land only while the stored state still carries that id.
+
+A warning is logged instead of a worker-loop error.
+
+This protects Skrift's own records only. Anything the stale handler did outside them (external API calls, emails, its own database writes) already happened, and guarding those against a concurrent second run is the handler's responsibility. Size `visibility_timeout` (per handler where needed) above your handler's worst-case run time.
+
+The run-id check is a single atomic state-store update on Postgres and the in-memory store. On SQLite and Redis, `update` is not yet atomic against a plain concurrent write (#195), so a narrow window remains there.
+
 ### Execution Modes
 
 | Mode | Behavior | Typical use |

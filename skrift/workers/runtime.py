@@ -13,8 +13,10 @@ from collections import deque
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from collections.abc import Awaitable
 from datetime import datetime, timedelta
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
@@ -786,15 +788,15 @@ class WorkerRuntime:
         await self.emit_lifecycle(LifecycleEventType.JOB_CLAIMED, job)
         if previous_state is not None and previous_state.status == JobStatus.PAUSED:
             await self.emit_lifecycle(LifecycleEventType.JOB_RESUMED, job)
-        await self._set_state(
-            JobState(
-                job=job,
-                status=JobStatus.RUNNING,
-                attempt=job.attempt,
-                paused_state=previous_state.paused_state if previous_state is not None else {},
-                attempt_history=attempt_history,
-            )
+        running = JobState(
+            job=job,
+            status=JobStatus.RUNNING,
+            attempt=job.attempt,
+            paused_state=previous_state.paused_state if previous_state is not None else {},
+            attempt_history=attempt_history,
+            run_id=uuid4().hex,
         )
+        await self._set_state(running)
         await self.emit_lifecycle(LifecycleEventType.JOB_STARTED, job)
         try:
             result = await self._call_handler(descriptor, job)
@@ -805,6 +807,7 @@ class WorkerRuntime:
                 exc,
                 inline=inline,
                 started_at=started_at,
+                running=running,
                 permanent=True,
             )
             return
@@ -815,23 +818,29 @@ class WorkerRuntime:
                 exc,
                 inline=inline,
                 started_at=started_at,
+                running=running,
             )
             return
 
         if isinstance(result, Pause):
-            await self._handle_pause(claimed, result, inline=inline)
+            await self._handle_pause(claimed, result, inline=inline, running=running)
             return
 
-        if not inline:
-            await self.queue.ack(job.queue, job.id, claimed.token)
-        await self._set_state(
+        # The ack checks the claim token atomically with its write, so it
+        # decides whether this worker still owns the job.
+        if not inline and not await self._settle_claim(
+            job, self.queue.ack(job.queue, job.id, claimed.token)
+        ):
+            return
+        await self._set_run_state(
             JobState(
                 job=job,
                 status=JobStatus.COMPLETED,
                 attempt=job.attempt,
                 result=result,
                 attempt_history=attempt_history,
-            )
+            ),
+            running,
         )
         await self.emit_lifecycle(LifecycleEventType.JOB_COMPLETED, job)
 
@@ -907,6 +916,7 @@ class WorkerRuntime:
         *,
         inline: bool,
         started_at: datetime,
+        running: JobState,
         permanent: bool = False,
     ) -> None:
         job = claimed.job
@@ -919,10 +929,12 @@ class WorkerRuntime:
         )
         previous_state = await self.get_job_state(job.id)
         attempts = [*(previous_state.attempt_history if previous_state else []), attempt]
-        await self.emit_lifecycle(LifecycleEventType.JOB_FAILED, job, error=error)
         if permanent or job.attempt >= job.max_attempts:
-            if not inline:
-                await self._nack(job, claimed.token, dead_letter=True)
+            if not inline and not await self._settle_claim(
+                job, self._nack(job, claimed.token, dead_letter=True)
+            ):
+                return
+            await self.emit_lifecycle(LifecycleEventType.JOB_FAILED, job, error=error)
             await self._dead_letter(
                 job,
                 cause=(
@@ -932,30 +944,45 @@ class WorkerRuntime:
                 ),
                 attempts=attempts,
                 error=error,
+                running=running,
             )
             return
 
         retry_at = utcnow() + timedelta(seconds=self._retry_delay(retry_policy, job.attempt))
-        await self._set_state(
+        # Recorded before the nack so the next run inherits this attempt; the
+        # write is dropped if another run already owns the job's state.
+        if not await self._set_run_state(
             JobState(
                 job=job,
                 status=JobStatus.SUBMITTED,
                 attempt=job.attempt,
                 last_error=error,
                 attempt_history=attempts,
-            )
-        )
+            ),
+            running,
+        ):
+            self._log_claim_lost(job)
+            return
         if inline:
+            await self.emit_lifecycle(LifecycleEventType.JOB_FAILED, job, error=error)
             await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
-        else:
-            await self._nack(job, claimed.token, retry_at=retry_at)
+            return
+        if not await self._settle_claim(
+            job, self._nack(job, claimed.token, retry_at=retry_at), running=running
+        ):
+            return
+        await self.emit_lifecycle(LifecycleEventType.JOB_FAILED, job, error=error)
 
-    async def _handle_pause(self, claimed: ClaimedJob, pause: Pause, *, inline: bool) -> None:
+    async def _handle_pause(
+        self, claimed: ClaimedJob, pause: Pause, *, inline: bool, running: JobState
+    ) -> None:
         job = claimed.job
         job.attempt = max(0, job.attempt - 1)
         job.scheduled_for = pause.resume_at
         previous_state = await self.get_job_state(job.id)
-        await self._set_state(
+        # Recorded before the nack so a run resumed right after it sees this
+        # pause state; dropped if another run already owns the job's state.
+        if not await self._set_run_state(
             JobState(
                 job=job,
                 status=JobStatus.PAUSED,
@@ -964,10 +991,13 @@ class WorkerRuntime:
                 attempt_history=(
                     previous_state.attempt_history if previous_state is not None else []
                 ),
-            )
-        )
-        await self.emit_lifecycle(LifecycleEventType.JOB_PAUSED, job)
+            ),
+            running,
+        ):
+            self._log_claim_lost(job)
+            return
         if inline:
+            await self.emit_lifecycle(LifecycleEventType.JOB_PAUSED, job)
             if pause.resume_at is None:
                 return
             delay = max(0.0, (pause.resume_at - utcnow()).total_seconds())
@@ -977,7 +1007,74 @@ class WorkerRuntime:
             await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
             return
         retry_at = pause.resume_at or datetime.max.replace(tzinfo=utcnow().tzinfo)
-        await self._nack(job, claimed.token, retry_at=retry_at)
+        if not await self._settle_claim(
+            job, self._nack(job, claimed.token, retry_at=retry_at), running=running
+        ):
+            return
+        await self.emit_lifecycle(LifecycleEventType.JOB_PAUSED, job)
+
+    async def _settle_claim(
+        self,
+        job: JobEnvelope,
+        settle: Awaitable[None],
+        *,
+        running: JobState | None = None,
+    ) -> bool:
+        """Run the ack or nack that ends this worker's claim; False if it was lost.
+
+        The queue checks the claim token atomically with its write, so it
+        decides ownership. A worker whose claim expired and was taken over
+        records nothing else for the job: no lifecycle events, no dead letter.
+        If ``running`` is given, the run already wrote its outcome to the job's
+        state, and that write is undone while the state is still its own, so
+        the next run does not start from this run's error or pause state.
+        """
+        try:
+            await settle
+        except ValueError:
+            self._log_claim_lost(job)
+            if running is not None:
+                await self._set_run_state(running.model_copy(), running)
+            return False
+        return True
+
+    @staticmethod
+    def _log_claim_lost(job: JobEnvelope) -> None:
+        logger.warning(
+            "Job %s lost its claim before its outcome was recorded (the claim "
+            "expired and was released); dropping this run's outcome",
+            job.id,
+        )
+
+    async def _set_run_state(self, state: JobState, running: JobState | None) -> bool:
+        """Write a run's state only while the stored state is still that run's.
+
+        Returns False, writing nothing, once another run has recorded its own
+        state: this run's claim was lost. Without ``running`` it is a plain write.
+        """
+        if running is None:
+            await self._set_state(state)
+            return True
+        state.run_id = running.run_id
+        state.updated_at = utcnow()
+
+        class Superseded(Exception):
+            pass
+
+        def write(current: JobState | None) -> JobState:
+            if current is None or current.run_id != running.run_id:
+                raise Superseded
+            return state
+
+        try:
+            await self.state_store.update(
+                self._job_key(state.job.id), write, ttl=self._job_state_ttl
+            )
+        except Superseded:
+            return False
+        async with self._condition:
+            self._condition.notify_all()
+        return True
 
     async def _nack(self, job: JobEnvelope, token: str, **kwargs: Any) -> None:
         if self._queue_nack_accepts_job():
@@ -1048,8 +1145,10 @@ class WorkerRuntime:
     ) -> None:
         job = claimed.job
         previous_state = await self.get_job_state(job.id)
-        if not inline:
-            await self._nack(job, claimed.token, dead_letter=True)
+        if not inline and not await self._settle_claim(
+            job, self._nack(job, claimed.token, dead_letter=True)
+        ):
+            return
         await self._dead_letter(
             job,
             cause=cause,
@@ -1064,6 +1163,7 @@ class WorkerRuntime:
         cause: DeadLetterCause,
         attempts: list[DeadJobAttempt],
         error: str,
+        running: JobState | None = None,
     ) -> DeadJobEntry:
         entry = DeadJobEntry(
             job=job.model_copy(deep=True),
@@ -1075,7 +1175,7 @@ class WorkerRuntime:
             retention_until=utcnow() + timedelta(days=30),
         )
         entry = await self.dead_letter_store.create(entry)
-        await self._set_state(
+        await self._set_run_state(
             JobState(
                 job=job,
                 status=JobStatus.DEAD_LETTERED,
@@ -1083,7 +1183,8 @@ class WorkerRuntime:
                 error=error,
                 last_error=error,
                 attempt_history=attempts,
-            )
+            ),
+            running,
         )
         await self.emit_lifecycle(LifecycleEventType.JOB_DEAD_LETTERED, job, error=error)
         descriptor = self.registry.get(job.type)

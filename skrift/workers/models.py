@@ -127,6 +127,10 @@ class JobState(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
     paused_state: dict[str, Any] = Field(default_factory=dict)
     attempt_history: list["DeadJobAttempt"] = Field(default_factory=list)
+    # The run (one execution of a claim) that wrote this state. A run records
+    # its outcome only while the stored state is still its own, so a worker
+    # whose claim expired and was taken over cannot overwrite the new run.
+    run_id: str | None = None
 
 
 class WorkerLifecycleEvent(BaseModel):
