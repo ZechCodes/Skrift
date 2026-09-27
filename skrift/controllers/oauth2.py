@@ -46,10 +46,18 @@ REFRESH_TOKEN_TTL = 2592000  # 30 days
 CLIENT_NAME_MAX_LENGTH = 255
 
 # The only grant/response types this server supports for dynamically-registered
-# (public, PKCE-only) clients. RFC 7591 §2: unsupported requested values are
-# rejected rather than echoed back as if they were registered.
+# clients (PKCE is required for every one of them). RFC 7591 §2: unsupported
+# requested values are rejected rather than echoed back as if they were
+# registered.
 DYNAMIC_CLIENT_GRANT_TYPES = ("authorization_code", "refresh_token")
 DYNAMIC_CLIENT_RESPONSE_TYPES = ("code",)
+
+# Token-endpoint auth methods a dynamic registration may ask for. The two
+# secret methods get a minted client_secret; `none` registers a public client
+# that authenticates with PKCE alone. RFC 7591 §2: an omitted method means
+# `client_secret_basic`.
+DYNAMIC_CLIENT_AUTH_METHODS = ("client_secret_basic", "client_secret_post", "none")
+DYNAMIC_CLIENT_DEFAULT_AUTH_METHOD = "client_secret_basic"
 
 # Scopes a dynamic registration gets when it omits `scope`. An empty
 # allowed_scopes list means "unrestricted" at /oauth/authorize, so omission
@@ -817,8 +825,11 @@ class OAuth2Controller(Controller):
     async def register(self, request: Request, db_session: AsyncSession) -> Response:
         """Dynamic Client Registration endpoint (RFC 7591).
 
-        Machine clients (e.g. Claude custom connectors) self-register a public
-        client here. The route is CSRF-exempt like ``/oauth/token`` — there is
+        Machine clients (e.g. Claude custom connectors) self-register here,
+        either as a confidential client (``client_secret_basic`` or
+        ``client_secret_post``, the default when the method is omitted) that
+        receives a ``client_secret`` once in this response, or as a public
+        client (``none``). PKCE is required for every one of them. The route is CSRF-exempt like ``/oauth/token`` — there is
         no browser session to protect — and 404s unless dynamic registration is
         explicitly enabled on top of ``oauth2_enabled``.
         """
@@ -843,11 +854,12 @@ class OAuth2Controller(Controller):
             if not _validate_registration_redirect_uri(uri):
                 return _json_error("invalid_redirect_uri", f"Invalid redirect_uri: {uri}")
 
-        # Public DCR only: the sole accepted auth method is `none` (PKCE).
-        auth_method = body.get("token_endpoint_auth_method", "none")
-        if auth_method != "none":
+        auth_method = body.get("token_endpoint_auth_method", DYNAMIC_CLIENT_DEFAULT_AUTH_METHOD)
+        if auth_method not in DYNAMIC_CLIENT_AUTH_METHODS:
             return _json_error(
-                "invalid_client_metadata", "token_endpoint_auth_method must be 'none'"
+                "invalid_client_metadata",
+                "token_endpoint_auth_method must be one of: "
+                + ", ".join(DYNAMIC_CLIENT_AUTH_METHODS),
             )
 
         grant_types = body.get("grant_types") or list(DYNAMIC_CLIENT_GRANT_TYPES)
@@ -914,28 +926,38 @@ class OAuth2Controller(Controller):
                 status_code=429,
             )
 
-        client = await oauth2_service.create_dynamic_client(
+        created = await oauth2_service.create_dynamic_client(
             db_session,
             display_name=display_name,
             redirect_uris=redirect_uris,
             allowed_scopes=requested_scopes,
             registered_by_ip=client_ip,
             issued_at=now,
+            token_endpoint_auth_method=auth_method,
         )
+        client = created.client
+
+        content = {
+            "client_id": client.client_id,
+            "client_id_issued_at": int(now.timestamp()),
+            "token_endpoint_auth_method": auth_method,
+            "grant_types": grant_types,
+            "response_types": response_types,
+            "redirect_uris": client.redirect_uri_list,
+            "client_name": display_name,
+            "scope": " ".join(requested_scopes),
+        }
+        if created.plaintext_secret:
+            # The only time the plaintext leaves the server; just its hash is
+            # stored. 0 means the secret never expires (RFC 7591 §3.2.1).
+            content["client_secret"] = created.plaintext_secret
+            content["client_secret_expires_at"] = 0
 
         return Response(
-            content={
-                "client_id": client.client_id,
-                "client_id_issued_at": int(now.timestamp()),
-                "token_endpoint_auth_method": "none",
-                "grant_types": grant_types,
-                "response_types": response_types,
-                "redirect_uris": client.redirect_uri_list,
-                "client_name": display_name,
-                "scope": " ".join(requested_scopes),
-            },
+            content=content,
             status_code=201,
             media_type="application/json",
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
 
     @get("/jwks")
@@ -1110,13 +1132,20 @@ class OAuth2Controller(Controller):
             return _json_error("invalid_client", "Unknown client_id")
 
         # RFC 7662 §2.1: introspection must be limited to authenticated
-        # callers. Public (secretless) clients — e.g. dynamically-registered
-        # ones — cannot authenticate here, so they may not introspect at all;
-        # anything less turns this endpoint into an unauthenticated
-        # token-validity oracle.
+        # callers. Public (secretless) clients cannot authenticate here, so they
+        # may not introspect at all; anything less turns this endpoint into an
+        # unauthenticated token-validity oracle.
         if not client.client_secret:
             return _json_error(
                 "invalid_client", "Public clients may not introspect tokens", status_code=401
+            )
+        # Anyone can self-register a confidential client, so its secret proves
+        # nothing about who the caller is: the same oracle applies.
+        if client.is_dynamically_registered:
+            return _json_error(
+                "invalid_client",
+                "Dynamically registered clients may not introspect tokens",
+                status_code=401,
             )
         if not verify_client_secret(client_secret, client.client_secret):
             return _json_error("invalid_client", "Invalid client_secret")

@@ -8,6 +8,7 @@ registration_endpoint.
 
 import base64
 import hashlib
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,10 +17,11 @@ import pytest
 import pytest_asyncio
 from jinja2 import Environment
 from litestar.exceptions import NotFoundException
-from sqlalchemy import select
+from sqlalchemy import inspect as sa_inspect, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import skrift
+from skrift.auth.client_secret import is_hashed, verify_client_secret
 from skrift.auth.scopes import SCOPE_DEFINITIONS, register_scope
 from skrift.auth.tokens import create_signed_token
 from skrift.config import SecurityHeadersConfig
@@ -34,6 +36,7 @@ from skrift.controllers.sitemap import build_authorization_server_metadata
 from skrift.db.base import Base
 from skrift.db.models import OAuth2Client, OAuth2SigningKey  # noqa: F401  (registers tables)
 from skrift.db.services import oauth2_service
+from skrift.hooks import AFTER_OAUTH2_CLIENT_CREATED, hooks
 
 
 SECRET = "test-secret-key"
@@ -102,6 +105,7 @@ class TestRegisterEndpoint:
                 "redirect_uris": ["https://app.example.com/cb"],
                 "client_name": "My Connector",
                 "scope": "openid email",
+                "token_endpoint_auth_method": "none",
             },
         )
 
@@ -128,7 +132,11 @@ class TestRegisterEndpoint:
     async def test_registered_public_client_completes_pkce_token_flow(self, db_session):
         register_result = await _register(
             db_session,
-            {"redirect_uris": ["https://app.example.com/cb"], "scope": "openid"},
+            {
+                "redirect_uris": ["https://app.example.com/cb"],
+                "scope": "openid",
+                "token_endpoint_auth_method": "none",
+            },
         )
         client_id = register_result.content["client_id"]
 
@@ -221,16 +229,20 @@ class TestRegisterEndpoint:
         assert result.content["error"] == "invalid_redirect_uri"
 
     @pytest.mark.asyncio
-    async def test_auth_method_must_be_none(self, db_session):
+    @pytest.mark.parametrize(
+        "auth_method", ["private_key_jwt", "client_secret_jwt", "", None, ["none"]]
+    )
+    async def test_unsupported_auth_method_rejected(self, db_session, auth_method):
         result = await _register(
             db_session,
             {
                 "redirect_uris": ["https://app.example.com/cb"],
-                "token_endpoint_auth_method": "client_secret_post",
+                "token_endpoint_auth_method": auth_method,
             },
         )
         assert result.status_code == 400
         assert result.content["error"] == "invalid_client_metadata"
+        assert await oauth2_service.count_dynamic_clients(db_session) == 0
 
     @pytest.mark.asyncio
     async def test_unknown_scope_rejected(self, db_session):
@@ -250,6 +262,187 @@ class TestRegisterEndpoint:
         assert result.status_code == 201
         client = await oauth2_service.get_client_by_client_id(db_session, result.content["client_id"])
         assert len(client.display_name) <= CLIENT_NAME_MAX_LENGTH
+
+
+OMITTED = object()
+
+
+def _code_for(client_id, challenge, scope="openid"):
+    return create_signed_token(
+        {
+            "type": "code",
+            "user_id": USER_ID,
+            "email": "u@example.com",
+            "name": "U User",
+            "picture_url": "",
+            "client_id": client_id,
+            "redirect_uri": "https://app.example.com/cb",
+            "scope": scope,
+            "code_challenge": challenge,
+        },
+        SECRET,
+        AUTH_CODE_TTL,
+    )
+
+
+async def _exchange(db_session, client_id, *, secret, transport, verifier):
+    """POST /oauth/token for an auth code, sending the secret via Basic or the body."""
+    _, challenge = _pkce_pair()
+    form = {
+        "grant_type": "authorization_code",
+        "code": _code_for(client_id, challenge),
+        "redirect_uri": "https://app.example.com/cb",
+    }
+    if verifier is not None:
+        form["code_verifier"] = verifier
+    request = MagicMock()
+    request.base_url = "http://localhost:8000/"
+    if transport == "basic":
+        credentials = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
+        request.headers = {"authorization": f"Basic {credentials}"}
+    else:
+        request.headers = {}
+        form["client_id"] = client_id
+        if secret is not None:
+            form["client_secret"] = secret
+    request.form = AsyncMock(return_value=form)
+    controller = OAuth2Controller(owner=MagicMock())
+    with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()):
+        return await OAuth2Controller.token_exchange.fn(controller, request, db_session)
+
+
+async def _register_confidential(db_session, auth_method):
+    body = {"redirect_uris": ["https://app.example.com/cb"], "scope": "openid"}
+    if auth_method is not OMITTED:
+        body["token_endpoint_auth_method"] = auth_method
+    return await _register(db_session, body)
+
+
+class TestConfidentialRegistration:
+    """RFC 7591 confidential clients: a minted secret, returned once, stored hashed."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("auth_method", "registered_method"),
+        [
+            ("client_secret_basic", "client_secret_basic"),
+            ("client_secret_post", "client_secret_post"),
+            # RFC 7591 §2: omitting the method means client_secret_basic.
+            (OMITTED, "client_secret_basic"),
+        ],
+    )
+    async def test_secret_is_returned_once_and_stored_hashed(
+        self, db_session, auth_method, registered_method
+    ):
+        result = await _register_confidential(db_session, auth_method)
+
+        assert result.status_code == 201
+        body = result.content
+        assert body["token_endpoint_auth_method"] == registered_method
+        secret = body["client_secret"]
+        assert isinstance(secret, str) and len(secret) >= 43
+        assert body["client_secret_expires_at"] == 0
+        assert result.headers["Cache-Control"] == "no-store"
+
+        client = await oauth2_service.get_client_by_client_id(db_session, body["client_id"])
+        assert client.token_endpoint_auth_method == registered_method
+        assert client.is_dynamically_registered is True
+        assert is_hashed(client.client_secret)
+        assert secret not in client.client_secret
+        assert verify_client_secret(secret, client.client_secret)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("transport", ["basic", "post"])
+    @pytest.mark.parametrize(
+        "auth_method", ["client_secret_basic", "client_secret_post", OMITTED]
+    )
+    async def test_returned_secret_completes_the_token_exchange(
+        self, db_session, auth_method, transport
+    ):
+        body = (await _register_confidential(db_session, auth_method)).content
+        verifier, _ = _pkce_pair()
+
+        result = await _exchange(
+            db_session,
+            body["client_id"],
+            secret=body["client_secret"],
+            transport=transport,
+            verifier=verifier,
+        )
+
+        assert result.status_code == 200, result.content
+        assert result.content["access_token"]
+        assert result.content["refresh_token"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("transport", ["basic", "post"])
+    async def test_missing_or_wrong_secret_is_rejected(self, db_session, transport):
+        body = (await _register_confidential(db_session, "client_secret_post")).content
+        verifier, _ = _pkce_pair()
+
+        for secret in (None, "", "wrong-" + body["client_secret"]):
+            if transport == "basic" and secret is None:
+                continue
+            result = await _exchange(
+                db_session, body["client_id"], secret=secret, transport=transport, verifier=verifier
+            )
+            assert result.status_code == 400, secret
+            assert result.content["error"] == "invalid_client"
+
+    @pytest.mark.asyncio
+    async def test_pkce_is_still_required_with_a_valid_secret(self, db_session):
+        body = (await _register_confidential(db_session, OMITTED)).content
+
+        result = await _exchange(
+            db_session, body["client_id"], secret=body["client_secret"], transport="basic", verifier=None
+        )
+
+        assert result.status_code == 400
+        assert result.content["error"] == "invalid_grant"
+        assert result.content["error_description"] == "code_verifier required"
+
+    @pytest.mark.asyncio
+    async def test_plaintext_secret_stays_out_of_hooks_and_logs(self, db_session, caplog):
+        created = []
+
+        async def capture(client):
+            created.append(client)
+
+        hooks.add_action(AFTER_OAUTH2_CLIENT_CREATED, capture)
+        try:
+            with caplog.at_level(logging.DEBUG):
+                result = await _register_confidential(db_session, "client_secret_post")
+        finally:
+            hooks.remove_action(AFTER_OAUTH2_CLIENT_CREATED, capture)
+
+        secret = result.content["client_secret"]
+        (client,) = created
+        assert is_hashed(client.client_secret)
+        for attribute in sa_inspect(client).attrs:
+            assert secret not in str(attribute.value), attribute.key
+        assert secret not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_self_registered_confidential_client_cannot_introspect(self, db_session):
+        # Anyone can register one, so its secret is no basis for introspecting
+        # other clients' tokens.
+        body = (await _register_confidential(db_session, "client_secret_post")).content
+        request = MagicMock()
+        request.headers = {}
+        request.form = AsyncMock(
+            return_value={
+                "token": "anything",
+                "client_id": body["client_id"],
+                "client_secret": body["client_secret"],
+            }
+        )
+        controller = OAuth2Controller(owner=MagicMock())
+
+        with patch("skrift.controllers.oauth2.get_settings", return_value=_settings()):
+            result = await OAuth2Controller.introspect.fn(controller, request, db_session)
+
+        assert result.status_code == 401
+        assert result.content["error"] == "invalid_client"
 
 
 class TestRegisterMetadataValidation:
@@ -420,14 +613,16 @@ class TestTotalRegistrationCap:
         """Marking a client used exempts it from pruning but must not free up
         registration capacity."""
         settings = _settings(total_limit=1)
-        client = await oauth2_service.create_dynamic_client(
-            db_session,
-            display_name="Used",
-            redirect_uris=["https://used.example.com/cb"],
-            allowed_scopes=["openid"],
-            registered_by_ip="3.3.3.3",
-            issued_at=datetime.now(tz=timezone.utc),
-        )
+        client = (
+            await oauth2_service.create_dynamic_client(
+                db_session,
+                display_name="Used",
+                redirect_uris=["https://used.example.com/cb"],
+                allowed_scopes=["openid"],
+                registered_by_ip="3.3.3.3",
+                issued_at=datetime.now(tz=timezone.utc),
+            )
+        ).client
         await oauth2_service.mark_client_used(db_session, client, datetime.now(tz=timezone.utc))
 
         result = await _register(
@@ -599,7 +794,11 @@ class TestClientNameInjection:
         payload = 'App", "client_secret": "pwned\\ {}'
         result = await _register(
             db_session,
-            {"redirect_uris": ["https://app.example.com/cb"], "client_name": payload},
+            {
+                "redirect_uris": ["https://app.example.com/cb"],
+                "client_name": payload,
+                "token_endpoint_auth_method": "none",
+            },
         )
         assert result.status_code == 201
         assert "client_secret" not in result.content
@@ -636,6 +835,14 @@ class TestDiscoveryClaims:
 
 
 class TestDiscoveryRegistrationEndpoint:
+    def test_advertises_every_token_endpoint_auth_method(self):
+        metadata = build_authorization_server_metadata(ISSUER, registration_enabled=True)
+        assert metadata["token_endpoint_auth_methods_supported"] == [
+            "client_secret_basic",
+            "client_secret_post",
+            "none",
+        ]
+
     def test_present_when_enabled(self):
         metadata = build_authorization_server_metadata(ISSUER, registration_enabled=True)
         assert metadata["registration_endpoint"] == f"{ISSUER}/oauth/register"
@@ -665,14 +872,16 @@ class TestDiscoveryRegistrationEndpoint:
 
 class TestPruneStaleDynamicClients:
     async def _make_dynamic(self, db_session, *, issued_ago_days, last_used=None, ip="1.1.1.1"):
-        client = await oauth2_service.create_dynamic_client(
-            db_session,
-            display_name="Dyn",
-            redirect_uris=["https://app.example.com/cb"],
-            allowed_scopes=[],
-            registered_by_ip=ip,
-            issued_at=datetime.now(tz=timezone.utc) - timedelta(days=issued_ago_days),
-        )
+        client = (
+            await oauth2_service.create_dynamic_client(
+                db_session,
+                display_name="Dyn",
+                redirect_uris=["https://app.example.com/cb"],
+                allowed_scopes=[],
+                registered_by_ip=ip,
+                issued_at=datetime.now(tz=timezone.utc) - timedelta(days=issued_ago_days),
+            )
+        ).client
         if last_used is not None:
             await oauth2_service.mark_client_used(db_session, client, last_used)
         return client

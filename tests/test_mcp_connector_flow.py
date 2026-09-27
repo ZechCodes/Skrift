@@ -405,3 +405,83 @@ def _run(coro):
         asyncio.set_event_loop(loop)
         policy._mcp_flow_loop = loop
     return loop.run_until_complete(coro)
+
+
+@pytest.mark.parametrize(
+    ("registered_method", "transport"),
+    [
+        # What Claude's connector backend sends: the secret in the form body.
+        ("client_secret_post", "post"),
+        # An omitted method registers client_secret_basic (RFC 7591 §2).
+        (None, "basic"),
+    ],
+)
+def test_confidential_connector_registers_and_authenticates_with_its_secret(
+    client, engine, registered_method, transport
+):
+    metadata = client.get("/.well-known/oauth-authorization-server").json()
+    assert {"client_secret_basic", "client_secret_post", "none"} <= set(
+        metadata["token_endpoint_auth_methods_supported"]
+    )
+
+    registration_body = {
+        "redirect_uris": [REDIRECT_URI],
+        "client_name": "Claude Custom Connector",
+        "scope": REQUESTED_SCOPE,
+    }
+    if registered_method is not None:
+        registration_body["token_endpoint_auth_method"] = registered_method
+    registration = client.post("/oauth/register", json=registration_body)
+    assert registration.status_code == 201, registration.text
+    assert registration.headers["cache-control"] == "no-store"
+    registered = registration.json()
+    client_id, client_secret = registered["client_id"], registered["client_secret"]
+    assert registered["token_endpoint_auth_method"] == (registered_method or "client_secret_basic")
+    assert registered["client_secret_expires_at"] == 0
+
+    def token_request(form: dict, secret: str | None):
+        if transport == "basic":
+            credentials = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
+            return client.post("/oauth/token", data=form, headers={"Authorization": f"Basic {credentials}"})
+        form = {**form, "client_id": client_id}
+        if secret is not None:
+            form["client_secret"] = secret
+        return client.post("/oauth/token", data=form)
+
+    user_id = _run(_seed_user(engine))
+    _login(client, user_id)
+    verifier, challenge = _generate_pkce_pair()
+    client.get(
+        "/oauth/authorize",
+        params=_authorize_params(client_id, challenge, resource=RESOURCE, state="s"),
+        follow_redirects=False,
+    )
+    approval = client.post(
+        "/oauth/authorize",
+        data={"action": "allow", "scope": REQUESTED_SCOPE.split(), CSRF_FIELD_NAME: CONSENT_CSRF},
+        follow_redirects=False,
+    )
+    code = _code_from_redirect(approval, expected_state="s")
+    code_form = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": REDIRECT_URI,
+        "code_verifier": verifier,
+        "resource": RESOURCE,
+    }
+
+    rejected = token_request(code_form, "not-the-secret")
+    assert rejected.status_code == 400
+    assert rejected.json()["error"] == "invalid_client"
+
+    tokens = token_request(code_form, client_secret)
+    assert tokens.status_code == 200, tokens.text
+    assert client.get(
+        "/mcp/ping", headers={"Authorization": f"Bearer {tokens.json()['access_token']}"}
+    ).status_code == 200
+
+    refreshed = token_request(
+        {"grant_type": "refresh_token", "refresh_token": tokens.json()["refresh_token"]},
+        client_secret,
+    )
+    assert refreshed.status_code == 200, refreshed.text

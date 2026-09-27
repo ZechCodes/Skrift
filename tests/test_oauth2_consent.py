@@ -66,7 +66,7 @@ def _pkce_pair():
 
 
 async def _make_client(db_session, scopes=None):
-    return await oauth2_service.create_dynamic_client(
+    created = await oauth2_service.create_dynamic_client(
         db_session,
         display_name="Consent App",
         redirect_uris=[REDIRECT_URI],
@@ -74,6 +74,7 @@ async def _make_client(db_session, scopes=None):
         registered_by_ip="1.1.1.1",
         issued_at=datetime.now(tz=timezone.utc),
     )
+    return created.client
 
 
 def _authorize_get_request(client_id, scope, user_id=USER_ID):
@@ -663,14 +664,16 @@ class TestClientDeletionCascade:
 
     @pytest.mark.asyncio
     async def test_prune_removes_grants_of_pruned_clients(self, db_session):
-        client = await oauth2_service.create_dynamic_client(
-            db_session,
-            display_name="Stale",
-            redirect_uris=[REDIRECT_URI],
-            allowed_scopes=[],
-            registered_by_ip="1.1.1.1",
-            issued_at=datetime.now(tz=timezone.utc) - timedelta(days=30),
-        )
+        client = (
+            await oauth2_service.create_dynamic_client(
+                db_session,
+                display_name="Stale",
+                redirect_uris=[REDIRECT_URI],
+                allowed_scopes=[],
+                registered_by_ip="1.1.1.1",
+                issued_at=datetime.now(tz=timezone.utc) - timedelta(days=30),
+            )
+        ).client
         await oauth2_consent_service.upsert_grant(
             db_session,
             user_id=USER_ID,

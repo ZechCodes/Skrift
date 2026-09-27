@@ -72,6 +72,7 @@ def _mock_client(
     mc.is_active = is_active
     mc.redirect_uri_list = redirect_uris or ["http://localhost/cb"]
     mc.allowed_scope_list = allowed_scopes or []
+    mc.is_dynamically_registered = False
     return mc
 
 

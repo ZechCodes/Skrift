@@ -75,6 +75,7 @@ def _client(client_id="abc", client_secret="secret", allowed_scopes=None):
     client.is_active = True
     client.redirect_uri_list = ["http://localhost/cb"]
     client.allowed_scope_list = allowed_scopes or []
+    client.is_dynamically_registered = False
     return client
 
 
