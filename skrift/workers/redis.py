@@ -568,11 +568,15 @@ class RedisQueue(_RedisBackend):
         *,
         retry_at: datetime | None = None,
         dead_letter: bool = False,
+        job: JobEnvelope | None = None,
     ) -> None:
         async with self._queue_lock():
             await self._assert_claim(queue, job_id, token)
             visible_at = retry_at or _now()
-            job = await self._get_job(job_id)
+            if job is not None:
+                job = job.model_copy(deep=True)
+            else:
+                job = await self._get_job(job_id)
             if job is None:
                 raise ValueError(f"Invalid claim token for job {job_id}")
             job.ready_since = visible_at if visible_at <= _now() and not dead_letter else None

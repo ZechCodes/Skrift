@@ -397,11 +397,14 @@ class InMemoryQueue:
         *,
         retry_at: datetime | None = None,
         dead_letter: bool = False,
+        job: JobEnvelope | None = None,
     ) -> None:
         async with self._condition:
             entry = self._entries.get(queue, {}).get(job_id)
             if entry is None or entry.claim_token != token:
                 raise ValueError(f"Invalid claim token for job {job_id}")
+            if job is not None:
+                entry.job = job
             entry.claim_token = None
             entry.claim_expires_at = None
             entry.dead_lettered = dead_letter

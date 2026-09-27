@@ -788,6 +788,9 @@ class WorkerRuntime:
                 status=JobStatus.RUNNING,
                 attempt=job.attempt,
                 paused_state=previous_state.paused_state if previous_state is not None else {},
+                attempt_history=(
+                    previous_state.attempt_history if previous_state is not None else []
+                ),
             )
         )
         await self.emit_lifecycle(LifecycleEventType.JOB_STARTED, job)
@@ -916,7 +919,9 @@ class WorkerRuntime:
         await self.emit_lifecycle(LifecycleEventType.JOB_FAILED, job, error=error)
         if permanent or job.attempt >= job.max_attempts:
             if not inline:
-                await self.queue.nack(job.queue, job.id, claimed.token, dead_letter=True)
+                await self.queue.nack(
+                    job.queue, job.id, claimed.token, dead_letter=True, job=job
+                )
             await self._dead_letter(
                 job,
                 cause=(
@@ -942,7 +947,7 @@ class WorkerRuntime:
         if inline:
             await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
         else:
-            await self.queue.nack(job.queue, job.id, claimed.token, retry_at=retry_at)
+            await self.queue.nack(job.queue, job.id, claimed.token, retry_at=retry_at, job=job)
 
     async def _handle_pause(self, claimed: ClaimedJob, pause: Pause, *, inline: bool) -> None:
         job = claimed.job
@@ -967,7 +972,7 @@ class WorkerRuntime:
             await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
             return
         retry_at = pause.resume_at or datetime.max.replace(tzinfo=utcnow().tzinfo)
-        await self.queue.nack(job.queue, job.id, claimed.token, retry_at=retry_at)
+        await self.queue.nack(job.queue, job.id, claimed.token, retry_at=retry_at, job=job)
 
     def _retry_delay(self, retry_policy: RetryPolicy, attempt: int) -> float:
         delay = retry_policy.backoff_seconds * max(0, attempt - 1)
@@ -1007,7 +1012,7 @@ class WorkerRuntime:
     ) -> None:
         job = claimed.job
         if not inline:
-            await self.queue.nack(job.queue, job.id, claimed.token, dead_letter=True)
+            await self.queue.nack(job.queue, job.id, claimed.token, dead_letter=True, job=job)
         await self._dead_letter(job, cause=cause, attempts=[], error=error)
 
     async def _dead_letter(

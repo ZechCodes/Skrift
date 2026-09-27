@@ -544,6 +544,7 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
         *,
         retry_at: datetime | None = None,
         dead_letter: bool = False,
+        job: JobEnvelope | None = None,
     ) -> None:
         async with self._session_maker() as session:
             result = await session.execute(
@@ -556,7 +557,11 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
             if record is None or record.claim_token != token:
                 raise ValueError(f"Invalid claim token for job {job_id}")
             visible_at = retry_at or _now()
-            job = JobEnvelope.model_validate(record.job)
+            job = (
+                job.model_copy(deep=True)
+                if job is not None
+                else JobEnvelope.model_validate(record.job)
+            )
             job.ready_since = (
                 visible_at if visible_at <= _now() and not dead_letter else None
             )

@@ -19,6 +19,7 @@ from skrift.workers import (
     LIFECYCLE_STREAM,
     HandlerRegistry,
     InMemoryArchive,
+    InMemoryDeadLetterStore,
     InMemoryEventLog,
     InMemoryQueue,
     InMemoryStateStore,
@@ -1066,6 +1067,95 @@ async def test_sqlalchemy_runtime_persists_dlq_and_replay(worker_session_maker):
     replayed_entry = await restored.get_dlq_entry(entry.id)
     assert replayed_entry.state == DeadLetterState.REPLAYED
     assert replayed_entry.replayed_to_job_id == replay.id
+
+
+def _always_failing_backends(backend, deps):
+    if backend == "memory":
+        return {}
+    if backend == "sqlalchemy":
+        session_maker = deps["session_maker"]
+        return {
+            "state_store": SQLAlchemyStateStore(session_maker=session_maker),
+            "event_log": SQLAlchemyEventLog(session_maker=session_maker),
+            "queue": SQLAlchemyQueue(session_maker=session_maker),
+            "dead_letter_store": SQLAlchemyDeadLetterStore(session_maker=session_maker),
+            "archive": SQLAlchemyArchive(session_maker=session_maker),
+        }
+    client = deps["redis_client"]
+    return {
+        "state_store": RedisStateStore(client=client, prefix="test:attempts"),
+        "event_log": RedisEventLog(client=client, prefix="test:attempts"),
+        "queue": RedisQueue(client=client, prefix="test:attempts"),
+        "dead_letter_store": InMemoryDeadLetterStore(),
+    }
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_in_process_failing_job_runs_max_attempts_then_dead_letters(
+    backend,
+    worker_session_maker,
+    fake_redis_client,
+):
+    runs = 0
+
+    @skrift.handler("always_fails", max_attempts=3)
+    async def always_fails(job: Greeting):
+        nonlocal runs
+        runs += 1
+        await asyncio.sleep(0)  # a runaway retry loop must not starve the test
+        raise RuntimeError(f"boom {runs}")
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        **_always_failing_backends(
+            backend,
+            {"session_maker": worker_session_maker, "redis_client": fake_redis_client},
+        ),
+    )
+    await runtime.start()
+    try:
+        handle = await runtime.submit(Greeting(name="Ada"))
+        async with asyncio.timeout(5):
+            while runs <= 3 and not await runtime.inspect_dlq():
+                await asyncio.sleep(0.02)
+        # Give a runaway retry loop time to show itself before counting.
+        await asyncio.sleep(0.3)
+    finally:
+        await runtime.stop()
+
+    assert runs == 3
+    dead = await runtime.inspect_dlq()
+    assert len(dead) == 1
+    assert dead[0].cause == DeadLetterCause.RETRIES_EXHAUSTED
+    assert [attempt.attempt for attempt in dead[0].attempts] == [1, 2, 3]
+    state = await runtime.get_job_state(handle.id)
+    assert state.attempt == 3
+    assert [attempt.error for attempt in state.attempt_history] == ["boom 1", "boom 2", "boom 3"]
+
+
+async def test_sqlalchemy_retry_claimed_by_another_process_sees_attempt_count(
+    worker_session_maker,
+):
+    @skrift.handler("fails_once", max_attempts=3)
+    async def fails_once(job: Greeting):
+        raise RuntimeError("boom")
+
+    runtime = skrift.configure_workers(
+        mode="out_of_process",
+        state_store=SQLAlchemyStateStore(session_maker=worker_session_maker),
+        event_log=SQLAlchemyEventLog(session_maker=worker_session_maker),
+        queue=SQLAlchemyQueue(session_maker=worker_session_maker),
+        dead_letter_store=SQLAlchemyDeadLetterStore(session_maker=worker_session_maker),
+    )
+    handle = await runtime.submit(Greeting(name="Ada"))
+    claimed = await runtime.queue.claim(["default"], visibility_timeout=30)
+    await runtime.execute_claim(claimed)
+
+    other_process_queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    retry = await other_process_queue.claim(["default"], visibility_timeout=30)
+    assert retry is not None
+    assert retry.job.id == handle.id
+    assert retry.job.attempt == 1
 
 
 async def test_in_process_worker_pool_runs_jobs_concurrently():
