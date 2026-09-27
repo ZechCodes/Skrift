@@ -55,6 +55,23 @@ def _lease_clock(session: Any) -> Any:
     return literal(_now(), DateTime(timezone=True))
 
 
+async def _lock_queue_row(session: Any, *conditions: Any) -> bool:
+    """Take the write lock on the matching queue row before reading its envelope.
+
+    A no-op UPDATE: on Postgres it takes the row lock, on SQLite it opens the
+    write transaction. No other writer can change the row until this session
+    ends, so an envelope read after this and written back before commit is never
+    a stale copy. Returns whether a row matched.
+    """
+    result = await session.execute(
+        update(WorkerQueueRecord)
+        .where(*conditions)
+        .values(queue=WorkerQueueRecord.queue)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
+
+
 def _unexpired_condition() -> Any:
     """SQL predicate matching rows whose TTL has not yet elapsed."""
     return or_(
@@ -578,15 +595,13 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
             if job is not None:
                 job = job.model_copy(deep=True)
             else:
-                result = await session.execute(
-                    select(WorkerQueueRecord.job).where(
-                        *self._claimed_by(queue, job_id, token)
-                    )
-                )
-                stored = result.scalar_one_or_none()
-                if stored is None:
+                if not await _lock_queue_row(session, *self._claimed_by(queue, job_id, token)):
+                    await session.rollback()
                     raise ValueError(f"Invalid claim token for job {job_id}")
-                job = JobEnvelope.model_validate(stored)
+                result = await session.execute(
+                    select(WorkerQueueRecord.job).where(WorkerQueueRecord.job_id == job_id)
+                )
+                job = JobEnvelope.model_validate(result.scalar_one())
             visible_at = retry_at or _now()
             job.ready_since = (
                 visible_at if visible_at <= _now() and not dead_letter else None
@@ -637,43 +652,29 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
     async def wake(
         self, queue: str, job_id: str, *, resume_at: datetime | None = None
     ) -> bool:
+        matches = (
+            WorkerQueueRecord.queue == queue,
+            WorkerQueueRecord.job_id == job_id,
+            WorkerQueueRecord.dead_lettered.is_(False),
+        )
         async with self._session_maker() as session:
-            while True:
-                result = await session.execute(
-                    select(WorkerQueueRecord).where(
-                        WorkerQueueRecord.queue == queue,
-                        WorkerQueueRecord.job_id == job_id,
-                        WorkerQueueRecord.dead_lettered.is_(False),
-                    )
-                )
-                record = result.scalar_one_or_none()
-                if record is None:
-                    return False
-                visible_at = resume_at or _now()
-                job = JobEnvelope.model_validate(record.job)
-                job.scheduled_for = visible_at
-                job.ready_since = visible_at if visible_at <= _now() else None
-                # Write only over the claim state that was read: if the row was
-                # claimed, released or retried in between, its envelope changed
-                # too, so read it again rather than overwrite it.
-                seen_token = record.claim_token
-                woken = await session.execute(
-                    update(WorkerQueueRecord)
-                    .where(
-                        WorkerQueueRecord.id == record.id,
-                        WorkerQueueRecord.dead_lettered.is_(False),
-                        WorkerQueueRecord.claim_token.is_(None)
-                        if seen_token is None
-                        else WorkerQueueRecord.claim_token == seen_token,
-                        WorkerQueueRecord.visible_at == record.visible_at,
-                    )
-                    .values(job=_job_to_json(job), visible_at=visible_at)
-                    .execution_options(synchronize_session=False)
-                )
-                if woken.rowcount == 1:
-                    await session.commit()
-                    return True
+            # Lock first: a claim and nack in between the read and the write
+            # could otherwise leave the row looking unchanged while its
+            # envelope (attempt, reclaim_count) moved on.
+            if not await _lock_queue_row(session, *matches):
                 await session.rollback()
+                return False
+            record = (
+                await session.execute(select(WorkerQueueRecord).where(*matches))
+            ).scalar_one()
+            visible_at = resume_at or _now()
+            job = JobEnvelope.model_validate(record.job)
+            job.scheduled_for = visible_at
+            job.ready_since = visible_at if visible_at <= _now() else None
+            record.job = _job_to_json(job)
+            record.visible_at = visible_at
+            await session.commit()
+            return True
 
     async def stats(self, queue: str) -> QueueStats:
         now = _now()
@@ -693,15 +694,14 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
                     stats.delayed += 1
                 else:
                     stats.ready += 1
+                    # Read-only: a job with no ready_since has been ready since
+                    # it became visible.
                     job = JobEnvelope.model_validate(record.job)
-                    if job.ready_since is None:
-                        job.ready_since = visible_at
-                        record.job = _job_to_json(job)
+                    ready_since = _utc(job.ready_since) if job.ready_since else visible_at
                     stats.oldest_ready_age_seconds = max(
                         stats.oldest_ready_age_seconds,
-                        (now - _utc(job.ready_since)).total_seconds(),
+                        (now - ready_since).total_seconds(),
                     )
-            await session.commit()
             return stats
 
     async def _release_expired_claims(self, now: datetime) -> None:
@@ -718,13 +718,13 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
         async with self._session_maker() as session:
             clock = _lease_clock(session)
             # SKIP LOCKED keeps concurrent reapers (one per worker process) off
-            # each other's rows on Postgres. Each write below is also
-            # conditional on the claim it read, so a row released and claimed
-            # again in between is left alone on every database.
+            # each other's rows on Postgres. Each row is then locked on the
+            # condition that it still holds the expired claim this reaper saw,
+            # so a row released and claimed again in between is left alone on
+            # every database, and its envelope is read only once locked.
             result = await session.execute(
                 select(
                     WorkerQueueRecord.id,
-                    WorkerQueueRecord.job,
                     WorkerQueueRecord.claim_token,
                     clock.label("db_now"),
                 )
@@ -739,17 +739,23 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
             )
             rows = result.all()
             for row in rows:
-                job = JobEnvelope.model_validate(row.job)
+                if not await _lock_queue_row(
+                    session,
+                    WorkerQueueRecord.id == row.id,
+                    WorkerQueueRecord.dead_lettered.is_(False),
+                    WorkerQueueRecord.claim_token == row.claim_token,
+                    WorkerQueueRecord.claim_expires_at <= _utc(row.db_now),
+                ):
+                    continue
+                stored = await session.execute(
+                    select(WorkerQueueRecord.job).where(WorkerQueueRecord.id == row.id)
+                )
+                job = JobEnvelope.model_validate(stored.scalar_one())
                 job.reclaim_count += 1
                 job.ready_since = now
                 await session.execute(
                     update(WorkerQueueRecord)
-                    .where(
-                        WorkerQueueRecord.id == row.id,
-                        WorkerQueueRecord.dead_lettered.is_(False),
-                        WorkerQueueRecord.claim_token == row.claim_token,
-                        WorkerQueueRecord.claim_expires_at <= _utc(row.db_now),
-                    )
+                    .where(WorkerQueueRecord.id == row.id)
                     .values(
                         job=_job_to_json(job),
                         claim_token=None,

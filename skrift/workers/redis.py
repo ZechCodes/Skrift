@@ -28,9 +28,67 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# Claim writes run as scripts that re-check the claim first. `_queue_lock`
-# expires after 10 s, so it cannot by itself stop a stalled worker or reaper
-# from writing over a claim made after its lock ran out.
+# Every queue write runs as a script that re-checks, atomically, the state it
+# was decided on. `_queue_lock` expires after 10 s, so it cannot by itself stop
+# a stalled worker or reaper from writing over a claim made after its lock ran
+# out.
+
+# KEYS: ready, claimed, claim, job
+# ARGV: job_id, ready cutoff score, lease expiry score, queue, token, lease expiry iso
+# Returns the stored envelope, or nil if the job is no longer ready and unclaimed.
+_CLAIM_SCRIPT = """
+local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if not score or tonumber(score) > tonumber(ARGV[2]) then return false end
+if redis.call('EXISTS', KEYS[3]) == 1 then return false end
+local job = redis.call('GET', KEYS[4])
+if not job then return false end
+redis.call('ZREM', KEYS[1], ARGV[1])
+redis.call('ZADD', KEYS[2], ARGV[3], ARGV[1])
+redis.call('HSET', KEYS[3], 'queue', ARGV[4], 'token', ARGV[5], 'expires_at', ARGV[6])
+return job
+"""
+
+# KEYS: claim, job, ready, claimed, dead, dead_at, jobs_by_queue
+# ARGV: job_id
+_CANCEL_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[2]) == 0 then return 0 end
+redis.call('DEL', KEYS[2])
+redis.call('ZREM', KEYS[3], ARGV[1])
+redis.call('ZREM', KEYS[4], ARGV[1])
+redis.call('SREM', KEYS[5], ARGV[1])
+redis.call('ZREM', KEYS[6], ARGV[1])
+redis.call('SREM', KEYS[7], ARGV[1])
+return 1
+"""
+
+# KEYS: job, claim, ready, claimed, dead
+# ARGV: envelope as read, job_id, new envelope, ready score
+# Returns -1 if the job is dead-lettered or claimed, 0 if its envelope changed.
+_WAKE_SCRIPT = """
+if redis.call('SISMEMBER', KEYS[5], ARGV[2]) == 1 then return -1 end
+if redis.call('EXISTS', KEYS[2]) == 1 then return -1 end
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[3])
+redis.call('ZREM', KEYS[4], ARGV[2])
+redis.call('ZADD', KEYS[3], ARGV[4], ARGV[2])
+return 1
+"""
+
+# KEYS: job, ready, claimed, dead, dead_at, jobs_by_queue
+# ARGV: job_id
+# Drops the indexes of a job whose envelope is gone, unless it has been
+# resubmitted since.
+_FORGET_MISSING_JOB_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+redis.call('ZREM', KEYS[2], ARGV[1])
+redis.call('ZREM', KEYS[3], ARGV[1])
+redis.call('SREM', KEYS[4], ARGV[1])
+redis.call('ZREM', KEYS[5], ARGV[1])
+redis.call('SREM', KEYS[6], ARGV[1])
+return 1
+"""
+
+_WAKE_ATTEMPTS = 5
 
 # KEYS: claim, job, ready, claimed, dead, dead_at, jobs_by_queue
 # ARGV: queue, token, job_id
@@ -578,31 +636,31 @@ class RedisQueue(_RedisBackend):
                 if not ids:
                     continue
                 job_id = self._decode(ids[0])
-                job = await self._get_job(job_id)
-                if job is None:
-                    await self._remove_job_indexes(queue, job_id)
+                if await self._get_job(job_id) is None:
+                    await self._forget_missing_job(queue, job_id)
                     continue
-                if job.ready_since is None:
-                    visible_at = await self._client.zscore(self._ready_key(queue), job_id)
-                    job.ready_since = (
-                        datetime.fromtimestamp(float(visible_at), tz=timezone.utc)
-                        if visible_at is not None
-                        else now
-                    )
-                job.ready_since = None
                 token = uuid4().hex
                 expires_at = lease_now + timedelta(seconds=visibility_timeout)
-                await self._client.set(self._job_key(job_id), _job_to_json(job))
-                await self._client.zrem(self._ready_key(queue), job_id)
-                await self._client.zadd(self._claimed_key(queue), {job_id: _score(expires_at)})
-                await self._client.hset(
+                # The script re-checks that the job is still ready and unclaimed
+                # and hands back the envelope as stored at that moment.
+                stored = await self._client.eval(
+                    _CLAIM_SCRIPT,
+                    4,
+                    self._ready_key(queue),
+                    self._claimed_key(queue),
                     self._claim_key(job_id),
-                    mapping={
-                        "queue": queue,
-                        "token": token,
-                        "expires_at": expires_at.isoformat(),
-                    },
+                    self._job_key(job_id),
+                    job_id,
+                    repr(_score(now)),
+                    repr(_score(expires_at)),
+                    queue,
+                    token,
+                    expires_at.isoformat(),
                 )
+                if stored is None:
+                    continue
+                job = _job_from_json(stored)
+                job.ready_since = None
                 return ClaimedJob(job=job, token=token)
             return None
 
@@ -665,30 +723,57 @@ class RedisQueue(_RedisBackend):
 
     async def cancel(self, queue: str, job_id: str) -> bool:
         async with self._queue_lock():
-            if await self._client.exists(self._claim_key(job_id)):
-                return False
-            if not await self._client.exists(self._job_key(job_id)):
-                return False
-            await self._delete_job(queue, job_id)
-            return True
+            cancelled = await self._client.eval(
+                _CANCEL_SCRIPT,
+                7,
+                self._claim_key(job_id),
+                self._job_key(job_id),
+                self._ready_key(queue),
+                self._claimed_key(queue),
+                self._dead_key(queue),
+                self._dead_at_key(queue),
+                self._queue_jobs_key(queue),
+                job_id,
+            )
+            return bool(cancelled)
 
     async def wake(
         self, queue: str, job_id: str, *, resume_at: datetime | None = None
     ) -> bool:
+        """Make an unclaimed job ready at ``resume_at`` (default now).
+
+        Returns ``False`` for a missing, dead-lettered or claimed job. The
+        envelope is rewritten only if it is unchanged since it was read; after
+        ``_WAKE_ATTEMPTS`` reads that each lost to a concurrent write, ``False``
+        is returned rather than retrying without bound.
+        """
         async with self._queue_lock():
-            if await self._client.sismember(self._dead_key(queue), job_id):
-                return False
-            job = await self._get_job(job_id)
-            if job is None:
-                return False
-            visible_at = resume_at or _now()
-            job.scheduled_for = visible_at
-            job.ready_since = visible_at if visible_at <= _now() else None
-            await self._client.set(self._job_key(job_id), _job_to_json(job))
-            await self._client.zrem(self._claimed_key(queue), job_id)
-            await self._client.delete(self._claim_key(job_id))
-            await self._client.zadd(self._ready_key(queue), {job_id: _score(visible_at)})
-            return True
+            for _ in range(_WAKE_ATTEMPTS):
+                stored = await self._client.get(self._job_key(job_id))
+                if stored is None:
+                    return False
+                visible_at = resume_at or _now()
+                job = _job_from_json(stored)
+                job.scheduled_for = visible_at
+                job.ready_since = visible_at if visible_at <= _now() else None
+                woken = await self._client.eval(
+                    _WAKE_SCRIPT,
+                    5,
+                    self._job_key(job_id),
+                    self._claim_key(job_id),
+                    self._ready_key(queue),
+                    self._claimed_key(queue),
+                    self._dead_key(queue),
+                    stored,
+                    job_id,
+                    _job_to_json(job),
+                    repr(_score(visible_at)),
+                )
+                if woken == 1:
+                    return True
+                if woken == -1:
+                    return False
+            return False
 
     async def stats(self, queue: str) -> QueueStats:
         async with self._queue_lock():
@@ -711,19 +796,21 @@ class RedisQueue(_RedisBackend):
                 job_id = self._decode(raw_id)
                 job = await self._get_job(job_id)
                 if job is None:
-                    await self._remove_job_indexes(queue, job_id)
+                    await self._forget_missing_job(queue, job_id)
                     continue
-                if job.ready_since is None:
+                # Read-only: a job with no ready_since has been ready since its
+                # ready-set score.
+                ready_since = job.ready_since
+                if ready_since is None:
                     visible_at = await self._client.zscore(self._ready_key(queue), job_id)
-                    job.ready_since = (
+                    ready_since = (
                         datetime.fromtimestamp(float(visible_at), tz=timezone.utc)
                         if visible_at is not None
                         else now
                     )
-                    await self._client.set(self._job_key(job_id), _job_to_json(job))
                 stats.oldest_ready_age_seconds = max(
                     stats.oldest_ready_age_seconds,
-                    (now - _utc(job.ready_since)).total_seconds(),
+                    (now - _utc(ready_since)).total_seconds(),
                 )
             return stats
 
@@ -788,7 +875,7 @@ class RedisQueue(_RedisBackend):
                 token = await self._client.hget(self._claim_key(job_id), "token")
                 job = await self._get_job(job_id)
                 if job is None:
-                    await self._remove_job_indexes(queue, job_id)
+                    await self._forget_missing_job(queue, job_id)
                     continue
                 job.reclaim_count += 1
                 job.ready_since = now
@@ -805,6 +892,19 @@ class RedisQueue(_RedisBackend):
                     repr(_score(lease_now)),
                     repr(_score(now)),
                 )
+
+    async def _forget_missing_job(self, queue: str, job_id: str) -> None:
+        await self._client.eval(
+            _FORGET_MISSING_JOB_SCRIPT,
+            6,
+            self._job_key(job_id),
+            self._ready_key(queue),
+            self._claimed_key(queue),
+            self._dead_key(queue),
+            self._dead_at_key(queue),
+            self._queue_jobs_key(queue),
+            job_id,
+        )
 
     async def _delete_job(self, queue: str, job_id: str) -> None:
         await self._client.delete(self._job_key(job_id), self._claim_key(job_id))

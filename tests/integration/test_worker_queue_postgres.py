@@ -9,7 +9,7 @@ import asyncio
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 import skrift.workers.sqlalchemy as sqlalchemy_backend
 from skrift.db.models.worker import WorkerQueueRecord
@@ -131,3 +131,25 @@ async def test_concurrent_claims_leave_one_owner(queue_session_maker):
     assert (worker_a is None) != (worker_b is None)
     winner = worker_a or worker_b
     await queue.ack("default", job.id, winner.token)
+
+
+async def test_wake_racing_a_claim_and_retry_keeps_the_new_envelope(queue_session_maker):
+    queue = SQLAlchemyQueue(session_maker=queue_session_maker)
+    visible_at = utcnow() - timedelta(seconds=60)
+    job = JobEnvelope(type="race", scheduled_for=visible_at)
+    await queue.submit(job)
+
+    sessions = PausingSessions(queue_session_maker)
+    wake = asyncio.create_task(SQLAlchemyQueue(session_maker=sessions).wake("default", job.id))
+    await sessions.paused.wait()
+    worker_b = await queue.claim(["default"], visibility_timeout=60)
+    worker_b.job.attempt = 1
+    await queue.nack("default", job.id, worker_b.token, retry_at=visible_at, job=worker_b.job)
+    sessions.release.set()
+
+    assert await wake is True
+    async with queue_session_maker() as session:
+        stored = (
+            await session.execute(select(WorkerQueueRecord.job).where(WorkerQueueRecord.job_id == job.id))
+        ).scalar_one()
+    assert stored["attempt"] == 1
