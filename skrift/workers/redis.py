@@ -718,7 +718,7 @@ class RedisQueue(_RedisBackend):
                     continue
                 job = _job_from_json(stored)
                 job.ready_since = None
-                return ClaimedJob(job=job, token=token)
+                return ClaimedJob(job=job, token=token, visibility_timeout=visibility_timeout)
             return None
 
     async def ack(self, queue: str, job_id: str, token: str) -> None:

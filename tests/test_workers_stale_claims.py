@@ -9,6 +9,8 @@ belongs to B.
 from __future__ import annotations
 
 import asyncio
+import logging
+from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
@@ -189,11 +191,176 @@ async def test_stale_worker_emits_nothing_before_the_new_owner_starts(
 
     assert await _outcome_events(runtime, handle.id) == []
     assert await runtime.inspect_dlq() == []
-    # Nothing of A's late outcome is left for B's run to start from.
+    # Nothing of A's run is left for B's run to start from: the state is back
+    # to what it was before A started.
     state = await handle.status()
-    assert (state.status, state.last_error, state.paused_state) == (JobStatus.RUNNING, None, {})
+    assert (state.status, state.last_error, state.paused_state) == (JobStatus.SUBMITTED, None, {})
 
     handler.release[1].set()
     await runtime.execute_claim(claim_b)
     state = await handle.status()
     assert (state.status, state.result) == (JobStatus.COMPLETED, "B finished")
+
+
+RUN_EVENTS = {"job_claimed", "job_started", "job_resumed"} | OUTCOME_EVENTS
+
+
+class InOrder:
+    """Handler whose runs each wait for their own release and return ``run <n>``."""
+
+    def __init__(self):
+        self.started = [asyncio.Event(), asyncio.Event()]
+        self.release = [asyncio.Event(), asyncio.Event()]
+        self.calls = 0
+
+    async def __call__(self, job: Race):
+        run = self.calls
+        self.calls += 1
+        self.started[run].set()
+        await self.release[run].wait()
+        return f"run {run}"
+
+
+def _register_in_order():
+    runs = InOrder()
+
+    @skrift.handler("race", max_attempts=3)
+    async def race(job: Race):
+        return await runs(job)
+
+    return runs
+
+
+async def _within(awaitable):
+    """Fail instead of hanging when a run is never released."""
+    return await asyncio.wait_for(awaitable, 5)
+
+
+async def _run_events(runtime, job_id):
+    return [
+        event["type"]
+        for _, event in await runtime.lifecycle_events_for_job(job_id)
+        if event["type"] in RUN_EVENTS
+    ]
+
+
+async def _expired_and_taken_over(runtime):
+    """A receives a claim that expires before A starts on it; B reaps and claims."""
+    handle = await runtime.submit(Race(name="ada"))
+    claim_a = await runtime.queue.claim(["default"], visibility_timeout=0.05)
+    await asyncio.sleep(0.1)
+    await runtime.queue._release_expired_claims(utcnow())
+    claim_b = await runtime.queue.claim(["default"], visibility_timeout=60)
+    assert claim_b is not None
+    return handle, claim_a, claim_b
+
+
+def _stall_before_running(runtime):
+    """Hold the worker task set on the returned gate before it writes RUNNING."""
+    gate = SimpleNamespace(task=None, stalled=asyncio.Event(), release=asyncio.Event())
+    read_state = runtime.get_job_state
+
+    async def get_job_state(job_id):
+        if asyncio.current_task() is gate.task and not gate.release.is_set():
+            gate.stalled.set()
+            await gate.release.wait()
+        return await read_state(job_id)
+
+    runtime.get_job_state = get_job_state
+    return gate
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_a_worker_reaching_an_expired_claim_skips_the_run(
+    backend, worker_session_maker, fake_redis_client, caplog
+):
+    handler = _register_in_order()
+    runtime = skrift.configure_workers(
+        mode="in_process", **_backends(backend, worker_session_maker, fake_redis_client)
+    )
+    handle, claim_a, claim_b = await _expired_and_taken_over(runtime)
+    worker_b = asyncio.create_task(runtime.execute_claim(claim_b))
+    await _within(handler.started[0].wait())  # B's run is live
+
+    with caplog.at_level(logging.WARNING, logger="skrift.workers.runtime"):
+        await _within(runtime.execute_claim(claim_a))  # A resumes on its expired claim
+    assert "after its claim expired" in caplog.text
+    assert handler.calls == 1
+
+    handler.release[0].set()
+    await _within(worker_b)
+    state = await handle.status()
+    assert (state.status, state.result) == (JobStatus.COMPLETED, "run 0")
+    assert await _run_events(runtime, handle.id) == ["job_claimed", "job_started", "job_completed"]
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_a_settled_run_wins_over_a_late_workers_running_state(
+    backend, worker_session_maker, fake_redis_client, caplog
+):
+    # A passes its expiry check just in time, then stalls: its RUNNING write
+    # lands over B's live run, and B finishes before A does.
+    handler = _register_in_order()
+    runtime = skrift.configure_workers(
+        mode="in_process", **_backends(backend, worker_session_maker, fake_redis_client)
+    )
+    gate = _stall_before_running(runtime)
+    handle = await runtime.submit(Race(name="ada"))
+    claim_a = await runtime.queue.claim(["default"], visibility_timeout=0.05)
+    claim_a.visibility_timeout = 60  # A's check passes: it is not yet expired
+    worker_a = gate.task = asyncio.create_task(runtime.execute_claim(claim_a))
+    await _within(gate.stalled.wait())
+    await asyncio.sleep(0.1)
+    await runtime.queue._release_expired_claims(utcnow())
+    claim_b = await runtime.queue.claim(["default"], visibility_timeout=60)
+    worker_b = asyncio.create_task(runtime.execute_claim(claim_b))
+    await _within(handler.started[0].wait())
+
+    gate.release.set()
+    await _within(handler.started[1].wait())  # A wrote RUNNING over B's run
+    assert (await handle.status()).status == JobStatus.RUNNING
+    handler.release[0].set()
+    await _within(worker_b)
+    with caplog.at_level(logging.WARNING, logger="skrift.workers.runtime"):
+        handler.release[1].set()
+        await _within(worker_a)
+    assert "lost its claim" in caplog.text  # A's ack was refused
+
+    state = await handle.status()
+    assert (state.status, state.result) == (JobStatus.COMPLETED, "run 0")
+    assert await _outcome_events(runtime, handle.id) == ["job_completed"]
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_a_late_worker_leaves_a_finished_run_finished(
+    backend, worker_session_maker, fake_redis_client, caplog
+):
+    # As above, but A's RUNNING write lands after B has completed the job.
+    handler = _register_in_order()
+    runtime = skrift.configure_workers(
+        mode="in_process", **_backends(backend, worker_session_maker, fake_redis_client)
+    )
+    gate = _stall_before_running(runtime)
+    handle = await runtime.submit(Race(name="ada"))
+    claim_a = await runtime.queue.claim(["default"], visibility_timeout=0.05)
+    claim_a.visibility_timeout = 60
+    worker_a = gate.task = asyncio.create_task(runtime.execute_claim(claim_a))
+    await _within(gate.stalled.wait())
+    await asyncio.sleep(0.1)
+    await runtime.queue._release_expired_claims(utcnow())
+    claim_b = await runtime.queue.claim(["default"], visibility_timeout=60)
+    handler.release[0].set()
+    await _within(runtime.execute_claim(claim_b))
+    assert (await handle.status()).status == JobStatus.COMPLETED
+
+    gate.release.set()
+    await _within(handler.started[1].wait())  # A wrote RUNNING over the completed state
+    with caplog.at_level(logging.WARNING, logger="skrift.workers.runtime"):
+        handler.release[1].set()
+        await _within(worker_a)
+    assert "lost its claim" in caplog.text
+
+    state = await handle.status()
+    assert (state.status, state.result) == (JobStatus.COMPLETED, "run 0")
+    assert await runtime.wait_for_result(handle.id, timeout=1) == "run 0"
+    assert await _outcome_events(runtime, handle.id) == ["job_completed"]

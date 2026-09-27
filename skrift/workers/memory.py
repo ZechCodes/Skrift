@@ -381,7 +381,9 @@ class InMemoryQueue:
                 entry.claim_token = token
                 entry.claim_expires_at = _now() + timedelta(seconds=visibility_timeout)
                 entry.job.ready_since = None
-                return ClaimedJob(job=entry.job, token=token)
+                return ClaimedJob(
+                    job=entry.job, token=token, visibility_timeout=visibility_timeout
+                )
             return None
 
     async def ack(self, queue: str, job_id: str, token: str) -> None:

@@ -568,7 +568,7 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
                     .execution_options(synchronize_session=False)
                 )
                 await session.commit()
-                return ClaimedJob(job=job, token=token)
+                return ClaimedJob(job=job, token=token, visibility_timeout=visibility_timeout)
             return None
 
     async def ack(self, queue: str, job_id: str, token: str) -> None:

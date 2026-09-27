@@ -113,6 +113,10 @@ class ClaimedJob(BaseModel):
     job: JobEnvelope
     token: str
     claimed_at: datetime = Field(default_factory=utcnow)
+    # Seconds the queue holds this claim for. claimed_at is set once the queue
+    # has granted it, so claimed_at + visibility_timeout is never before the
+    # lease really ends. None if the queue does not report it.
+    visibility_timeout: float | None = None
 
 
 class JobState(BaseModel):
