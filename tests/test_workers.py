@@ -1136,6 +1136,153 @@ async def test_in_process_failing_job_runs_max_attempts_then_dead_letters(
 
 
 @pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_wake_during_the_pause_window_is_not_lost(
+    backend,
+    worker_session_maker,
+    fake_redis_client,
+):
+    # The worker records PAUSED before its nack releases the claim; a wake that
+    # lands in between must still make the job ready once the nack completes.
+    runs = 0
+
+    @skrift.handler("pause_until_woken")
+    async def pause_until_woken(job: Greeting):
+        nonlocal runs
+        runs += 1
+        await asyncio.sleep(0)
+        if runs == 1:
+            return Pause()
+        return "woken"
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        **_worker_backends(
+            backend,
+            {"session_maker": worker_session_maker, "redis_client": fake_redis_client},
+        ),
+    )
+    nack_reached, nack_release = asyncio.Event(), asyncio.Event()
+    real_nack = runtime._nack
+
+    async def gated_nack(job, token, **kwargs):
+        nack_reached.set()
+        await nack_release.wait()
+        await real_nack(job, token, **kwargs)
+
+    runtime._nack = gated_nack
+    handle = await runtime.submit(Greeting(name="Ada"))
+    claimed = await runtime.queue.claim(["default"], visibility_timeout=60)
+    pausing = asyncio.create_task(runtime.execute_claim(claimed))
+    await nack_reached.wait()
+    assert (await handle.status()).status == JobStatus.PAUSED
+
+    assert await runtime.wake(handle.id) is True
+    nack_release.set()
+    await pausing
+
+    resumed = await runtime.queue.claim(["default"], visibility_timeout=60)
+    assert resumed is not None and resumed.job.id == handle.id
+    await runtime.execute_claim(resumed)
+    assert await handle.result(timeout=5) == "woken"
+
+
+def _gate_nack(runtime):
+    """Hold the runtime's nack before it runs and again after it released the claim."""
+    before, allow, after, finish = (asyncio.Event() for _ in range(4))
+    real_nack = runtime._nack
+
+    async def gated(job, token, **kwargs):
+        before.set()
+        await allow.wait()
+        await real_nack(job, token, **kwargs)
+        after.set()
+        await finish.wait()
+
+    runtime._nack = gated
+    return before, allow, after, finish
+
+
+def _pausing_runtime(backend, worker_session_maker, fake_redis_client):
+    runs = 0
+
+    @skrift.handler("pause_once")
+    async def pause_once(job: Greeting):
+        nonlocal runs
+        runs += 1
+        await asyncio.sleep(0)
+        return Pause() if runs == 1 else "woken"
+
+    return skrift.configure_workers(
+        mode="in_process",
+        **_worker_backends(
+            backend,
+            {"session_maker": worker_session_maker, "redis_client": fake_redis_client},
+        ),
+    )
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_a_later_wake_is_not_undone_by_one_deferred_earlier(
+    backend,
+    worker_session_maker,
+    fake_redis_client,
+):
+    runtime = _pausing_runtime(backend, worker_session_maker, fake_redis_client)
+    before, allow, after, finish = _gate_nack(runtime)
+    handle = await runtime.submit(Greeting(name="Ada"))
+    claimed = await runtime.queue.claim(["default"], visibility_timeout=60)
+    pausing = asyncio.create_task(runtime.execute_claim(claimed))
+
+    await before.wait()  # PAUSED is recorded, the claim is still held
+    assert await runtime.wake(handle.id, resume_at=utcnow() + timedelta(days=1))
+    allow.set()
+    await after.wait()  # the nack released the claim
+    assert await runtime.wake(handle.id)  # later, and applied directly
+    finish.set()
+    await pausing
+
+    resumed = await runtime.queue.claim(["default"], visibility_timeout=60)
+    assert resumed is not None and resumed.job.id == handle.id
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_waking_a_running_job_never_rewrites_its_state(
+    backend,
+    worker_session_maker,
+    fake_redis_client,
+):
+    release = asyncio.Event()
+
+    @skrift.handler("finish_when_released")
+    async def finish_when_released(job: Greeting):
+        await release.wait()
+        return "done"
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        **_worker_backends(
+            backend,
+            {"session_maker": worker_session_maker, "redis_client": fake_redis_client},
+        ),
+    )
+    handle = await runtime.submit(Greeting(name="Ada"))
+    claimed = await runtime.queue.claim(["default"], visibility_timeout=60)
+    running = asyncio.create_task(runtime.execute_claim(claimed))
+    async with asyncio.timeout(5):
+        while (await handle.status()).status != JobStatus.RUNNING:
+            await asyncio.sleep(0.01)
+
+    assert await runtime.wake(handle.id) is True
+    release.set()
+    await running
+
+    state = await handle.status()
+    assert (state.status, state.result) == (JobStatus.COMPLETED, "done")
+    stats = await runtime.queue.stats("default")
+    assert (stats.ready, stats.delayed, stats.claimed) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
 async def test_in_process_attempt_history_survives_pause_and_wake(
     backend,
     worker_session_maker,
