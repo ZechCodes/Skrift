@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 import skrift.workers.redis as redis_backend
 from skrift.db.base import Base
 from skrift.db.models.worker import WorkerQueueRecord
-from skrift.workers import RedisQueue, SQLAlchemyQueue
+from skrift.workers import InMemoryQueue, RedisQueue, SQLAlchemyQueue
 from skrift.workers.models import JobEnvelope, utcnow
 
 
@@ -317,7 +317,7 @@ async def test_sqlalchemy_wake_racing_a_takeover_keeps_the_new_envelope(worker_s
     worker_b = await _take_over(queue)
     sessions.release.set()
 
-    assert await wake is True
+    assert await wake is False  # B holds the job now
     assert await _queue_row(worker_session_maker, job.id) == (worker_b.token, 1)
 
 
@@ -501,43 +501,82 @@ async def test_sqlalchemy_wake_racing_a_claim_and_retry_keeps_the_new_envelope(
     assert (await _stored_job(worker_session_maker, job.id)).attempt == 1
 
 
-async def test_sqlalchemy_legacy_nack_keeps_a_concurrent_wake(worker_session_maker):
-    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_wake_leaves_a_claimed_job_alone(worker_session_maker, fake_redis_client, backend):
+    if backend == "memory":
+        queue = InMemoryQueue()
+    elif backend == "sqlalchemy":
+        queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    else:
+        queue = RedisQueue(client=fake_redis_client, prefix="test:claim-races")
     job = JobEnvelope(type="race")
     await queue.submit(job)
     worker_a = await queue.claim(["default"], visibility_timeout=60)
-    resume_at = utcnow() + timedelta(hours=1)
 
-    sessions = PausingSessions(worker_session_maker)
-    nack = asyncio.create_task(
-        SQLAlchemyQueue(session_maker=sessions).nack("default", job.id, worker_a.token)
-    )
-    await sessions.paused.wait()
-    assert await queue.wake("default", job.id, resume_at=resume_at) is True
-    sessions.release.set()
-    await nack
-
-    assert (await _stored_job(worker_session_maker, job.id)).scheduled_for == resume_at
+    # Its worker's ack or nack decides what happens next, not a wake.
+    assert await queue.wake("default", job.id, resume_at=utcnow() + timedelta(hours=1)) is False
+    assert worker_a.job.scheduled_for is None
+    await queue.nack("default", job.id, worker_a.token, job=worker_a.job)
+    worker_b = await queue.claim(["default"], visibility_timeout=60)
+    assert worker_b is not None  # the nack's retry time stood
+    await queue.ack("default", job.id, worker_b.token)
 
 
-async def test_sqlalchemy_reaper_keeps_a_concurrent_wake(worker_session_maker):
-    queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+@pytest.mark.parametrize("same_payload", [True, False])
+async def test_redis_submit_after_the_lock_expires_keeps_the_newer_job(
+    fake_redis_client, short_redis_lock, same_payload
+):
+    queue = RedisQueue(client=fake_redis_client, prefix="test:claim-races")
+    stale = RedisQueue(client=fake_redis_client, prefix="test:claim-races")
+    first = JobEnvelope(type="race", payload={"value": "A"})
+    read_job = stale._get_job
+    paused, release = asyncio.Event(), asyncio.Event()
+
+    async def read_then_pause(job_id):
+        found = await read_job(job_id)
+        paused.set()
+        await release.wait()
+        return found
+
+    stale._get_job = read_then_pause
+    stale_submit = asyncio.create_task(stale.submit(first))
+    await paused.wait()  # the id was free when A looked
+    await asyncio.sleep(0.3)
+    newer = JobEnvelope(id=first.id, type="race", payload={"value": "A" if same_payload else "B"})
+    await queue.submit(newer)
+    worker_b = await queue.claim(["default"], visibility_timeout=60)
+    worker_b.job.attempt = 1
+    await queue.nack("default", newer.id, worker_b.token, job=worker_b.job)
+    release.set()
+    with pytest.raises(LockNotOwnedError):
+        await stale_submit
+
+    stored = await queue._get_job(newer.id)
+    assert (stored.payload, stored.attempt) == (newer.payload, 1)
+
+
+async def test_redis_prune_after_the_lock_expires_keeps_a_resubmitted_job(
+    fake_redis_client, short_redis_lock
+):
+    queue = RedisQueue(client=fake_redis_client, prefix="test:claim-races")
+    stale = RedisQueue(client=PauseBeforeFirstWrite(fake_redis_client), prefix="test:claim-races")
     job = JobEnvelope(type="race")
-    await _expired_claim(queue, job)
-    resume_at = utcnow() + timedelta(hours=1)
+    await queue.submit(job)
+    worker_a = await queue.claim(["default"], visibility_timeout=60)
+    await queue.nack("default", job.id, worker_a.token, dead_letter=True, job=worker_a.job)
 
-    sessions = PausingSessions(worker_session_maker)
-    reaper_1 = asyncio.create_task(
-        SQLAlchemyQueue(session_maker=sessions)._release_expired_claims(utcnow())
-    )
-    await sessions.paused.wait()
-    assert await queue.wake("default", job.id, resume_at=resume_at) is True
-    sessions.release.set()
-    await reaper_1
+    stale_prune = asyncio.create_task(stale.prune_dead_markers(max_age_seconds=0))
+    await stale._client.paused.wait()  # the pruner listed the dead job
+    await asyncio.sleep(0.3)
+    assert await queue.cancel("default", job.id)
+    await queue.submit(JobEnvelope(id=job.id, type="race", payload={"generation": 2}))
+    worker_b = await queue.claim(["default"], visibility_timeout=60)
+    stale._client.release.set()
+    with pytest.raises(LockNotOwnedError):
+        await stale_prune
 
-    stored = await _stored_job(worker_session_maker, job.id)
-    assert stored.scheduled_for == resume_at
-    assert stored.reclaim_count == 1
+    assert (await queue._get_job(job.id)).payload == {"generation": 2}
+    await queue.ack("default", job.id, worker_b.token)
 
 
 async def _stored_job(session_maker, job_id):

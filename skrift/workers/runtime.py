@@ -512,7 +512,40 @@ class WorkerRuntime:
             )
             await self.queue.submit(state.job, job_id=job_id)
             return True
-        return await self.queue.wake(state.job.queue, job_id, resume_at=resume_at)
+        if await self.queue.wake(state.job.queue, job_id, resume_at=resume_at):
+            return True
+        # Queues refuse to wake a claimed job. A PAUSED job can still be
+        # claimed: _handle_pause records PAUSED before its nack releases the
+        # claim. Leave the wake for that worker to apply after the nack, then
+        # try again in case the nack landed before the request was recorded.
+        # Either way the wake is applied once the claim is gone.
+        if not await self._request_wake(job_id, resume_at):
+            return False
+        await self.queue.wake(state.job.queue, job_id, resume_at=resume_at)
+        return True
+
+    async def _request_wake(self, job_id: str, resume_at: datetime | None) -> bool:
+        """Record a wake on a PAUSED job's state; False if it is not PAUSED."""
+
+        class NotPaused(Exception):
+            pass
+
+        def request(current: JobState | None) -> JobState:
+            if current is None or current.status != JobStatus.PAUSED:
+                raise NotPaused
+            return current.model_copy(
+                update={"wake_requested": True, "wake_resume_at": resume_at}
+            )
+
+        try:
+            await self.state_store.update(
+                self._job_key(job_id),
+                request,
+                ttl=self._job_state_ttl,
+            )
+        except NotPaused:
+            return False
+        return True
 
     async def inspect(
         self,
@@ -978,6 +1011,10 @@ class WorkerRuntime:
             return
         retry_at = pause.resume_at or datetime.max.replace(tzinfo=utcnow().tzinfo)
         await self._nack(job, claimed.token, retry_at=retry_at)
+        # Apply a wake that arrived while this worker still held the claim.
+        state = await self.get_job_state(job.id)
+        if state is not None and state.status == JobStatus.PAUSED and state.wake_requested:
+            await self.queue.wake(job.queue, job.id, resume_at=state.wake_resume_at)
 
     async def _nack(self, job: JobEnvelope, token: str, **kwargs: Any) -> None:
         if self._queue_nack_accepts_job():

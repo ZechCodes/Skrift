@@ -88,6 +88,38 @@ redis.call('SREM', KEYS[6], ARGV[1])
 return 1
 """
 
+# KEYS: job, queue_names, jobs_by_queue, ready
+# ARGV: envelope, queue, job_id, ready score
+# Returns nil once the job is written, or the envelope already stored under
+# this id so the caller can apply the idempotency/conflict rule to it.
+_SUBMIT_SCRIPT = """
+local existing = redis.call('GET', KEYS[1])
+if existing then return existing end
+redis.call('SET', KEYS[1], ARGV[1])
+redis.call('SADD', KEYS[2], ARGV[2])
+redis.call('SADD', KEYS[3], ARGV[3])
+redis.call('ZADD', KEYS[4], ARGV[4], ARGV[3])
+return false
+"""
+
+# KEYS: dead_at, dead, claim, job, ready, claimed, jobs_by_queue
+# ARGV: job_id, cutoff score
+# Deletes a dead-lettered job only while it is still dead-lettered no later
+# than the cutoff and unclaimed, so a job resubmitted under the same id is
+# never pruned.
+_PRUNE_DEAD_JOB_SCRIPT = """
+local dead_at = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if not dead_at or tonumber(dead_at) > tonumber(ARGV[2]) then return 0 end
+if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end
+redis.call('DEL', KEYS[4])
+redis.call('ZREM', KEYS[1], ARGV[1])
+redis.call('SREM', KEYS[2], ARGV[1])
+redis.call('ZREM', KEYS[5], ARGV[1])
+redis.call('ZREM', KEYS[6], ARGV[1])
+redis.call('SREM', KEYS[7], ARGV[1])
+return 1
+"""
+
 _WAKE_ATTEMPTS = 5
 
 # KEYS: claim, job, ready, claimed, dead, dead_at, jobs_by_queue
@@ -608,15 +640,27 @@ class RedisQueue(_RedisBackend):
         job.ready_since = visible_at if visible_at <= now else None
         async with self._queue_lock():
             existing = await self._get_job(job.id)
-            if existing is not None:
-                if existing.idempotency_payload() == job.idempotency_payload():
-                    return existing
-                raise JobIdConflict(f"job id {job.id!r} already exists")
-            await self._client.set(self._job_key(job.id), _job_to_json(job))
-            await self._client.sadd(self._queue_names_key(), job.queue)
-            await self._client.sadd(self._queue_jobs_key(job.queue), job.id)
-            await self._client.zadd(self._ready_key(job.queue), {job.id: _score(visible_at)})
-            return job
+            if existing is None:
+                # Written only if the id is still free; otherwise the envelope
+                # stored meanwhile comes back and the same rule applies to it.
+                stored = await self._client.eval(
+                    _SUBMIT_SCRIPT,
+                    4,
+                    self._job_key(job.id),
+                    self._queue_names_key(),
+                    self._queue_jobs_key(job.queue),
+                    self._ready_key(job.queue),
+                    _job_to_json(job),
+                    job.queue,
+                    job.id,
+                    repr(_score(visible_at)),
+                )
+                if stored is None:
+                    return job
+                existing = _job_from_json(stored)
+            if existing.idempotency_payload() == job.idempotency_payload():
+                return existing
+            raise JobIdConflict(f"job id {job.id!r} already exists")
 
     async def claim(
         self, queues: list[str], *, visibility_timeout: float
@@ -829,9 +873,7 @@ class RedisQueue(_RedisBackend):
                     cutoff,
                 )
                 for raw_id in expired:
-                    job_id = self._decode(raw_id)
-                    await self._delete_job(queue, job_id)
-                    count += 1
+                    count += await self._prune_dead_job(queue, self._decode(raw_id), cutoff)
             return count
 
     def _queue_lock(self):
@@ -906,16 +948,22 @@ class RedisQueue(_RedisBackend):
             job_id,
         )
 
-    async def _delete_job(self, queue: str, job_id: str) -> None:
-        await self._client.delete(self._job_key(job_id), self._claim_key(job_id))
-        await self._remove_job_indexes(queue, job_id)
-
-    async def _remove_job_indexes(self, queue: str, job_id: str) -> None:
-        await self._client.zrem(self._ready_key(queue), job_id)
-        await self._client.zrem(self._claimed_key(queue), job_id)
-        await self._client.srem(self._dead_key(queue), job_id)
-        await self._client.zrem(self._dead_at_key(queue), job_id)
-        await self._client.srem(self._queue_jobs_key(queue), job_id)
+    async def _prune_dead_job(self, queue: str, job_id: str, cutoff: float) -> int:
+        return int(
+            await self._client.eval(
+                _PRUNE_DEAD_JOB_SCRIPT,
+                7,
+                self._dead_at_key(queue),
+                self._dead_key(queue),
+                self._claim_key(job_id),
+                self._job_key(job_id),
+                self._ready_key(queue),
+                self._claimed_key(queue),
+                self._queue_jobs_key(queue),
+                job_id,
+                repr(cutoff),
+            )
+        )
 
     def _queue_names_key(self) -> str:
         return self._key("queue", "names")

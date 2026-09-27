@@ -652,10 +652,13 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
     async def wake(
         self, queue: str, job_id: str, *, resume_at: datetime | None = None
     ) -> bool:
+        # A claimed job is not woken: its worker's ack or nack decides what
+        # happens next (WorkerRuntime.wake handles a job that is pausing).
         matches = (
             WorkerQueueRecord.queue == queue,
             WorkerQueueRecord.job_id == job_id,
             WorkerQueueRecord.dead_lettered.is_(False),
+            WorkerQueueRecord.claim_token.is_(None),
         )
         async with self._session_maker() as session:
             # Lock first: a claim and nack in between the read and the write

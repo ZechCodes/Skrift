@@ -127,6 +127,11 @@ class JobState(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
     paused_state: dict[str, Any] = Field(default_factory=dict)
     attempt_history: list["DeadJobAttempt"] = Field(default_factory=list)
+    # A wake that arrived while the job was pausing: PAUSED is recorded before
+    # the worker releases its claim, and a claimed job cannot be woken. The
+    # pausing worker applies it once its claim is released.
+    wake_requested: bool = False
+    wake_resume_at: datetime | None = None
 
 
 class WorkerLifecycleEvent(BaseModel):

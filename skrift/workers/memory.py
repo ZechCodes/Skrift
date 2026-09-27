@@ -428,7 +428,8 @@ class InMemoryQueue:
     ) -> bool:
         async with self._condition:
             entry = self._entries.get(queue, {}).get(job_id)
-            if entry is None or entry.dead_lettered:
+            # A claimed job is not woken, as in the other queues.
+            if entry is None or entry.dead_lettered or entry.claim_token is not None:
                 return False
             entry.visible_at = resume_at or _now()
             entry.job.scheduled_for = entry.visible_at
