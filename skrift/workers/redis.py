@@ -49,15 +49,19 @@ end
 """
 
 # KEYS: ready, claimed, claim, job
-# ARGV: job_id, ready cutoff score, lease expiry score, queue, token, lease expiry iso
+# ARGV: job_id, ready cutoff score, lease expiry score, queue, token, lease expiry iso,
+#       the job's visibility timeout as read ("" if unset; tonumber of it and of a
+#       JSON null are both nil)
 # Returns the stored envelope and the claim's order, or nil if the job is no
-# longer ready and unclaimed.
+# longer ready and unclaimed or its visibility timeout (which the lease was
+# computed from) has changed.
 _CLAIM_SCRIPT = _GENERATION_LUA + """
 local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if not score or tonumber(score) > tonumber(ARGV[2]) then return false end
 if redis.call('EXISTS', KEYS[3]) == 1 then return false end
 local job = redis.call('GET', KEYS[4])
 if not job then return false end
+if tonumber(cjson.decode(job).visibility_timeout) ~= tonumber(ARGV[7]) then return false end
 local claim_order = generation(job) + 1
 redis.call('SET', KEYS[4], with_generation(job, claim_order))
 redis.call('ZREM', KEYS[1], ARGV[1])
@@ -712,11 +716,13 @@ class RedisQueue(_RedisBackend):
                 if not ids:
                     continue
                 job_id = self._decode(ids[0])
-                if await self._get_job(job_id) is None:
+                queued = await self._get_job(job_id)
+                if queued is None:
                     await self._forget_missing_job(queue, job_id)
                     continue
                 token = uuid4().hex
-                expires_at = lease_now + timedelta(seconds=visibility_timeout)
+                lease = max(visibility_timeout, queued.visibility_timeout or 0)
+                expires_at = lease_now + timedelta(seconds=lease)
                 # The script re-checks that the job is still ready and unclaimed
                 # and hands back the envelope as stored at that moment.
                 stored = await self._client.eval(
@@ -732,6 +738,7 @@ class RedisQueue(_RedisBackend):
                     queue,
                     token,
                     expires_at.isoformat(),
+                    "" if queued.visibility_timeout is None else repr(queued.visibility_timeout),
                 )
                 if stored is None:
                     continue
@@ -741,7 +748,7 @@ class RedisQueue(_RedisBackend):
                 return ClaimedJob(
                     job=job,
                     token=token,
-                    visibility_timeout=visibility_timeout,
+                    visibility_timeout=lease,
                     claim_order=int(claim_order),
                 )
             return None

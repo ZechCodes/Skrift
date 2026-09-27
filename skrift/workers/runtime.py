@@ -548,6 +548,7 @@ class WorkerRuntime:
         return {
             "mode": self.config.mode,
             "concurrency": self.config.concurrency,
+            "visibility_timeout": self.config.visibility_timeout,
             "queues": queue_stats,
             "queue_trend_history": await self.queue_trend_history(),
             "queue_wait_history": await self.queue_wait_history(),

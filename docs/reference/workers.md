@@ -60,7 +60,7 @@ workers:
 | `poll_interval` | `0.05` | Base seconds a worker waits after an empty claim; the floor an idle worker collapses back to the moment a claim succeeds |
 | `max_poll_interval` | `2.0` | Ceiling for the idle poll backoff. After each empty claim the wait grows by `poll_backoff_factor` up to this value, so idle queues stop polling the database at full frequency |
 | `poll_backoff_factor` | `2.0` | Growth factor applied to the poll interval on each consecutive empty claim. `1.0` disables backoff and keeps polling at `poll_interval` |
-| `visibility_timeout` | `30.0` | Seconds before an unacked claim can be reclaimed |
+| `visibility_timeout` | `30.0` | Seconds before an unacked claim can be reclaimed. A job whose own `visibility_timeout` (set on `@handler` or at submit) is longer keeps its claim for that long instead; a job that sets none uses this value |
 | `reaper_interval` | `5.0` | Seconds between runs of the standalone reaper that reclaims expired claims and sweeps expired state, decoupled from poll frequency |
 | `max_reclaims` | `3` | Number of claim timeouts allowed before dead-lettering as a reclaim loop |
 | `imports` | `[]` | Modules imported by standalone worker processes and app startup to register handlers |
@@ -268,9 +268,11 @@ class Queue:
     async def stats(self, queue: str) -> QueueStats: ...
 ```
 
+`claim` must hold the claim for the longer of its `visibility_timeout` argument (the worker's `workers.visibility_timeout`) and the claimed job's own `visibility_timeout`. A job's `visibility_timeout` of `None` means it sets none, and the argument alone applies.
+
 The runtime passes the claimed envelope to `nack` as `job`; store it in place of the queued copy so the incremented `attempt` survives the retry, otherwise `max_attempts` never dead-letters.
 A `nack` without the `job` parameter is deprecated: the runtime still calls it without the envelope and emits a `DeprecationWarning`, but such a queue cannot persist attempts.
-Set `visibility_timeout` on the returned `ClaimedJob` to the seconds the claim is held for; a worker that reaches a claim after that has passed skips it instead of starting a run the queue may already have handed to another worker. Leaving it `None` disables that check. Set `claim_order` to a value that is greater for each later claim of a job and never repeats, kept with the job so it is lost only together with it; do not derive it from a clock, which can step backwards. Without it (`None`) the runtime does not order that queue's claims, so a worker whose claim was taken over can still write over the later claim's state.
+Set `visibility_timeout` on the returned `ClaimedJob` to the seconds the claim is held for (that longer of the two, not the argument); a worker that reaches a claim after that has passed skips it instead of starting a run the queue may already have handed to another worker. Leaving it `None` disables that check. Set `claim_order` to a value that is greater for each later claim of a job and never repeats, kept with the job so it is lost only together with it; do not derive it from a clock, which can step backwards. Without it (`None`) the runtime does not order that queue's claims, so a worker whose claim was taken over can still write over the later claim's state.
 `ack` and `nack` must check the claim token in the same atomic step as the write (a conditional `DELETE`/`UPDATE`, a row lock, or a server-side script; a lock with a timeout is not enough on its own) and raise `ValueError` when it no longer matches. Once a claim expires, the reaper in another worker process can release it and a second worker can claim the job; a late `ack` or `nack` from the first worker must then change nothing.
 
 `wake` of a claimed job (running, or pausing before its `nack` lands) must not disturb the claim. Record it on the claim instead and return `True`: the worker's `nack` then makes the job ready at the recorded time rather than its own retry time, atomically with releasing the claim. Keep only the latest such wake. `ack`, dead-lettering and a reaped claim drop it.

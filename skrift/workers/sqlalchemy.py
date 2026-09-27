@@ -563,20 +563,26 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
                 ).one()
                 job = JobEnvelope.model_validate(stored.job)
                 job.ready_since = None
+                # The lease lasts the longer of the worker's and the job's own
+                # visibility timeout, which is only known once the envelope is read.
+                lease = max(visibility_timeout, job.visibility_timeout or 0)
                 await session.execute(
                     update(WorkerQueueRecord)
                     .where(
                         WorkerQueueRecord.id == row.id,
                         WorkerQueueRecord.claim_token == token,
                     )
-                    .values(job=_job_to_json(job))
+                    .values(
+                        job=_job_to_json(job),
+                        claim_expires_at=_utc(row.db_now) + timedelta(seconds=lease),
+                    )
                     .execution_options(synchronize_session=False)
                 )
                 await session.commit()
                 return ClaimedJob(
                     job=job,
                     token=token,
-                    visibility_timeout=visibility_timeout,
+                    visibility_timeout=lease,
                     claim_order=stored.claim_generation,
                 )
             return None
