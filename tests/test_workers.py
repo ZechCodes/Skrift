@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import warnings
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -19,10 +20,12 @@ from skrift.workers import (
     LIFECYCLE_STREAM,
     HandlerRegistry,
     InMemoryArchive,
+    InMemoryDeadLetterStore,
     InMemoryEventLog,
     InMemoryQueue,
     InMemoryStateStore,
     Job,
+    DeadJobAttempt,
     DeadJobEntry,
     DeadLetterCause,
     DeadLetterState,
@@ -1066,6 +1069,256 @@ async def test_sqlalchemy_runtime_persists_dlq_and_replay(worker_session_maker):
     replayed_entry = await restored.get_dlq_entry(entry.id)
     assert replayed_entry.state == DeadLetterState.REPLAYED
     assert replayed_entry.replayed_to_job_id == replay.id
+
+
+def _worker_backends(backend, deps):
+    if backend == "memory":
+        return {}
+    if backend == "sqlalchemy":
+        session_maker = deps["session_maker"]
+        return {
+            "state_store": SQLAlchemyStateStore(session_maker=session_maker),
+            "event_log": SQLAlchemyEventLog(session_maker=session_maker),
+            "queue": SQLAlchemyQueue(session_maker=session_maker),
+            "dead_letter_store": SQLAlchemyDeadLetterStore(session_maker=session_maker),
+            "archive": SQLAlchemyArchive(session_maker=session_maker),
+        }
+    client = deps["redis_client"]
+    return {
+        "state_store": RedisStateStore(client=client, prefix="test:attempts"),
+        "event_log": RedisEventLog(client=client, prefix="test:attempts"),
+        "queue": RedisQueue(client=client, prefix="test:attempts"),
+        "dead_letter_store": InMemoryDeadLetterStore(),
+    }
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_in_process_failing_job_runs_max_attempts_then_dead_letters(
+    backend,
+    worker_session_maker,
+    fake_redis_client,
+):
+    runs = 0
+
+    @skrift.handler("always_fails", max_attempts=3)
+    async def always_fails(job: Greeting):
+        nonlocal runs
+        runs += 1
+        await asyncio.sleep(0)  # a runaway retry loop must not starve the test
+        raise RuntimeError(f"boom {runs}")
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        **_worker_backends(
+            backend,
+            {"session_maker": worker_session_maker, "redis_client": fake_redis_client},
+        ),
+    )
+    await runtime.start()
+    try:
+        handle = await runtime.submit(Greeting(name="Ada"))
+        async with asyncio.timeout(5):
+            while runs <= 3 and not await runtime.inspect_dlq():
+                await asyncio.sleep(0.02)
+        # Give a runaway retry loop time to show itself before counting.
+        await asyncio.sleep(0.3)
+    finally:
+        await runtime.stop()
+
+    assert runs == 3
+    dead = await runtime.inspect_dlq()
+    assert len(dead) == 1
+    assert dead[0].cause == DeadLetterCause.RETRIES_EXHAUSTED
+    assert [attempt.attempt for attempt in dead[0].attempts] == [1, 2, 3]
+    state = await runtime.get_job_state(handle.id)
+    assert state.attempt == 3
+    assert [attempt.error for attempt in state.attempt_history] == ["boom 1", "boom 2", "boom 3"]
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_in_process_attempt_history_survives_pause_and_wake(
+    backend,
+    worker_session_maker,
+    fake_redis_client,
+):
+    runs = 0
+
+    @skrift.handler("fail_pause_fail", max_attempts=2)
+    async def fail_pause_fail(job: Greeting):
+        nonlocal runs
+        runs += 1
+        await asyncio.sleep(0)
+        if runs == 2:
+            return Pause()
+        raise RuntimeError(f"boom {runs}")
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        **_worker_backends(
+            backend,
+            {"session_maker": worker_session_maker, "redis_client": fake_redis_client},
+        ),
+    )
+    await runtime.start()
+    try:
+        handle = await runtime.submit(Greeting(name="Ada"))
+        async with asyncio.timeout(5):
+            while (await handle.status()).status != JobStatus.PAUSED:
+                await asyncio.sleep(0.02)
+        paused = await handle.status()
+        assert [attempt.error for attempt in paused.attempt_history] == ["boom 1"]
+        assert await runtime.wake(handle.id)
+        async with asyncio.timeout(5):
+            while runs <= 3 and not await runtime.inspect_dlq():
+                await asyncio.sleep(0.02)
+        await asyncio.sleep(0.3)
+    finally:
+        await runtime.stop()
+
+    assert runs == 3
+    dead = await runtime.inspect_dlq()
+    assert len(dead) == 1
+    assert [attempt.error for attempt in dead[0].attempts] == ["boom 1", "boom 3"]
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_in_process_completed_state_keeps_attempt_history(
+    backend,
+    worker_session_maker,
+    fake_redis_client,
+):
+    runs = 0
+
+    @skrift.handler("fails_then_succeeds", max_attempts=3)
+    async def fails_then_succeeds(job: Greeting):
+        nonlocal runs
+        runs += 1
+        if runs == 1:
+            raise RuntimeError("first")
+        return "ok"
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        **_worker_backends(
+            backend,
+            {"session_maker": worker_session_maker, "redis_client": fake_redis_client},
+        ),
+    )
+    await runtime.start()
+    try:
+        handle = await runtime.submit(Greeting(name="Ada"))
+        assert await handle.result(timeout=5) == "ok"
+    finally:
+        await runtime.stop()
+
+    state = await handle.status()
+    assert state.status == JobStatus.COMPLETED
+    assert [attempt.error for attempt in state.attempt_history] == ["first"]
+
+
+async def test_reclaim_loop_dead_letter_keeps_attempt_history():
+    @skrift.handler("fails_then_loops", max_attempts=3)
+    async def fails_then_loops(job: Greeting):
+        raise RuntimeError("first")
+
+    runtime = skrift.configure_workers(mode="out_of_process")
+    handle = await runtime.submit(Greeting(name="Ada"))
+    await runtime.execute_claim(await runtime.queue.claim(["default"], visibility_timeout=30))
+
+    claimed = await runtime.queue.claim(["default"], visibility_timeout=30)
+    claimed.job.reclaim_count = claimed.job.max_reclaims
+    await runtime.execute_claim(claimed)
+
+    state = await handle.status()
+    assert state.status == JobStatus.DEAD_LETTERED
+    assert [attempt.error for attempt in state.attempt_history] == ["first"]
+    dead = await runtime.inspect_dlq()
+    assert dead[0].cause == DeadLetterCause.RECLAIM_LOOP
+    assert [attempt.error for attempt in dead[0].attempts] == ["first"]
+
+
+async def test_inline_then_queued_wake_keeps_attempt_history():
+    @skrift.handler("paused_inline")
+    async def paused_inline(job: Greeting):
+        return "ok"
+
+    runtime = skrift.configure_workers(mode="out_of_process")
+    job = JobEnvelope(
+        type="paused_inline",
+        payload={"name": "Ada"},
+        metadata={"skrift_dispatch": "inline_then_queued"},
+    )
+    history = [
+        DeadJobAttempt(
+            attempt=1,
+            started_at=utcnow(),
+            finished_at=utcnow(),
+            exception_type="RuntimeError",
+            error="first",
+        )
+    ]
+    await runtime._set_state(
+        JobState(job=job, status=JobStatus.PAUSED, attempt=1, attempt_history=history)
+    )
+
+    assert await runtime.wake(job.id)
+
+    state = await runtime.get_job_state(job.id)
+    assert state.status == JobStatus.SUBMITTED
+    assert [attempt.error for attempt in state.attempt_history] == ["first"]
+
+
+async def test_queue_with_legacy_nack_signature_still_releases_claims():
+    class LegacyQueue(InMemoryQueue):
+        async def nack(self, queue, job_id, token, *, retry_at=None, dead_letter=False):
+            await super().nack(queue, job_id, token, retry_at=retry_at, dead_letter=dead_letter)
+
+    @skrift.handler("legacy_fails", max_attempts=3)
+    async def legacy_fails(job: Greeting):
+        raise RuntimeError("boom")
+
+    queue = LegacyQueue()
+    runtime = skrift.configure_workers(mode="out_of_process", queue=queue)
+    handle = await runtime.submit(Greeting(name="Ada"))
+
+    claimed = await queue.claim(["default"], visibility_timeout=30)
+    with pytest.warns(DeprecationWarning, match=r"LegacyQueue\.nack\(\) does not accept job="):
+        await runtime.execute_claim(claimed)
+    stats = await queue.stats("default")
+    assert (stats.claimed, stats.ready) == (0, 1)
+
+    claimed = await queue.claim(["default"], visibility_timeout=30)
+    assert claimed.job.id == handle.id
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        await runtime.execute_claim(claimed)
+    stats = await queue.stats("default")
+    assert (stats.claimed, stats.ready) == (0, 1)
+
+
+async def test_sqlalchemy_retry_claimed_by_another_process_sees_attempt_count(
+    worker_session_maker,
+):
+    @skrift.handler("fails_once", max_attempts=3)
+    async def fails_once(job: Greeting):
+        raise RuntimeError("boom")
+
+    runtime = skrift.configure_workers(
+        mode="out_of_process",
+        state_store=SQLAlchemyStateStore(session_maker=worker_session_maker),
+        event_log=SQLAlchemyEventLog(session_maker=worker_session_maker),
+        queue=SQLAlchemyQueue(session_maker=worker_session_maker),
+        dead_letter_store=SQLAlchemyDeadLetterStore(session_maker=worker_session_maker),
+    )
+    handle = await runtime.submit(Greeting(name="Ada"))
+    claimed = await runtime.queue.claim(["default"], visibility_timeout=30)
+    await runtime.execute_claim(claimed)
+
+    other_process_queue = SQLAlchemyQueue(session_maker=worker_session_maker)
+    retry = await other_process_queue.claim(["default"], visibility_timeout=30)
+    assert retry is not None
+    assert retry.job.id == handle.id
+    assert retry.job.attempt == 1
 
 
 async def test_in_process_worker_pool_runs_jobs_concurrently():
