@@ -42,6 +42,11 @@ EXCEPTION_HANDLERS: dict[type[Exception], Any] = {
 # Module-level references for runtime updates
 _jinja_env = None
 
+# Litestar renders an integer ``expires`` as seconds from now, so ``expires=0``
+# is the current time, which a client whose clock lags keeps as a live cookie.
+# A string passes through verbatim.
+_EPOCH_EXPIRES = "Thu, 01 Jan 1970 00:00:00 GMT"
+
 
 class _SessionBackend(ClientSideSessionBackend):
     """Session backend that cleans up stale hostname-scoped session cookies.
@@ -78,13 +83,20 @@ class _SessionBackend(ClientSideSessionBackend):
             return
 
         # Expire the cookie without a Domain attribute so the browser
-        # matches (and removes) the hostname-scoped cookie.
+        # matches (and removes) the hostname-scoped cookie. Max-Age=0 plus an
+        # epoch Expires deletes it regardless of clock skew.
         headers = MutableScopeHeaders.from_message(message)
         clear_params = {k: v for k, v in self._clear_cookie_params.items() if k != "domain"}
         for key in self.get_cookie_key_set(connection):
             headers.add(
                 "Set-Cookie",
-                Cookie(value="null", key=key, expires=0, **clear_params).to_header(header=""),
+                Cookie(
+                    value="null",
+                    key=key,
+                    max_age=0,
+                    expires=_EPOCH_EXPIRES,  # type: ignore[arg-type]
+                    **clear_params,
+                ).to_header(header=""),
             )
 
 

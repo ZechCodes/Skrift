@@ -160,6 +160,35 @@ class TestHostnameCookieCleanup:
         ]
         assert len(no_domain_clears) >= 1, f"Expected hostname clear on logout, got: {set_cookies}"
 
+    @pytest.mark.asyncio
+    async def test_hostname_clear_expires_unambiguously(self):
+        """The clear must carry Max-Age=0 and an epoch Expires. ``expires=0``
+        renders the current time, which a browser whose clock lags the
+        server stores as a live ``session=null`` shadow cookie (#182)."""
+        secret = hashlib.sha256(b"test-key").digest()
+        config = _make_config(secret, domain=".example.com")
+        backend = _SessionBackend(config)
+
+        cookie_value = _encrypt_session(secret, {"user_id": "123"})
+        message = {"type": "http.response.start", "headers": []}
+        conn = _make_connection({"session": cookie_value})
+
+        await backend.store_in_message({"user_id": "123"}, message, conn)
+
+        set_cookies = [
+            v.decode() if isinstance(v, bytes) else v
+            for k, v in message["headers"]
+            if (k.decode() if isinstance(k, bytes) else k).lower() == "set-cookie"
+        ]
+        no_domain_clears = [
+            c for c in set_cookies
+            if "domain=" not in c.lower() and "null" in c.lower()
+        ]
+        assert len(no_domain_clears) == 1, f"Expected one hostname clear, got: {set_cookies}"
+        attributes = [part.strip().lower() for part in no_domain_clears[0].split(";")]
+        assert "max-age=0" in attributes
+        assert "expires=thu, 01 jan 1970 00:00:00 gmt" in attributes
+
 
 class TestSessionConfigUsesCustomBackend:
     """Verify _SessionConfig wires up the custom backend."""
