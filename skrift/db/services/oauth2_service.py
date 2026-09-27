@@ -20,7 +20,8 @@ from skrift.hooks import hooks
 class ClientCreateResult:
     """Returned by ``create_client`` — carries the one-time plaintext secret.
 
-    The plaintext is only ever returned here (and from
+    The plaintext is only ever returned here (also from
+    :func:`create_dynamic_client`, empty for public clients, and from
     :func:`regenerate_client_secret`). After the admin flashes it through the
     UI, only the hashed column value is retained, so the plaintext cannot
     be recovered from the database.
@@ -82,29 +83,35 @@ async def create_dynamic_client(
     allowed_scopes: list[str],
     registered_by_ip: str | None,
     issued_at: datetime,
-) -> OAuth2Client:
-    """Create a public client via RFC 7591 Dynamic Client Registration.
+    token_endpoint_auth_method: str = "none",
+) -> ClientCreateResult:
+    """Create a client via RFC 7591 Dynamic Client Registration.
 
-    Dynamic clients are always public: ``client_secret`` is empty and the
-    token-endpoint auth method is ``none``, so they authenticate with PKCE
-    alone. ``issued_at`` is recorded so the pruning job can retire clients
-    that are registered but never used.
+    With ``token_endpoint_auth_method="none"`` the client is public: its
+    ``client_secret`` is empty and it authenticates with PKCE alone. Any other
+    method makes it confidential: a secret is minted, only its hash is stored,
+    and the plaintext is returned once for the registration response.
+    ``issued_at`` is recorded so the pruning job can retire clients that are
+    registered but never used.
     """
+    plaintext_secret = (
+        secrets.token_urlsafe(48) if token_endpoint_auth_method != "none" else ""
+    )
     client = OAuth2Client(
         client_id=secrets.token_urlsafe(24),
-        client_secret="",
+        client_secret=hash_client_secret(plaintext_secret) if plaintext_secret else "",
         display_name=display_name,
         redirect_uris="\n".join(redirect_uris),
         allowed_scopes="\n".join(allowed_scopes),
         is_dynamically_registered=True,
-        token_endpoint_auth_method="none",
+        token_endpoint_auth_method=token_endpoint_auth_method,
         registered_by_ip=registered_by_ip,
         client_id_issued_at=issued_at,
     )
     db_session.add(client)
     await db_session.commit()
     await hooks.do_action("after_oauth2_client_created", client)
-    return client
+    return ClientCreateResult(client=client, plaintext_secret=plaintext_secret)
 
 
 async def count_recent_dynamic_registrations(

@@ -36,7 +36,7 @@ def build_authorization_server_metadata(issuer: str, *, registration_enabled: bo
         "scopes_supported": sorted(SCOPE_DEFINITIONS),
         "claims_supported": ["sub", "name", "email", "email_verified", "picture", "groups"],
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
+        "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "none"],
     }
     if registration_enabled:
         metadata["registration_endpoint"] = f"{issuer}/oauth/register"

@@ -77,7 +77,12 @@ Content-Type: application/json
 }
 ```
 
-Dynamic clients are always **public** (`token_endpoint_auth_method` must be `none`) and authenticate with PKCE alone. Redirect URIs must be `https` (loopback `http://127.0.0.1` / `http://localhost` is the only exception). The connector then runs the ordinary authorize/token flow described in [OAuth2 Server](oauth2-server.md).
+`token_endpoint_auth_method` may be `client_secret_basic`, `client_secret_post` or `none`:
+
+- **Confidential** (`client_secret_basic` or `client_secret_post`). Omitting the field means `client_secret_basic`, per RFC 7591. Skrift mints a `client_secret`, stores only its hash, and returns the plaintext once in the `201` response alongside `"client_secret_expires_at": 0` (the secret does not expire). The token endpoint accepts the secret through HTTP Basic or the form body. Server-side connector backends that can keep a secret, such as Claude's, register this way.
+- **Public** (`none`). No secret is issued; the client authenticates with PKCE alone.
+
+PKCE is required for every dynamic client, confidential or public. Dynamically registered clients may not call `/oauth/introspect`, even with a valid `client_secret`. This is intentional: anyone can register a confidential client, so its secret proves nothing about who is calling, and allowing it would turn introspection into a token-validity oracle for anyone. Use an admin-created client for introspection. A refused introspection gets the same `401 invalid_client` as an unknown `client_id` or a wrong secret, so the response does not reveal which client ids exist. Redirect URIs must be `https` (loopback `http://127.0.0.1` / `http://localhost` is the only exception). The connector then runs the ordinary authorize/token flow described in [OAuth2 Server](oauth2-server.md).
 
 ## Audience Naming Convention
 
