@@ -714,17 +714,11 @@ class WorkerRuntime:
                 return False
             if resume_at is not None and resume_at > utcnow():
                 await asyncio.sleep((resume_at - utcnow()).total_seconds())
-                # A cancel during the wait took the job, and dropped the wake's id.
-                current = await self.get_job_state(job_id)
-                if (
-                    current is None
-                    or current.status != JobStatus.SUBMITTED
-                    or current.run_id != wake_id
-                ):
-                    return False
-            await self.emit_lifecycle(LifecycleEventType.JOB_RESUMED, woken.job)
-            await self.execute_claim(ClaimedJob(job=woken.job, token="inline"), inline=True)
-            return True
+            # The run starts only if the job is still the state this wake wrote:
+            # a cancel since then drops the wake's id.
+            return await self.execute_claim(
+                ClaimedJob(job=woken.job, token="inline"), inline=True, wake_id=wake_id
+            )
         if (
             state.status == JobStatus.PAUSED
             and state.job.metadata.get("skrift_dispatch") == "inline_then_queued"
@@ -1006,7 +1000,14 @@ class WorkerRuntime:
             await self._persist_queue_trend_history_locked()
         return had_activity
 
-    async def execute_claim(self, claimed: ClaimedJob, *, inline: bool = False) -> None:
+    async def execute_claim(
+        self, claimed: ClaimedJob, *, inline: bool = False, wake_id: str | None = None
+    ) -> bool:
+        """Run a claimed job and settle its outcome; returns whether the run started.
+
+        ``wake_id`` is set by the ``wake`` of a paused inline job: the run
+        starts only from the SUBMITTED state that wake wrote.
+        """
         if inline:
             # An inline claim carries the envelope of the state it was read
             # from, which the in-memory store keeps as is: the run works on its
@@ -1019,7 +1020,7 @@ class WorkerRuntime:
                 "(the claim is released for another worker)",
                 job.id,
             )
-            return
+            return False
         if job.reclaim_count >= job.max_reclaims:
             await self._dead_letter_claim(
                 claimed,
@@ -1027,7 +1028,7 @@ class WorkerRuntime:
                 error=f"Job reclaimed {job.reclaim_count} times",
                 inline=inline,
             )
-            return
+            return False
         descriptor = self.registry.get(job.type)
         job.attempt += 1
         started_at = utcnow()
@@ -1043,6 +1044,7 @@ class WorkerRuntime:
             ),
             order=None if inline else claimed.claim_order,
             inline=inline,
+            wake_id=wake_id,
         )
         if run is None:
             if inline:
@@ -1051,14 +1053,16 @@ class WorkerRuntime:
                     "skipping the run",
                     job.id,
                 )
-                return
+                return False
             logger.warning(
                 "Job %s was claimed again after this worker's claim; skipping the run",
                 job.id,
             )
-            return
+            return False
         await self.emit_lifecycle(LifecycleEventType.JOB_CLAIMED, job)
-        if previous_state is not None and previous_state.status == JobStatus.PAUSED:
+        if wake_id is not None or (
+            previous_state is not None and previous_state.status == JobStatus.PAUSED
+        ):
             await self.emit_lifecycle(LifecycleEventType.JOB_RESUMED, job)
         await self.emit_lifecycle(LifecycleEventType.JOB_STARTED, job)
         try:
@@ -1069,10 +1073,10 @@ class WorkerRuntime:
                 "nothing, so its claim expires and another worker takes the job",
                 job.id,
             )
-            return
+            return True
         except _Drained:
             await self._hand_back(claimed, previous_state, run=run)
-            return
+            return True
         except PermanentFailure as exc:
             await self._handle_failure(
                 claimed,
@@ -1083,7 +1087,7 @@ class WorkerRuntime:
                 run=run,
                 permanent=True,
             )
-            return
+            return True
         except Exception as exc:  # noqa: BLE001
             await self._handle_failure(
                 claimed,
@@ -1093,18 +1097,18 @@ class WorkerRuntime:
                 started_at=started_at,
                 run=run,
             )
-            return
+            return True
 
         if isinstance(result, Pause):
             await self._handle_pause(claimed, result, inline=inline, run=run)
-            return
+            return True
 
         # The ack checks the claim token atomically with its write, so it
         # decides whether this worker still owns the job.
         if not inline and not await self._settle_claim(
             job, self.queue.ack(job.queue, job.id, claimed.token), run=run
         ):
-            return
+            return True
         await self._set_settled_state(
             JobState(
                 job=job,
@@ -1116,6 +1120,7 @@ class WorkerRuntime:
             run,
         )
         await self.emit_lifecycle(LifecycleEventType.JOB_COMPLETED, job)
+        return True
 
     async def emit_lifecycle(
         self,
@@ -1471,7 +1476,12 @@ class WorkerRuntime:
         return utcnow() >= expires_at
 
     async def _start_run(
-        self, running: JobState, *, order: int | None, inline: bool = False
+        self,
+        running: JobState,
+        *,
+        order: int | None,
+        inline: bool = False,
+        wake_id: str | None = None,
     ) -> _Run | None:
         """Write a run's RUNNING state unless a later claim's run has written.
 
@@ -1479,7 +1489,8 @@ class WorkerRuntime:
         the job was claimed again. What the write replaced is kept so a run whose
         claim turns out to be lost can put it back. An inline run has no claim
         for ``cancel`` to remove, so it also returns None once the job is
-        cancelled or finished.
+        cancelled or finished, and a wake's run (``wake_id``) once the job is no
+        longer the SUBMITTED state that wake wrote.
         """
         run = _Run(run_id=uuid4().hex, order=order, job_id=running.job.id)
         running.run_id, running.run_order = run.run_id, order
@@ -1488,6 +1499,14 @@ class WorkerRuntime:
             lambda current: (
                 not (inline and current is not None and current.status in TERMINAL_JOB_STATUSES)
                 and self._not_superseded(current, run)
+                and (
+                    wake_id is None
+                    or (
+                        current is not None
+                        and current.status == JobStatus.SUBMITTED
+                        and current.run_id == wake_id
+                    )
+                )
             ),
         )
         return run if written else None

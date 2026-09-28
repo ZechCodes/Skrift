@@ -3,8 +3,9 @@
 An inline job has no queue entry to claim, so two wakes of one pause used to
 both run it: each read PAUSED and called ``execute_claim``, and an inline run's
 start accepts any stored state. Each test holds one wake where the other used
-to slip in, on the in-memory, SQLite and (fake) Redis backends. A scheduled
-wake also gives the job up to a cancel during its wait.
+to slip in, on the in-memory, SQLite and (fake) Redis backends. A wake also
+gives the job up to a cancel before its run starts, and never runs a job
+that replaced its own under the same id.
 """
 
 from __future__ import annotations
@@ -89,22 +90,25 @@ def backends(request, worker_session_maker, fake_redis_client):
 
 class PausedJob:
     """An inline job that pauses ``pauses`` times, then waits for ``finish``.
-    Each run records the paused state it sees."""
+    Each run records the paused state it sees, and its payload; a job with
+    payload 2 always pauses."""
 
     def __init__(self, runtime):
         self.runtime = runtime
         self.runs = []
+        self.payloads = []
         self.resumed = asyncio.Event()
         self.finish = asyncio.Event()
 
     @classmethod
-    async def paused(cls, backends, pauses=1):
-        job = cls(skrift.configure_workers(mode="inline", **backends))
+    async def paused(cls, backends, pauses=1, **config):
+        job = cls(skrift.configure_workers(mode="inline", **backends, **config))
 
         @handler("inline.wake", queue="inline-wake")
         async def pause(item: Item, context):
             job.runs.append(dict(context.paused_state))
-            if len(job.runs) <= pauses:
+            job.payloads.append(item.n)
+            if item.n == 2 or len(job.runs) <= pauses:
                 return Pause(state={"step": len(job.runs)})
             job.resumed.set()
             await job.finish.wait()
@@ -131,14 +135,30 @@ class PausedJob:
         self.runtime.get_job_state = held
         return read, release
 
-    async def outcome(self):
-        state = await self.runtime.get_job_state("job")
-        events = [
+    def hold_next(self, name):
+        """Hold the next call of the runtime's ``name`` until ``release``."""
+        original = getattr(self.runtime, name)
+        reached, release = asyncio.Event(), asyncio.Event()
+
+        async def held(*args, **kwargs):
+            setattr(self.runtime, name, original)
+            reached.set()
+            await release.wait()
+            return await original(*args, **kwargs)
+
+        setattr(self.runtime, name, held)
+        return reached, release
+
+    async def events(self):
+        return [
             event["type"]
             for _, event in await self.runtime.event_log.read(LIFECYCLE_STREAM)
             if event["job_id"] == "job"
         ]
-        return self.runs, state.status, events.count("job_resumed")
+
+    async def outcome(self):
+        state = await self.runtime.get_job_state("job")
+        return self.runs, state.status, (await self.events()).count("job_resumed")
 
 
 def _soon():
@@ -220,10 +240,106 @@ async def test_a_cancel_during_a_scheduled_wake_keeps_the_job_cancelled(backends
 
     assert await job.runtime.cancel("job") is True
     assert await _within(scheduled) is False
-    events = [
-        event["type"]
-        for _, event in await job.runtime.event_log.read(LIFECYCLE_STREAM)
-        if event["job_id"] == "job"
-    ]
+    events = await job.events()
     assert "job_resumed" not in events[events.index("job_cancelled") :]
     assert await job.outcome() == ([{}], JobStatus.CANCELLED, 0)
+
+
+def _hold_the_wait(monkeypatch):
+    """Hold a scheduled wake's wait (in a task named "wake") until ``release``."""
+    sleep = asyncio.sleep
+    reached, release = asyncio.Event(), asyncio.Event()
+
+    async def held(delay, *args, **kwargs):
+        if asyncio.current_task().get_name() != "wake":
+            return await sleep(delay, *args, **kwargs)
+        reached.set()
+        await release.wait()
+
+    monkeypatch.setattr(asyncio, "sleep", held)
+    return reached, release
+
+
+WAKES = ("immediate", "scheduled")
+
+
+@pytest.mark.parametrize("wake", WAKES)
+async def test_a_cancel_before_a_wakes_run_starts_keeps_the_job_cancelled(backends, wake):
+    job = await PausedJob.paused(backends)
+    job.finish.set()
+    paused_events = await job.events()
+    reached, release = job.hold_next("_start_run")
+    resume_at = _soon() if wake == "scheduled" else None
+    woken = asyncio.create_task(job.runtime.wake("job", resume_at=resume_at))
+    await _within(reached.wait())  # the wake is about to start its run
+
+    assert await job.runtime.cancel("job") is True
+    release.set()
+    assert await _within(woken) is False
+    assert await job.outcome() == ([{}], JobStatus.CANCELLED, 0)
+    assert await job.events() == [*paused_events, "job_cancelled"]
+
+
+REPLACED = ("before_immediate_start", "before_scheduled_start", "during_scheduled_wait")
+
+
+@pytest.mark.parametrize("replaced", REPLACED)
+async def test_a_wake_does_not_run_a_job_that_replaced_its_own(backends, monkeypatch, replaced):
+    """A cancel during the wake's hold, whose CANCELLED state expires; the
+    same id is then submitted again, and pauses."""
+    job = await PausedJob.paused(backends, terminal_job_state_ttl=0.05)
+    if replaced == "during_scheduled_wait":
+        reached, release = _hold_the_wait(monkeypatch)
+    else:
+        reached, release = job.hold_next("execute_claim")
+    resume_at = None if replaced == "before_immediate_start" else _soon()
+    woken = asyncio.create_task(job.runtime.wake("job", resume_at=resume_at), name="wake")
+    await _within(reached.wait())
+
+    assert await job.runtime.cancel("job") is True
+    while await job.runtime.get_job_state("job") is not None:
+        await asyncio.sleep(0.01)
+    await job.runtime.submit_inline(
+        "inline.wake", Item(n=2), job_id="job", metadata={"skrift_dispatch": "inline"}
+    )
+    replacement = await job.runtime.get_job_state("job")
+    assert (replacement.status, replacement.job.payload) == (JobStatus.PAUSED, {"n": 2})
+    events = await job.events()
+
+    release.set()
+    assert await _within(woken) is False
+    assert await job.runtime.get_job_state("job") == replacement
+    assert await job.events() == events
+    assert job.payloads == [1, 2]
+
+
+async def test_a_wake_does_not_run_a_resubmitted_job_before_its_run(backends, monkeypatch):
+    """As above, with the resubmitted job held before its run: SUBMITTED, as
+    the wake's own state was."""
+    job = await PausedJob.paused(backends, terminal_job_state_ttl=0.05)
+    reached, release = _hold_the_wait(monkeypatch)
+    woken = asyncio.create_task(job.runtime.wake("job", resume_at=_soon()), name="wake")
+    await _within(reached.wait())
+
+    assert await job.runtime.cancel("job") is True
+    while await job.runtime.get_job_state("job") is not None:
+        await asyncio.sleep(0.01)
+    submitted, submit_go = job.hold_next("execute_claim")
+    resubmit = asyncio.create_task(
+        job.runtime.submit_inline(
+            "inline.wake", Item(n=2), job_id="job", metadata={"skrift_dispatch": "inline"}
+        )
+    )
+    await _within(submitted.wait())
+    replacement = await job.runtime.get_job_state("job")
+    assert (replacement.status, replacement.job.payload) == (JobStatus.SUBMITTED, {"n": 2})
+    events = await job.events()
+
+    release.set()
+    assert await _within(woken) is False
+    assert await job.runtime.get_job_state("job") == replacement
+    assert await job.events() == events
+    submit_go.set()
+    await _within(resubmit)
+    assert job.payloads == [1, 2]
+    assert (await job.runtime.get_job_state("job")).status == JobStatus.PAUSED
