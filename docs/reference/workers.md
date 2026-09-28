@@ -16,6 +16,7 @@ workers:
     - default
     - slow
   concurrency: 4
+  max_inflight_per_worker: 1
   poll_interval: 0.1
   max_poll_interval: 2.0
   poll_backoff_factor: 2.0
@@ -59,6 +60,7 @@ workers:
 | `execution` | `inline` | Execution mode: `inline`, `in_process`, `out_of_process` |
 | `queues` | `["default"]` | Queues served by the in-process runtime and used by operator views |
 | `concurrency` | `1` | Number of in-process worker tasks or default standalone worker concurrency |
+| `max_inflight_per_worker` | `1` | How many claimed jobs each worker runs at once. See [Several jobs per worker](#several-jobs-per-worker) |
 | `poll_interval` | `0.05` | Base seconds a worker waits after an empty claim; the floor an idle worker collapses back to the moment a claim succeeds |
 | `max_poll_interval` | `2.0` | Ceiling for the idle poll backoff. After each empty claim the wait grows by `poll_backoff_factor` up to this value, so idle queues stop polling the database at full frequency |
 | `poll_backoff_factor` | `2.0` | Growth factor applied to the poll interval on each consecutive empty claim. `1.0` disables backoff and keeps polling at `poll_interval` |
@@ -68,6 +70,16 @@ workers:
 | `drain_timeout` | `20.0` | Seconds a stopping worker gives its running jobs to finish before cancelling them and handing their claims back. See [Stopping a worker](#stopping-a-worker) |
 | `drain_cancel_timeout` | `5.0` | Seconds a cancelled job's handler then gets to stop before the worker leaves it behind with its claim, to expire |
 | `imports` | `[]` | Modules imported by standalone worker processes and app startup to register handlers |
+
+#### Several jobs per worker
+
+By default each worker runs one job at a time, so a pool runs at most `concurrency` jobs at once. Jobs that spend most of their time waiting on I/O, such as an agent run waiting on a model or a scraper waiting on HTTP, leave their worker idle meanwhile. Set `max_inflight_per_worker` above 1 to let each worker keep claiming while its jobs wait: a pool then runs up to `concurrency × max_inflight_per_worker` jobs at once.
+
+- **One poller per worker.** A worker's free places take turns to poll, one claim at a time, and share the idle backoff. An idle worker queries the queue exactly as often as one running a job at a time, however many places it has. A worker whose places are all busy doesn't poll.
+- **Each job keeps its own claim.** The place that claims a job runs it, then acks or nacks it, as a single-job worker would.
+- **Ordering.** Jobs claimed by one worker can finish, and be acked, out of claim order. Keep the default of 1 if a queue's jobs must run one after another.
+- **A blocked event loop blocks every place.** Places share the worker's event loop. A handler that blocks it (synchronous I/O, heavy CPU work) stalls every job the worker has in flight, and their claims can expire, letting another worker run them a second time. Only raise this for handlers that `await` their waits, and size `visibility_timeout` for the slowest job.
+- **Awaited sub-agents** count places, not workers; see [Sub-agents on the in-process worker pool](agents.md#sub-agents-on-the-in-process-worker-pool).
 
 #### Idle poll backoff
 

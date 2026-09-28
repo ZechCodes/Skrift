@@ -184,6 +184,7 @@ def _configure_worker_runtime(settings, *, session_maker, queues, concurrency, m
         mode=mode or "in_process",
         queues=tuple(queues),
         concurrency=concurrency,
+        max_inflight_per_worker=settings.workers.max_inflight_per_worker,
         poll_interval=settings.workers.poll_interval,
         max_poll_interval=settings.workers.max_poll_interval,
         poll_backoff_factor=settings.workers.poll_backoff_factor,

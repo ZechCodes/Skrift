@@ -1,12 +1,13 @@
 """The in-process worker an agent run occupies, and its claim (#141).
 
-An agent job claimed by the in-process worker pool holds that worker, and its
-claim, for as long as it runs, including while it waits for a sub-agent. With
+An agent job claimed by the in-process worker pool holds its place on that
+worker (see ``workers.max_inflight_per_worker``), and its claim, for as long as
+it runs, including while it waits for a sub-agent. With
 the in-memory queue the claim is renewed for the whole run: that queue lives in
 this process, so its lease running out cannot mean the worker died, and letting
 it lapse would hand the job to another worker to run a second time. A sub-agent
-that still needs a worker can never run once every worker is waiting on one,
-so awaiting it then fails at once instead of hanging.
+that still needs a worker can never run once every worker place is waiting on
+one, so awaiting it then fails at once instead of hanging.
 """
 
 from __future__ import annotations
@@ -83,13 +84,15 @@ async def waiting_on_sub_agent() -> AsyncIterator[None]:
         yield
         return
     waiting = _waiting.setdefault(slot.runtime, {})
-    concurrency = slot.runtime.config.concurrency
-    if len({occupied for occupied in waiting if occupied.occupied} | {slot}) >= concurrency:
+    config = slot.runtime.config
+    places = config.concurrency * config.max_inflight_per_worker
+    if len({occupied for occupied in waiting if occupied.occupied} | {slot}) >= places:
         raise NoFreeWorkerError(
-            f"Awaiting this sub-agent would deadlock: all {concurrency} in-process "
-            "worker(s) would be waiting on sub-agents, so no in-process worker is free "
-            "to run it. Dispatch sub-agents whose result you await with "
-            "dispatch='inline', or raise workers.concurrency."
+            f"Awaiting this sub-agent would deadlock: all {places} in-process "
+            "worker place(s) would be waiting on sub-agents, so no in-process worker is "
+            "free to run it. Dispatch sub-agents whose result you await with "
+            "dispatch='inline', or raise workers.concurrency or "
+            "workers.max_inflight_per_worker."
         )
     waiting[slot] = waiting.get(slot, 0) + 1
     try:
