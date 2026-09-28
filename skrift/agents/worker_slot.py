@@ -33,6 +33,9 @@ class WorkerSlot:
     queue_name: str
     job_id: str
     token: str
+    # Whether the run still occupies its worker. Tasks the run spawned copy the
+    # slot with their context and may outlive the run; they see this go False.
+    occupied: bool = True
 
 
 _slot: ContextVar[WorkerSlot | None] = ContextVar("skrift_agent_worker_slot", default=None)
@@ -59,6 +62,7 @@ async def occupying_worker(context: Any) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        slot.occupied = False
         keeper.cancel()
         with suppress(asyncio.CancelledError):
             await keeper
@@ -73,12 +77,12 @@ async def waiting_on_sub_agent() -> AsyncIterator[None]:
     """
 
     slot = _slot.get()
-    if slot is None:
+    if slot is None or not slot.occupied:
         yield
         return
     waiting = _waiting.setdefault(slot.runtime, {})
     concurrency = slot.runtime.config.concurrency
-    if len(waiting.keys() | {slot}) >= concurrency:
+    if len({occupied for occupied in waiting if occupied.occupied} | {slot}) >= concurrency:
         raise NoFreeWorkerError(
             f"Awaiting this sub-agent would deadlock: all {concurrency} in-process "
             "worker(s) would be waiting on sub-agents, so no in-process worker is free "

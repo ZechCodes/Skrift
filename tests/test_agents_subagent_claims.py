@@ -20,6 +20,7 @@ from skrift.agents.blob import InMemoryBlobStore
 from skrift.agents.registry import registry as agent_registry
 from skrift.agents.runtime import register_agent_handlers
 from skrift.agents.session import AgentSessionError
+from skrift.agents.worker_slot import NoFreeWorkerError
 from skrift.workers.registry import registry as worker_registry
 
 LEASE = 0.2
@@ -132,3 +133,139 @@ async def test_in_memory_claims_are_renewed_only_by_their_holder():
 
     await queue.ack("default", job_id, claimed.token)
     assert await queue.renew_claim("default", job_id, claimed.token, visibility_timeout=60) is False
+
+
+def _parent_with_background_waiter(*, wait_before_returning):
+    """A parent whose tool leaves a task awaiting a queued sub-agent's result.
+
+    The waiter starts waiting once ``go`` is set. With ``wait_before_returning``
+    the tool keeps the parent's worker until the waiter has finished.
+    """
+
+    go, child_gate = asyncio.Event(), asyncio.Event()
+    waiters: list[asyncio.Task] = []
+    child = skrift.Agent(
+        TestModel(call_tools=["gated"], custom_output_text="child done"), name="child"
+    )
+    parent = skrift.Agent(
+        TestModel(call_tools=["spawn_waiter"], custom_output_text="parent done"), name="parent"
+    )
+
+    @child.tool
+    async def gated(ctx: RunContext) -> str:
+        await child_gate.wait()
+        return "gated"
+
+    @parent.tool
+    async def spawn_waiter(ctx: RunContext) -> str:
+        session = await child.run("go", dispatch="queued")
+
+        async def wait_for_child():
+            await go.wait()
+            return await session.result()
+
+        waiters.append(asyncio.create_task(wait_for_child()))
+        if wait_before_returning:
+            go.set()
+            await asyncio.wait(waiters)
+        return "spawned"
+
+    return parent, go, child_gate, waiters
+
+
+async def _one_worker():
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        queues=("agents", "agents-priority"),
+        concurrency=1,
+        visibility_timeout=LEASE,
+        reaper_interval=0.02,
+        poll_interval=0.01,
+    )
+    await runtime.start()
+    return runtime
+
+
+async def test_a_waiter_left_behind_by_a_finished_run_waits_for_its_sub_agent():
+    parent, go, child_gate, waiters = _parent_with_background_waiter(wait_before_returning=False)
+    runtime = await _one_worker()
+    try:
+        session = await parent.run("go", dispatch="queued")
+        assert await asyncio.wait_for(session.result(), 10) == "parent done"
+        # The parent's run has freed the only worker, which now runs the child.
+        go.set()
+        await asyncio.sleep(0.1)
+        child_gate.set()
+        assert await asyncio.wait_for(waiters[0], 10) == "child done"
+    finally:
+        child_gate.set()
+        await runtime.stop()
+
+
+async def test_a_waiter_spawned_while_its_run_holds_the_only_worker_fails_fast():
+    parent, go, child_gate, waiters = _parent_with_background_waiter(wait_before_returning=True)
+    runtime = await _one_worker()
+    try:
+        session = await parent.run("go", dispatch="queued")
+        assert await asyncio.wait_for(session.result(), 10) == "parent done"
+        with pytest.raises(NoFreeWorkerError, match="no in-process worker is free"):
+            await waiters[0]
+    finally:
+        child_gate.set()
+        await asyncio.sleep(0.1)
+        await runtime.stop()
+
+
+async def test_a_waiter_left_behind_does_not_count_as_a_waiting_worker():
+    child_gate = asyncio.Event()
+    waiters: list[asyncio.Task] = []
+    child = skrift.Agent(
+        TestModel(call_tools=["gated"], custom_output_text="child done"), name="child"
+    )
+    leaver = skrift.Agent(
+        TestModel(call_tools=["spawn_waiter"], custom_output_text="leaver done"), name="leaver"
+    )
+    asker = skrift.Agent(
+        TestModel(call_tools=["ask_child"], custom_output_text="asker done"), name="asker"
+    )
+
+    @child.tool
+    async def gated(ctx: RunContext) -> str:
+        await child_gate.wait()
+        return "gated"
+
+    @leaver.tool
+    async def spawn_waiter(ctx: RunContext) -> str:
+        session = await child.run("go", dispatch="queued")
+        waiters.append(asyncio.create_task(session.result()))
+        await asyncio.sleep(0.05)  # the waiter is waiting while this run holds a worker
+        return "spawned"
+
+    @asker.tool
+    async def ask_child(ctx: RunContext) -> str:
+        session = await child.run("go", dispatch="queued")
+        return str(await session.result())
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        queues=("agents", "agents-priority"),
+        concurrency=2,
+        visibility_timeout=LEASE,
+        reaper_interval=0.02,
+        poll_interval=0.01,
+    )
+    await runtime.start()
+    try:
+        left = await leaver.run("go", dispatch="queued")
+        assert await asyncio.wait_for(left.result(), 10) == "leaver done"
+        # The leaver's worker is free again; the asker's wait is the only one
+        # a worker is in.
+        asked = await asker.run("go", dispatch="queued")
+        await asyncio.sleep(0.2)
+        child_gate.set()
+        assert await asyncio.wait_for(asked.result(), 10) == "asker done"
+        assert await asyncio.wait_for(waiters[0], 10) == "child done"
+    finally:
+        child_gate.set()
+        await asyncio.sleep(0.1)
+        await runtime.stop()
