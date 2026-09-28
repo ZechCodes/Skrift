@@ -69,6 +69,7 @@ workers:
 | `max_reclaims` | `3` | Number of claim timeouts allowed before dead-lettering as a reclaim loop |
 | `drain_timeout` | `20.0` | Seconds a stopping worker gives its running jobs to finish before cancelling them and handing their claims back. See [Stopping a worker](#stopping-a-worker) |
 | `drain_cancel_timeout` | `5.0` | Seconds a cancelled job's handler then gets to stop before the worker leaves it behind with its claim, to expire |
+| `governor` | none | `module:attribute` of a callable asked before each claim whether the worker takes another job. See [Gating claims with a governor](#gating-claims-with-a-governor) |
 | `imports` | `[]` | Modules imported by standalone worker processes and app startup to register handlers |
 
 #### Several jobs per worker
@@ -80,6 +81,31 @@ By default each worker runs one job at a time, so a pool runs at most `concurren
 - **Ordering.** Jobs claimed by one worker can finish, and be acked, out of claim order. Keep the default of 1 if a queue's jobs must run one after another.
 - **A blocked event loop blocks every place.** Places share the worker's event loop. A handler that blocks it (synchronous I/O, heavy CPU work) stalls every job the worker has in flight, and their claims can expire, letting another worker run them a second time. Only raise this for handlers that `await` their waits, and size `visibility_timeout` for the slowest job.
 - **Awaited sub-agents** count places, not workers; see [Sub-agents on the in-process worker pool](agents.md#sub-agents-on-the-in-process-worker-pool).
+
+#### Gating claims with a governor
+
+`max_inflight_per_worker` is a fixed ceiling. A governor is a gate that moves at runtime: back-pressure from a downstream API, memory pressure, a cost budget. Before each claim, the worker asks it whether to take another job now:
+
+```python
+# myapp/governors.py
+async def should_claim_next(runtime, current_inflight: int) -> bool:
+    return current_inflight < await downstream_capacity()
+```
+
+```yaml
+workers:
+  max_inflight_per_worker: 8
+  governor: myapp.governors:should_claim_next
+```
+
+- **When it's asked.** Inside the worker's poll turn, just before the claim: once per poll per worker, never per place. `True` lets the worker claim. `False` claims nothing and waits as an empty poll does, sharing the [idle poll backoff](#idle-poll-backoff). After a no, the worker asks again within the current backoff interval (up to `max_poll_interval`) plus the time the governor takes to answer. A successful claim resets the backoff.
+- **The cap still binds.** A worker whose places are all busy doesn't poll, so it never asks. The more restrictive of the cap and the governor wins.
+- **`current_inflight`** is how many of *this worker's* places hold a claimed job, from the claim to its settlement. That includes a parent run waiting on a sub-agent. It is a local hint, not a count for the pool, the process or the cluster, and not a distributed budget: every worker calls the same governor, concurrently. A limit across processes needs an atomic admission decision of its own, such as a Redis counter. A `True` may also be followed by an empty or failed claim, and there is no hook to hand back a reservation.
+- **Answers.** It must return (or, if async, resolve to) an actual `bool`. `None`, numbers and other truthy objects count as a no. So does a governor that raises: the worker **fails closed** and claims nothing until the governor answers again. The first failure in a streak is logged at warning, and the next `True` or `False` is logged at info as the end of the streak.
+- **Sync or async.** Either works. A sync governor runs on the event loop, so a slow one stalls every place of every worker, like any [blocking handler](#several-jobs-per-worker).
+- **Where it applies.** Only where a pool claims: `in_process` execution in the web app, and `skrift workers run`. Both import the path once at startup, so a bad path fails the start, not the first poll. Inline execution runs jobs without claiming, so it never asks.
+- **Awaited sub-agents can deadlock.** A parent run that awaits a queued sub-agent holds its place until the sub-agent finishes, and the sub-agent needs a claim. A governor that refuses while the parent waits stalls both. For example, with one parent in flight and a governor that allows `current_inflight < 1`, the child is refused forever, even though the worker has free places. The [free-place check](agents.md#sub-agents-on-the-in-process-worker-pool) counts places, not governor answers, so it can't catch this. Allow for waiting parents in the governor's rule. Dispatching such sub-agents inline avoids the dependency, but inline runs are never asked, so they don't keep a strict resource limit either.
+- **Stopping.** A stopping worker doesn't ask. A governor mid-answer when a stop begins is cancelled, and whatever it returns then admits nothing. This holds from the moment the pool starts its drain; `WorkerRuntime.stop()` first finishes its background tasks, and a claim can still be admitted until then. The drain relies on the governor letting its `CancelledError` propagate; see [Stopping a worker](#stopping-a-worker).
 
 #### Idle poll backoff
 
@@ -114,7 +140,9 @@ The SQLAlchemy queue keeps the order in a new `worker_queue.claim_generation` co
 
 `WorkerRuntime.stop()` returns the ids of the jobs it abandoned, and so does every later call until the runtime starts again. A cancelled `stop()`, such as a server cancelling its shutdown, still drains the pool and waits for the drain before it raises `CancelledError`. When any jobs were abandoned, `skrift workers run` logs them at warning and exits directly, with the exit code it would have used, without waiting for the abandoned handlers: `asyncio.run` would otherwise wait for them forever. The web app's in-process pool cannot do that, because the server owns the event loop; there an abandoned handler can hold the process's exit until the orchestrator kills it at the end of its grace period.
 
-Stopping takes at most `drain_timeout + drain_cancel_timeout`, 25 s by default, which is under Kubernetes' default `terminationGracePeriodSeconds` of 30. Raise the grace period if you raise either timeout. The one exception is the worker's own `ack`, `nack` and state writes for a job: a stop never cuts one short, and waits for any that have started, so a backend that hangs on a write can hold a stop past that bound.
+Stopping takes at most `drain_timeout + drain_cancel_timeout`, 25 s by default, which is under Kubernetes' default `terminationGracePeriodSeconds` of 30. Raise the grace period if you raise either timeout. There are two exceptions:
+- **The worker's own writes for a job.** A stop never cuts its `ack`, `nack` or state writes short, and waits for any that have started, so a backend that hangs on a write can hold a stop past that bound.
+- **A [governor](#gating-claims-with-a-governor) that doesn't let cancellation through.** The drain cancels a governor that is answering, and waits for it. One that catches the `CancelledError` and goes on waiting holds the stop for as long as it waits. A governor must therefore let `CancelledError` propagate. It must never await `WorkerRuntime.stop()` either, since the stop would then wait on the governor's own place.
 
 A handed-back job runs again from the start on another worker. Anything it did before it was cancelled has already happened, as with any retry.
 
