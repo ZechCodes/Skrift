@@ -912,6 +912,8 @@ class WorkersConfig(BaseModel):
     visibility_timeout: float = Field(default=30.0, gt=0)
     reaper_interval: float = Field(default=5.0, gt=0)
     max_reclaims: int = Field(default=3, ge=0)
+    drain_timeout: float = Field(default=20.0, ge=0)
+    drain_cancel_timeout: float = Field(default=5.0, ge=0)
     imports: list[str] = []
     backends: WorkerBackendConfig = WorkerBackendConfig()
     persistence: WorkerPersistenceConfig = WorkerPersistenceConfig()

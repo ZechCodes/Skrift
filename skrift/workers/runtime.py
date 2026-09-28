@@ -79,6 +79,10 @@ class JobCancelled(asyncio.CancelledError):
     """Raised when awaiting a cancelled worker job."""
 
 
+class _Drained(Exception):
+    """A job's handler was stopped by its worker pool's drain."""
+
+
 @dataclass(frozen=True)
 class WorkerConfig:
     """Runtime settings for the MVP local worker executor."""
@@ -93,6 +97,10 @@ class WorkerConfig:
     reaper_interval: float = 5.0
     max_reclaims: int = 3
     terminal_job_state_ttl: float | None = TERMINAL_JOB_STATE_TTL_SECONDS
+    # On stop: how long running jobs get to finish, then how long a cancelled
+    # job's handler gets to stop before it is left behind.
+    drain_timeout: float = 20.0
+    drain_cancel_timeout: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -173,6 +181,10 @@ class WorkerPool:
         self._max_poll_interval = max_poll_interval
         self._poll_backoff_factor = poll_backoff_factor
         self._tasks: list[asyncio.Task] = []
+        # Worker tasks running a claimed job, from its claim to its settlement,
+        # and those sleeping between polls.
+        self._busy: set[asyncio.Task] = set()
+        self._idling: set[asyncio.Task] = set()
         self._stopping = asyncio.Event()
 
     async def start(self) -> None:
@@ -185,12 +197,37 @@ class WorkerPool:
         ]
 
     async def stop(self) -> None:
+        """Stop claiming, then drain the jobs already running.
+
+        They get ``drain_timeout`` to finish. Then any still in their handler
+        are cancelled and handed back to the queue, and any worker stuck
+        claiming is cancelled. A handler still running ``drain_cancel_timeout``
+        later is left behind with its claim, to expire; a job's own ack, nack
+        and state writes are always waited for.
+        """
         self._stopping.set()
-        for task in self._tasks:
+        for task in self._idling:
             task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks = []
+        tasks, self._tasks = self._tasks, []
+        if not tasks:
+            return
+        config = self._runtime.config
+        _, running = await asyncio.wait(tasks, timeout=config.drain_timeout)
+        if running:
+            self._runtime._stop_handlers(running)
+            for task in running - self._busy:
+                task.cancel()
+            _, running = await asyncio.wait(running, timeout=config.drain_cancel_timeout)
+        writing = {task for task in running if not self._runtime._in_handler(task)}
+        if writing:
+            await asyncio.wait(writing)
+        for task in running - writing:
+            logger.warning(
+                "Worker %s's job ignored its cancellation for %ss; leaving it running "
+                "with its claim held until the claim expires",
+                task.get_name(),
+                config.drain_cancel_timeout,
+            )
 
     async def _run_worker(self) -> None:
         current_interval = self._poll_interval
@@ -200,19 +237,33 @@ class WorkerPool:
                     self._queues, visibility_timeout=self._runtime.default_visibility_timeout
                 )
                 if claimed is None:
-                    await asyncio.sleep(current_interval)
+                    await self._idle(current_interval)
                     current_interval = min(
                         current_interval * self._poll_backoff_factor,
                         self._max_poll_interval,
                     )
                     continue
                 current_interval = self._poll_interval
-                await self._runtime.execute_claim(claimed)
+                task = asyncio.current_task()
+                self._busy.add(task)
+                try:
+                    await self._runtime.execute_claim(claimed)
+                finally:
+                    self._busy.discard(task)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.warning("Worker loop error; continuing", exc_info=True)
-                await asyncio.sleep(self._poll_interval)
+                await self._idle(self._poll_interval)
+
+    async def _idle(self, seconds: float) -> None:
+        """Sleep between polls; a stop cancels the sleep."""
+        task = asyncio.current_task()
+        self._idling.add(task)
+        try:
+            await asyncio.sleep(seconds)
+        finally:
+            self._idling.discard(task)
 
 
 class WorkerRuntime:
@@ -255,6 +306,11 @@ class WorkerRuntime:
         self._queue_history_lock = asyncio.Lock()
         self._queue_history_task: asyncio.Task | None = None
         self._reaper_task: asyncio.Task | None = None
+        # Worker tasks inside a claimed job's handler; those a drain cancelled;
+        # and whether a drain is stopping handlers, so none starts.
+        self._handler_tasks: set[asyncio.Task] = set()
+        self._drained_tasks: set[asyncio.Task] = set()
+        self._stopping_handlers = False
         self._nack_accepts_job: tuple[Queue, bool] | None = None
         self._queue_history_interval = 2.0
         self._queue_history_idle_interval = 30.0
@@ -265,6 +321,7 @@ class WorkerRuntime:
         if self.config.mode != "in_process":
             return
         await self.record_queue_history()
+        self._stopping_handlers = False
         self._pool = WorkerPool(
             self,
             queues=list(self.config.queues),
@@ -826,7 +883,10 @@ class WorkerRuntime:
             await self.emit_lifecycle(LifecycleEventType.JOB_RESUMED, job)
         await self.emit_lifecycle(LifecycleEventType.JOB_STARTED, job)
         try:
-            result = await self._call_handler(descriptor, job)
+            result = await self._run_handler(descriptor, job, inline=inline)
+        except _Drained:
+            await self._hand_back(claimed, previous_state, run=run)
+            return
         except PermanentFailure as exc:
             await self._handle_failure(
                 claimed,
@@ -934,6 +994,77 @@ class WorkerRuntime:
         if inspect.isawaitable(result):
             return await result
         return result
+
+    async def _run_handler(
+        self, descriptor: HandlerDescriptor, job: JobEnvelope, *, inline: bool
+    ) -> Any:
+        """Call a claimed job's handler; raise ``_Drained`` if a drain stopped it.
+
+        A handler a drain cancelled is drained however it ends, unless it
+        returns: one that turns its ``CancelledError`` into another exception
+        has not failed.
+        """
+        task = None if inline else asyncio.current_task()
+        if task is None:
+            return await self._call_handler(descriptor, job)
+        if self._stopping_handlers:
+            raise _Drained
+        self._handler_tasks.add(task)
+        try:
+            return await self._call_handler(descriptor, job)
+        except BaseException:
+            if task in self._drained_tasks:
+                raise _Drained from None
+            raise
+        finally:
+            self._handler_tasks.discard(task)
+            if task in self._drained_tasks:
+                self._drained_tasks.discard(task)
+                task.uncancel()
+
+    def _in_handler(self, task: asyncio.Task) -> bool:
+        return task in self._handler_tasks
+
+    def _stop_handlers(self, tasks: set[asyncio.Task]) -> None:
+        """Cancel the handlers these worker tasks are running, and start no more."""
+        self._stopping_handlers = True
+        for task in tasks & self._handler_tasks:
+            self._drained_tasks.add(task)
+            task.cancel()
+
+    async def _hand_back(
+        self, claimed: ClaimedJob, previous_state: JobState | None, *, run: _Run
+    ) -> None:
+        """Release a claim whose run a drain stopped, for another worker to take now.
+
+        The run charges no attempt, and a nack is not a reclaim. The job's
+        state goes back to submitted, keeping the pause state it resumed from.
+        """
+        job = claimed.job
+        job.attempt = max(0, job.attempt - 1)
+        if not await self._set_run_state(
+            JobState(
+                job=job,
+                status=JobStatus.SUBMITTED,
+                attempt=job.attempt,
+                last_error=previous_state.last_error if previous_state is not None else None,
+                paused_state=previous_state.paused_state if previous_state is not None else {},
+                attempt_history=(
+                    previous_state.attempt_history if previous_state is not None else []
+                ),
+            ),
+            run,
+        ):
+            self._log_claim_lost(job)
+            return
+        if not await self._settle_claim(
+            job, self._nack(job, claimed.token, retry_at=utcnow()), run=run
+        ):
+            return
+        logger.info(
+            "Job %s was still running when its worker stopped; released it for another worker",
+            job.id,
+        )
 
     async def _handle_failure(
         self,
@@ -1733,6 +1864,8 @@ def configure_workers(
     reaper_interval: float = 5.0,
     max_reclaims: int = 3,
     terminal_job_state_ttl: float | None = TERMINAL_JOB_STATE_TTL_SECONDS,
+    drain_timeout: float = 20.0,
+    drain_cancel_timeout: float = 5.0,
     backend_imports: WorkerBackendConfig | Mapping[str, str] | Any | None = None,
     settings: Any | None = None,
     session_maker: Any | None = None,
@@ -1758,6 +1891,8 @@ def configure_workers(
             reaper_interval=reaper_interval,
             max_reclaims=max_reclaims,
             terminal_job_state_ttl=terminal_job_state_ttl,
+            drain_timeout=drain_timeout,
+            drain_cancel_timeout=drain_cancel_timeout,
         ),
         state_store=state_store
         or _instantiate_backend(
