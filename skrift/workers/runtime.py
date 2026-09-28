@@ -371,6 +371,8 @@ class WorkerRuntime:
         # Counts state writes, so a waiter can tell one landed while it read.
         self._state_writes = 0
         self._pool: WorkerPool | None = None
+        # Counts stop calls, so a start can tell one landed while it awaited.
+        self._stops = 0
         self._queue_history_retention = timedelta(hours=24)
         self._queue_history_bucket_count = 96
         self._queue_history_bucket_seconds = int(
@@ -405,7 +407,12 @@ class WorkerRuntime:
     async def start(self) -> None:
         if self.config.mode != "in_process":
             return
+        # A stop that lands while this start awaits wins: the start goes no
+        # further, so nothing it would install outlives that stop.
+        stops = self._stops
         await self.record_queue_history()
+        if self._stops != stops:
+            return
         self._stopping_handlers = False
         self._abandoned = []
         self._pool = WorkerPool(
@@ -418,6 +425,8 @@ class WorkerRuntime:
             poll_backoff_factor=self.config.poll_backoff_factor,
         )
         await self._pool.start()
+        if self._stops != stops:
+            return  # that stop stopped the pool
         if self._queue_history_task is None:
             self._queue_history_task = asyncio.create_task(
                 self._record_queue_history_loop(),
@@ -438,6 +447,7 @@ class WorkerRuntime:
         without waiting for it. A cancelled call still drains the pool, and
         waits for the drain, before it raises.
         """
+        self._stops += 1
         try:
             if self._reaper_task is not None:
                 self._reaper_task.cancel()

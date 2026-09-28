@@ -584,6 +584,81 @@ async def test_a_second_stop_waits_for_the_first_ones_drain(backends):
     assert (await handle.status()).status == JobStatus.COMPLETED
 
 
+def _worker_tasks():
+    return [
+        task
+        for task in asyncio.all_tasks()
+        if task.get_name().startswith("skrift-worker") and not task.done()
+    ]
+
+
+async def test_a_stop_while_the_runtime_is_starting_leaves_it_stopped():
+    handler = Handler(seconds=0)
+    _register(handler)
+    runtime = _worker({})
+    handle = await runtime.submit(Work(n=1))
+    record_queue_history = runtime.record_queue_history
+    reading, read = asyncio.Event(), asyncio.Event()
+
+    async def gated_record_queue_history(**kwargs):
+        reading.set()
+        await read.wait()
+        return await record_queue_history(**kwargs)
+
+    runtime.record_queue_history = gated_record_queue_history
+    starting = asyncio.create_task(runtime.start())
+    try:
+        await asyncio.wait_for(reading.wait(), 3)
+        await _stop(runtime)
+        read.set()
+        await asyncio.wait_for(starting, 3)
+
+        assert runtime._pool is None
+        assert _worker_tasks() == []
+        await asyncio.sleep(0.1)  # a pool would have claimed the job by now
+        assert handler.log == []
+        assert (await handle.status()).status == JobStatus.SUBMITTED
+    finally:
+        read.set()
+        await _stop(runtime)
+
+    # The stopped start does not keep the runtime from starting later.
+    await runtime.start()
+    try:
+        assert await asyncio.wait_for(handle.result(), 3) == 1
+    finally:
+        await _stop(runtime)
+
+
+async def test_a_stop_while_the_pool_is_starting_leaves_no_background_task(monkeypatch):
+    from skrift.workers.runtime import WorkerPool
+
+    runtime = _worker({})
+    pool_start = WorkerPool.start
+    starting, started = asyncio.Event(), asyncio.Event()
+
+    async def gated_pool_start(pool):
+        await pool_start(pool)
+        starting.set()
+        await started.wait()
+
+    monkeypatch.setattr(WorkerPool, "start", gated_pool_start)
+    start = asyncio.create_task(runtime.start())
+    try:
+        await asyncio.wait_for(starting.wait(), 3)
+        await _stop(runtime)
+        started.set()
+        await asyncio.wait_for(start, 3)
+
+        assert runtime._pool is None
+        assert runtime._queue_history_task is None
+        assert runtime._reaper_task is None
+        assert _worker_tasks() == []
+    finally:
+        started.set()
+        await _stop(runtime)
+
+
 async def test_a_stale_claims_envelope_shares_nothing_with_the_queue():
     queue = InMemoryQueue()
     job = JobEnvelope(type="drain.work", payload={"n": 1}, metadata={"owner": "submitter"})
