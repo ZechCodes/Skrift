@@ -659,6 +659,46 @@ async def test_a_stop_while_the_pool_is_starting_leaves_no_background_task(monke
         await _stop(runtime)
 
 
+async def test_concurrent_starts_install_one_pool_which_a_stop_stops(monkeypatch):
+    from skrift.workers.runtime import WorkerPool
+
+    handler = Handler(seconds=0)
+    _register(handler)
+    runtime = _worker({})
+    pool_start = WorkerPool.start
+    starting, started = asyncio.Semaphore(0), asyncio.Event()
+
+    async def gated_pool_start(pool):
+        await pool_start(pool)
+        starting.release()
+        await started.wait()
+
+    monkeypatch.setattr(WorkerPool, "start", gated_pool_start)
+    first = asyncio.create_task(runtime.start())
+    try:
+        await asyncio.wait_for(starting.acquire(), 3)
+        workers = _worker_tasks()
+        second = asyncio.create_task(runtime.start())
+        # The second start either returns or reaches the gate with its own pool.
+        gated = asyncio.ensure_future(starting.acquire())
+        await asyncio.wait([second, gated], timeout=3, return_when=asyncio.FIRST_COMPLETED)
+        gated.cancel()
+        assert _worker_tasks() == workers
+
+        await _stop(runtime)
+        started.set()
+        await asyncio.wait_for(asyncio.gather(first, second), 3)
+
+        assert _worker_tasks() == []
+        handle = await runtime.submit(Work(n=1))
+        await asyncio.sleep(0.1)  # a pool would have claimed the job by now
+        assert handler.log == []
+        assert (await handle.status()).status == JobStatus.SUBMITTED
+    finally:
+        started.set()
+        await _stop(runtime)
+
+
 async def test_a_stale_claims_envelope_shares_nothing_with_the_queue():
     queue = InMemoryQueue()
     job = JobEnvelope(type="drain.work", payload={"n": 1}, metadata={"owner": "submitter"})

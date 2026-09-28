@@ -411,8 +411,8 @@ class WorkerRuntime:
         # further, so nothing it would install outlives that stop.
         stops = self._stops
         await self.record_queue_history()
-        if self._stops != stops:
-            return
+        if self._stops != stops or self._pool is not None:
+            return  # stopped, or another start installed the pool
         self._stopping_handlers = False
         self._abandoned = []
         self._pool = WorkerPool(
