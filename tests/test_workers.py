@@ -30,6 +30,7 @@ from skrift.workers import (
     DeadLetterCause,
     DeadLetterState,
     EventFlusher,
+    JobCancelled,
     JobFailed,
     JobStatus,
     PermanentFailure,
@@ -1184,6 +1185,65 @@ async def test_wake_during_the_pause_window_is_not_lost(
     assert resumed is not None and resumed.job.id == handle.id
     await runtime.execute_claim(resumed)
     assert await handle.result(timeout=5) == "woken"
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+@pytest.mark.parametrize("ending", ["completes", "is cancelled"])
+async def test_a_job_ending_while_its_waiter_reads_its_state_is_not_missed(
+    backend,
+    ending,
+    worker_session_maker,
+    fake_redis_client,
+):
+    # The job ends, and notifies, while result() is still reading its old state;
+    # the waiter must not then wait for a notify that has already come (#206).
+    release = asyncio.Event()
+
+    @skrift.handler("held")
+    async def held(job: Greeting):
+        await release.wait()
+        return job.name
+
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        **_worker_backends(
+            backend,
+            {"session_maker": worker_session_maker, "redis_client": fake_redis_client},
+        ),
+    )
+    handle = await runtime.submit(Greeting(name="Ada"))
+    if ending == "completes":
+        claimed = await runtime.queue.claim(["default"], visibility_timeout=60)
+        running = asyncio.create_task(runtime.execute_claim(claimed))
+        async with asyncio.timeout(5):
+            while (await handle.status()).status != JobStatus.RUNNING:
+                await asyncio.sleep(0.01)
+
+    real_get = runtime.state_store.get
+    reading, read_done = asyncio.Event(), asyncio.Event()
+
+    async def held_read(key):
+        state = await real_get(key)
+        if asyncio.current_task() is waiter and not reading.is_set():
+            reading.set()
+            await read_done.wait()
+        return state
+
+    runtime.state_store.get = held_read
+    waiter = asyncio.create_task(handle.result())
+    await asyncio.wait_for(reading.wait(), 5)
+    if ending == "completes":
+        release.set()
+        await asyncio.wait_for(running, 5)
+    else:
+        assert await runtime.cancel(handle.id) is True
+    read_done.set()
+
+    if ending == "completes":
+        assert await asyncio.wait_for(waiter, 2) == "Ada"
+    else:
+        with pytest.raises(JobCancelled):
+            await asyncio.wait_for(waiter, 2)
 
 
 def _gate_nack(runtime):

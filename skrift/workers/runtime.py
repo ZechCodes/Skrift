@@ -368,6 +368,8 @@ class WorkerRuntime:
         self.registry = handler_registry or registry
         self.default_visibility_timeout = self.config.visibility_timeout
         self._condition = asyncio.Condition()
+        # Counts state writes, so a waiter can tell one landed while it read.
+        self._state_writes = 0
         self._pool: WorkerPool | None = None
         self._queue_history_retention = timedelta(hours=24)
         self._queue_history_bucket_count = 96
@@ -622,6 +624,7 @@ class WorkerRuntime:
     async def wait_for_result(self, job_id: str, *, timeout: float | None = None) -> Any:
         async def _wait() -> Any:
             while True:
+                writes = self._state_writes
                 state = await self.get_job_state(job_id)
                 if state is None:
                     raise KeyError(f"Unknown worker job id {job_id!r}")
@@ -632,7 +635,8 @@ class WorkerRuntime:
                 if state.status == JobStatus.CANCELLED:
                     raise JobCancelled(f"Job {job_id} was cancelled")
                 async with self._condition:
-                    await self._condition.wait()
+                    while self._state_writes == writes:
+                        await self._condition.wait()
 
         if timeout is None:
             return await _wait()
@@ -1469,6 +1473,7 @@ class WorkerRuntime:
         except Refused:
             return False, found[0]
         async with self._condition:
+            self._state_writes += 1
             self._condition.notify_all()
         return True, found[0]
 
@@ -1910,6 +1915,7 @@ class WorkerRuntime:
             self._job_key(state.job.id), state, ttl=self._job_state_ttl(state)
         )
         async with self._condition:
+            self._state_writes += 1
             self._condition.notify_all()
 
     def _job_state_ttl(self, state: JobState) -> float | None:
