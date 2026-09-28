@@ -203,7 +203,7 @@ async def test_a_waiter_left_behind_by_a_finished_run_waits_for_its_sub_agent():
 
 
 async def test_a_waiter_spawned_while_its_run_holds_the_only_worker_fails_fast():
-    parent, go, child_gate, waiters = _parent_with_background_waiter(wait_before_returning=True)
+    parent, _go, child_gate, waiters = _parent_with_background_waiter(wait_before_returning=True)
     runtime = await _one_worker()
     try:
         session = await parent.run("go", dispatch="queued")
