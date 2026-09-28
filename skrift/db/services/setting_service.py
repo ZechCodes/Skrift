@@ -1,10 +1,14 @@
 """Setting service for CRUD operations on site settings."""
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from skrift.db.models import Setting
 from skrift.hooks import hooks
+
+logger = logging.getLogger(__name__)
 
 # In-memory cache for site settings (avoids DB queries on every page render)
 _site_settings_cache: dict[str, str] = {}
