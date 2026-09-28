@@ -790,9 +790,25 @@ async def _runner_check_pass(session_id: str, node: Any) -> Pause | _RunnerStopp
 
 
 def _activate_next_pending_turn(runstate: Any) -> bool:
-    if not runstate.pending_user_messages:
+    """Start the next pending turn with a fresh run job, if there is one.
+
+    A turn that already failed has spent its retry budget, its run job's
+    attempts, so a copy of it back on the pending queue is dropped rather than
+    given a fresh job, and so a fresh attempt count (#140).
+    """
+    while runstate.pending_user_messages:
+        turn = runstate.pending_user_messages.pop(0)
+        turn_id = turn.get("turn_id")
+        if turn_id is None or turn_id not in runstate.turn_errors:
+            break
+        logger.warning(
+            "Dropping turn %s of agent session %s from its pending queue: the turn "
+            "already failed, so it is not run again",
+            turn_id,
+            runstate.session_id,
+        )
+    else:
         return False
-    turn = runstate.pending_user_messages.pop(0)
     runstate.messages.append(
         {"role": "user", "content": turn.get("message"), "turn_id": turn.get("turn_id")}
     )
