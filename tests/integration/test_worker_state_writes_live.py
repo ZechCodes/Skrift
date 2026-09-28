@@ -21,11 +21,16 @@ from skrift.db.models.worker import (
 from skrift.workers.models import JobStatus
 from skrift.workers.registry import registry
 from tests.test_worker_state_writes import (
+    CLAIMS,
     PRUNE_RACES,
     READERS,
+    SETTLES,
+    assert_cancel_after_claim,
+    assert_inline_run_kept,
     assert_prune_after_update,
     assert_submitted_once,
     redis_backends,
+    run_a_cancel_racing_a_claim,
     run_a_cancel_racing_a_held_start,
     run_a_cancel_racing_an_inline_run_that_settles_first,
     run_a_prune_racing_a_held_update,
@@ -90,18 +95,25 @@ async def test_concurrent_submits_of_one_id_record_it_once(live_backends, first,
     assert_submitted_once(first, second, results, state, stats, dead, recorded)
 
 
-async def test_a_cancel_does_not_overwrite_a_run_that_settled_first(live_backends):
+@pytest.mark.parametrize("settles", SETTLES)
+async def test_a_cancel_does_not_overwrite_a_run_that_settled_first(live_backends, settles):
     cancelled, state, events = await run_a_cancel_racing_an_inline_run_that_settles_first(
-        live_backends
+        live_backends, settles
     )
-    assert cancelled is False
-    assert (state.status, state.result) == (JobStatus.COMPLETED, "done")
-    assert "job_cancelled" not in [event for event, _ in events]
+    assert_inline_run_kept(settles, cancelled, state, events)
 
 
 async def test_a_cancel_racing_a_runs_start_is_not_lost(live_backends):
     cancelled, runs, state = await run_a_cancel_racing_a_held_start(live_backends)
     assert (cancelled, runs, state.status) == (False, [1], JobStatus.COMPLETED)
+
+
+@pytest.mark.parametrize("claim", CLAIMS)
+async def test_a_cancel_whose_queue_delete_succeeds_settles_an_unsettled_job(
+    live_backends, claim
+):
+    cancelled, state, left, events = await run_a_cancel_racing_a_claim(live_backends, claim)
+    assert_cancel_after_claim(claim, cancelled, state, left, events)
 
 
 async def test_two_wakes_of_a_paused_job_queue_it_once(live_backends):

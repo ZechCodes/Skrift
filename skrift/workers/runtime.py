@@ -651,23 +651,35 @@ class WorkerRuntime:
         state = await self.get_job_state(job_id)
         if state is None or state.status != JobStatus.SUBMITTED:
             return False
-        cancelled = await self.queue.cancel(state.job.queue, job_id)
-        if not cancelled and self.config.mode != "inline":
+        removed = await self.queue.cancel(state.job.queue, job_id)
+        if not removed and self.config.mode != "inline":
             return False
-        # Only from SUBMITTED: a concurrent cancel, or a run that settled the
-        # job first, leaves this one nothing to cancel.
         cancelled_state, _ = await self._change_state(
-            job_id,
-            lambda current: (
-                current.model_copy(update={"status": JobStatus.CANCELLED})
-                if current is not None and current.status == JobStatus.SUBMITTED
-                else None
-            ),
+            job_id, lambda current: self._cancelled_state(current, removed=removed)
         )
         if cancelled_state is None:
             return False
         await self.emit_lifecycle(LifecycleEventType.JOB_CANCELLED, state.job)
         return True
+
+    @staticmethod
+    def _cancelled_state(current: JobState | None, *, removed: bool) -> JobState | None:
+        """The CANCELLED state ``cancel`` writes over ``current``, or None to refuse.
+
+        ``removed`` is whether this cancel's ``queue.cancel`` deleted the job's
+        queue entry. If it did, the job never runs again, so any unsettled
+        state is cancelled: SUBMITTED, PAUSED by a run that claimed the job
+        meanwhile, or RUNNING from a run whose claim expired. Otherwise (an
+        inline job, with no entry) only SUBMITTED is: its run has not started.
+        A settled job, including a dead-lettered entry the queue removed, is
+        left as is. The run id is dropped so a run whose claim expired does not
+        put back the state its start replaced.
+        """
+        if current is None or current.status in TERMINAL_JOB_STATUSES:
+            return None
+        if not removed and current.status != JobStatus.SUBMITTED:
+            return None
+        return current.model_copy(update={"status": JobStatus.CANCELLED, "run_id": None})
 
     async def wake(self, job_id: str, *, resume_at: datetime | None = None) -> bool:
         state = await self.get_job_state(job_id)

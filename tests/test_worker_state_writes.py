@@ -23,6 +23,8 @@ import skrift
 from skrift.db.base import Base
 from skrift.workers import (
     InMemoryDeadLetterStore,
+    Pause,
+    PermanentFailure,
     RedisEventLog,
     RedisQueue,
     RedisStateStore,
@@ -252,9 +254,20 @@ def assert_submitted_once(first, second, results, state, stats, dead, recorded):
 # (b) cancel
 
 
-async def run_a_cancel_racing_an_inline_run_that_settles_first(backends):
-    """A cancel reads SUBMITTED, then the inline run settles before it writes."""
-    _register()
+SETTLES = ("completes", "pauses")
+
+
+async def run_a_cancel_racing_an_inline_run_that_settles_first(backends, settles="completes"):
+    """A cancel reads SUBMITTED, then the inline run completes, or pauses,
+    before it writes. The inline job has no queue entry to delete."""
+    if settles == "pauses":
+
+        @handler("state.write", queue=QUEUE)
+        async def pause(payload: Item, context):
+            return Pause()
+
+    else:
+        _register()
     runtime = skrift.configure_workers(mode="inline", **backends)
     events = _record_lifecycle(runtime)
     emit = runtime.emit_lifecycle
@@ -293,12 +306,22 @@ async def run_a_cancel_racing_an_inline_run_that_settles_first(backends):
     return cancelled, await runtime.get_job_state(job_id), events
 
 
-async def test_a_cancel_does_not_overwrite_a_run_that_settled_first(backends):
+@pytest.mark.parametrize("settles", SETTLES)
+async def test_a_cancel_does_not_overwrite_a_run_that_settled_first(backends, settles):
     cancelled, state, events = await run_a_cancel_racing_an_inline_run_that_settles_first(
-        backends
+        backends, settles
     )
+    assert_inline_run_kept(settles, cancelled, state, events)
+
+
+def assert_inline_run_kept(settles, cancelled, state, events):
+    # Nothing was removed from a queue, so only a job still SUBMITTED would
+    # be cancelled: a paused inline job is left to be woken.
     assert cancelled is False
-    assert (state.status, state.result) == (JobStatus.COMPLETED, "done")
+    if settles == "pauses":
+        assert state.status == JobStatus.PAUSED
+    else:
+        assert (state.status, state.result) == (JobStatus.COMPLETED, "done")
     assert "job_cancelled" not in [event for event, _ in events]
 
 
@@ -335,6 +358,84 @@ async def test_a_cancel_racing_a_runs_start_is_not_lost(backends):
     # Either the cancel wins and the job never runs, or the run does and the
     # cancel reports it did nothing; never a cancel that the run ignores.
     assert (cancelled, runs, state.status) == (False, [1], JobStatus.COMPLETED)
+
+
+CLAIMS = ("pause", "expire", "dead_letter")
+
+
+async def run_a_cancel_racing_a_claim(backends, claim):
+    """A cancel reads SUBMITTED and is held before its queue delete while a
+    worker claims the job and: pauses it (nacked into the delayed queue); runs
+    it until its claim expires and is reaped back to ready; or dead-letters it.
+    The delete then succeeds on the unclaimed entry."""
+    release_run = asyncio.Event()
+
+    @handler("state.claimed", queue=QUEUE)
+    async def claimed_job(payload: Item, context):
+        if claim == "pause":
+            return Pause()
+        if claim == "dead_letter":
+            raise PermanentFailure("no")
+        await release_run.wait()
+        return "stale"
+
+    runtime = skrift.configure_workers(mode="in_process", queues=(QUEUE,), **backends)
+    events = _record_lifecycle(runtime)
+    job_id = f"claimed-{uuid4().hex}"
+    await runtime.submit("state.claimed", Item(n=1), job_id=job_id)
+    queue_cancel = runtime.queue.cancel
+    cancel_read, cancel_go = asyncio.Event(), asyncio.Event()
+
+    async def held_cancel(queue, ident):
+        cancel_read.set()
+        await cancel_go.wait()
+        return await queue_cancel(queue, ident)
+
+    runtime.queue.cancel = held_cancel
+    cancel = asyncio.create_task(runtime.cancel(job_id))
+    worker = None
+    try:
+        await _within(cancel_read.wait())
+        visibility = 0.05 if claim == "expire" else 60
+        claimed = await runtime.queue.claim([QUEUE], visibility_timeout=visibility)
+        worker = asyncio.create_task(runtime.execute_claim(claimed))
+        if claim == "expire":
+            while (await runtime.get_job_state(job_id)).status != JobStatus.RUNNING:
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.1)
+            await runtime.queue._release_expired_claims(utcnow())
+        else:
+            await _within(worker)
+    finally:
+        cancel_go.set()
+    cancelled = await _within(cancel)
+    release_run.set()  # the expired run finishes after the cancel
+    await _within(worker)
+    stats = await runtime.queue.stats(QUEUE)
+    left = (stats.ready, stats.delayed, stats.claimed)
+    return cancelled, await runtime.get_job_state(job_id), left, events
+
+
+@pytest.mark.parametrize("claim", CLAIMS)
+async def test_a_cancel_whose_queue_delete_succeeds_settles_an_unsettled_job(backends, claim):
+    cancelled, state, left, events = await run_a_cancel_racing_a_claim(backends, claim)
+    assert_cancel_after_claim(claim, cancelled, state, left, events)
+
+
+def assert_cancel_after_claim(claim, cancelled, state, left, events):
+    # With its queue entry deleted the job never runs again: a paused or
+    # running job is cancelled rather than stranded, a dead-lettered one kept.
+    cancel_events = [event for event, _ in events if event == "job_cancelled"]
+    assert left == (0, 0, 0)
+    if claim == "dead_letter":
+        assert (cancelled, state.status, cancel_events) == (False, JobStatus.DEAD_LETTERED, [])
+    else:
+        assert (cancelled, state.status, cancel_events) == (
+            True,
+            JobStatus.CANCELLED,
+            ["job_cancelled"],
+        )
+        assert "job_completed" not in [event for event, _ in events]
 
 
 # (c) wake
