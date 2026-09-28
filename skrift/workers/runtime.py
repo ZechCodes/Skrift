@@ -1109,7 +1109,7 @@ class WorkerRuntime:
             job, self.queue.ack(job.queue, job.id, claimed.token), run=run
         ):
             return True
-        await self._set_settled_state(
+        if not await self._set_settled_state(
             JobState(
                 job=job,
                 status=JobStatus.COMPLETED,
@@ -1118,7 +1118,8 @@ class WorkerRuntime:
                 attempt_history=attempt_history,
             ),
             run,
-        )
+        ):
+            return True
         await self.emit_lifecycle(LifecycleEventType.JOB_COMPLETED, job)
         return True
 
@@ -1511,15 +1512,20 @@ class WorkerRuntime:
         )
         return run if written else None
 
-    async def _set_settled_state(self, state: JobState, run: _Run | None) -> None:
+    async def _set_settled_state(self, state: JobState, run: _Run | None) -> bool:
         """Write a job's outcome after the queue accepted its ack or dead-letter nack.
 
         The queue's token check made this run the job's owner, so the write wins
-        whatever is stored.
+        whatever is stored but a cancel's: a dead-letter nack leaves an unclaimed
+        entry that ``cancel`` can delete, and once it has returned True the job
+        stays CANCELLED (#224). Returns False, writing nothing, in that case.
         """
         if run is not None:
             state.run_id, state.run_order = run.run_id, run.order
-        await self._write_state_if(state, lambda current: True)
+        written, _ = await self._write_state_if(
+            state, lambda current: current is None or current.status != JobStatus.CANCELLED
+        )
+        return written
 
     @staticmethod
     def _log_claim_lost(job: JobEnvelope) -> None:
@@ -1700,7 +1706,7 @@ class WorkerRuntime:
         error: str,
         run: _Run | None = None,
         state_recorded: bool = False,
-    ) -> DeadJobEntry:
+    ) -> DeadJobEntry | None:
         entry = DeadJobEntry(
             job=job.model_copy(deep=True),
             queue=job.queue,
@@ -1710,11 +1716,14 @@ class WorkerRuntime:
             latest_error=error,
             retention_until=utcnow() + timedelta(days=30),
         )
+        # The state goes first, so a cancel either lands before it and the job
+        # gets no dead letter, or finds it settled and refuses.
+        if not state_recorded and not await self._set_settled_state(
+            self._dead_lettered_state(job, attempts, error), run
+        ):
+            logger.info("Job %s was cancelled before it was dead-lettered", job.id)
+            return None
         entry = await self.dead_letter_store.create(entry)
-        if not state_recorded:
-            await self._set_settled_state(
-                self._dead_lettered_state(job, attempts, error), run
-            )
         await self.emit_lifecycle(LifecycleEventType.JOB_DEAD_LETTERED, job, error=error)
         descriptor = self.registry.get(job.type)
         if descriptor.dead_callback is not None:
