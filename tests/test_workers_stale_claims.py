@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
 
 import pytest
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import skrift
+import skrift.workers.sqlalchemy as sqlalchemy_backend
 from skrift.db.base import Base
 from skrift.workers import (
     InMemoryDeadLetterStore,
@@ -29,7 +31,7 @@ from skrift.workers import (
     SQLAlchemyQueue,
     SQLAlchemyStateStore,
 )
-from skrift.workers.models import JobStatus, utcnow
+from skrift.workers.models import JobEnvelope, JobStatus, utcnow
 from skrift.workers.registry import registry
 
 OUTCOME_EVENTS = {"job_failed", "job_paused", "job_completed", "job_dead_lettered"}
@@ -282,6 +284,7 @@ class LateStart:
         self.handle = await runtime.submit(Race(name="ada"))
         claim_a = await runtime.queue.claim(["default"], visibility_timeout=0.05)
         claim_a.visibility_timeout = 60  # A's check passes: it is not yet expired
+        self.claim_a = claim_a
         self.worker_a = self.task = asyncio.create_task(runtime.execute_claim(claim_a))
         await _within(self.stalled.wait())
         await asyncio.sleep(0.1)
@@ -472,3 +475,130 @@ async def test_a_settled_outcome_wins_over_the_stored_state(
     await _within(worker_b)
     state = await handle.status()
     assert (state.status, state.result) == (JobStatus.COMPLETED, "run 0")
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_a_late_worker_with_an_equal_claim_order_leaves_a_pausing_run_paused(
+    backend, worker_session_maker, fake_redis_client
+):
+    # Two claims can only share an order if a queue repeats one; A's start must
+    # still not pass for B's own write.
+    handler = _register_in_order(pause={0})
+    runtime = skrift.configure_workers(
+        mode="in_process", **_backends(backend, worker_session_maker, fake_redis_client)
+    )
+    late = LateStart(runtime)
+    claim_b = await late.claims()
+    late.claim_a.claim_order = claim_b.claim_order
+    nack_held, release_nack = _hold_nack(runtime)
+    worker_b = asyncio.create_task(runtime.execute_claim(claim_b))
+    handler.release[0].set()
+    await _within(nack_held.wait())
+    b_run_id = (await late.handle.status()).run_id
+
+    late.release.set()
+    try:
+        await asyncio.wait_for(asyncio.shield(late.worker_a), 1)
+    except TimeoutError:
+        handler.release[1].set()  # A started a run; let it end
+        await _within(late.worker_a)
+    release_nack.set()
+    await _within(worker_b)
+
+    assert handler.calls == 1
+    await _assert_paused_by_b(runtime, late.handle, b_run_id)
+
+
+async def _claim_retry_release_wake(queue):
+    """Claim a job four times: after a nack, a reaped claim and a wake."""
+    await queue.submit(JobEnvelope(type="race"))
+    orders = []
+    claimed = await queue.claim(["default"], visibility_timeout=60)
+    orders.append(claimed.claim_order)
+    await queue.nack("default", claimed.job.id, claimed.token, job=claimed.job)
+    claimed = await queue.claim(["default"], visibility_timeout=0.05)
+    orders.append(claimed.claim_order)
+    await asyncio.sleep(0.1)
+    await queue._release_expired_claims(utcnow())
+    claimed = await queue.claim(["default"], visibility_timeout=60)
+    orders.append(claimed.claim_order)
+    await queue.nack(
+        "default",
+        claimed.job.id,
+        claimed.token,
+        job=claimed.job,
+        retry_at=utcnow() + timedelta(hours=1),
+    )
+    assert await queue.wake("default", claimed.job.id)
+    claimed = await queue.claim(["default"], visibility_timeout=60)
+    orders.append(claimed.claim_order)
+    return orders
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_each_claim_of_a_job_has_a_greater_order(
+    backend, worker_session_maker, fake_redis_client
+):
+    queue = _backends(backend, worker_session_maker, fake_redis_client).get(
+        "queue", skrift.workers.InMemoryQueue()
+    )
+    orders = await _claim_retry_release_wake(queue)
+    assert orders == sorted(set(orders)) and None not in orders
+
+
+async def test_sqlite_claim_order_grows_when_the_clock_steps_back(
+    worker_session_maker, monkeypatch
+):
+    # The lease clock is wall time; a claim order taken from it would go
+    # backwards here and the later claim would be skipped as superseded.
+    attempts = []
+
+    @skrift.handler("race", max_attempts=3)
+    async def race(job: Race):
+        attempts.append(job.name)
+        if len(attempts) == 1:
+            raise RuntimeError("first attempt fails")
+        return "second attempt"
+
+    runtime = skrift.configure_workers(
+        mode="in_process", **_backends("sqlalchemy", worker_session_maker, None)
+    )
+    handle = await runtime.submit(Race(name="ada"))
+    first = await runtime.queue.claim(["default"], visibility_timeout=60)
+    await _within(runtime.execute_claim(first))
+    assert attempts == ["ada"]
+
+    monkeypatch.setattr(
+        sqlalchemy_backend,
+        "_lease_clock",
+        lambda session: sqlalchemy_backend.literal(
+            sqlalchemy_backend._now() - timedelta(seconds=1),
+            sqlalchemy_backend.DateTime(timezone=True),
+        ),
+    )
+    second = await runtime.queue.claim(["default"], visibility_timeout=60)
+    assert second.claim_order > first.claim_order
+    await _within(runtime.execute_claim(second))
+
+    assert attempts == ["ada", "ada"]
+    state = await handle.status()
+    assert (state.status, state.result) == (JobStatus.COMPLETED, "second attempt")
+
+
+async def test_redis_claim_order_survives_losing_every_other_key(fake_redis_client):
+    # The order is kept on the job's own key, so it goes only with the job.
+    queue = RedisQueue(client=fake_redis_client, prefix="test:order")
+    await queue.submit(JobEnvelope(type="race"))
+    first = await queue.claim(["default"], visibility_timeout=60)
+    await queue.nack("default", first.job.id, first.token, job=first.job)
+    second = await queue.claim(["default"], visibility_timeout=60)
+    await queue.nack("default", second.job.id, second.token, job=second.job)
+
+    keep = {queue._job_key(first.job.id), queue._ready_key("default")}
+    for key in await fake_redis_client.keys("test:order:*"):
+        if key.decode() not in keep:
+            await fake_redis_client.delete(key)
+
+    third = await queue.claim(["default"], visibility_timeout=60)
+    assert first.claim_order < second.claim_order < third.claim_order
+    assert third.job.id == first.job.id

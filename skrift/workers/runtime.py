@@ -42,7 +42,6 @@ from skrift.workers.models import (
     Pause,
     RetryPolicy,
     WorkerLifecycleEvent,
-    micros_since_epoch,
     utcnow,
 )
 from skrift.workers.registry import HandlerDescriptor, HandlerRegistry, registry
@@ -813,7 +812,7 @@ class WorkerRuntime:
                 paused_state=previous_state.paused_state if previous_state is not None else {},
                 attempt_history=attempt_history,
             ),
-            order=None if inline else self._claim_order(claimed),
+            order=None if inline else claimed.claim_order,
         )
         if run is None:
             logger.warning(
@@ -1081,17 +1080,6 @@ class WorkerRuntime:
         expires_at = claimed.claimed_at + timedelta(seconds=claimed.visibility_timeout)
         return utcnow() >= expires_at
 
-    @staticmethod
-    def _claim_order(claimed: ClaimedJob) -> int:
-        """Order of this claim among the job's claims; a later claim's run wins.
-
-        A queue that does not supply one is ordered by when this host received
-        the claim, which workers on skewed clocks can get wrong.
-        """
-        if claimed.claim_order is not None:
-            return claimed.claim_order
-        return micros_since_epoch(claimed.claimed_at)
-
     async def _start_run(self, running: JobState, *, order: int | None) -> _Run | None:
         """Write a run's RUNNING state unless a later claim's run has written.
 
@@ -1102,7 +1090,7 @@ class WorkerRuntime:
         run = _Run(run_id=uuid4().hex, order=order)
         running.run_id, running.run_order = run.run_id, order
         written, run.replaced = await self._write_state_if(
-            running, lambda current: self._not_superseded(current, order)
+            running, lambda current: self._not_superseded(current, run)
         )
         return run if written else None
 
@@ -1132,18 +1120,23 @@ class WorkerRuntime:
         """
         state.run_id, state.run_order = run.run_id, run.order
         written, _ = await self._write_state_if(
-            state, lambda current: self._not_superseded(current, run.order)
+            state, lambda current: self._not_superseded(current, run)
         )
         return written
 
     @staticmethod
-    def _not_superseded(current: JobState | None, order: int | None) -> bool:
-        """Whether the stored state was written by no run of a later claim."""
+    def _not_superseded(current: JobState | None, run: _Run) -> bool:
+        """Whether the stored state was written by this run or an earlier claim's.
+
+        A run without an order (inline, or from a queue that supplies none) is
+        not ordered against others.
+        """
         return (
-            order is None
+            run.order is None
             or current is None
             or current.run_order is None
-            or current.run_order <= order
+            or (run.run_id is not None and current.run_id == run.run_id)
+            or current.run_order < run.order
         )
 
     async def _write_state_if(
@@ -1254,7 +1247,7 @@ class WorkerRuntime:
             attempts=previous_state.attempt_history if previous_state is not None else [],
             error=error,
             # Stamped with this claim's order so no earlier claim's run writes over it.
-            run=_Run(run_id=None, order=None if inline else self._claim_order(claimed)),
+            run=_Run(run_id=None, order=None if inline else claimed.claim_order),
         )
 
     async def _dead_letter(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
@@ -13,11 +13,6 @@ from pydantic import BaseModel, Field
 def utcnow() -> datetime:
     """Return an aware UTC timestamp."""
     return datetime.now(timezone.utc)
-
-
-def micros_since_epoch(value: datetime) -> int:
-    """Whole microseconds since the Unix epoch, for ordering claims by time."""
-    return (value - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(microseconds=1)
 
 
 class Job(BaseModel):
@@ -122,8 +117,9 @@ class ClaimedJob(BaseModel):
     # has granted it, so claimed_at + visibility_timeout is never before the
     # lease really ends. None if the queue does not report it.
     visibility_timeout: float | None = None
-    # Orders the claims of one job: a later claim has a greater value. None if
-    # the queue does not supply one.
+    # Orders the claims of one job: a later claim has a greater value. The
+    # queue keeps it with the job, not taken from a clock. None if the queue
+    # does not supply one.
     claim_order: int | None = None
 
 

@@ -33,20 +33,37 @@ def _now() -> datetime:
 # a stalled worker or reaper from writing over a claim made after its lock ran
 # out.
 
-# KEYS: ready, claimed, claim, job, claim order counter
+# A job's claim generation counts its claims; each claim increments it and
+# takes the new value as its order. It is stored in the job's own envelope
+# value, as a leading "_claim_generation" member that JobEnvelope ignores, so
+# it is only ever lost together with the job. Every script that replaces the
+# envelope carries it over.
+_GENERATION_LUA = """
+local function generation(stored)
+    return tonumber(stored and string.match(stored, '^{"_claim_generation":(%d+),')) or 0
+end
+local function with_generation(envelope, n)
+    local rest = string.match(envelope, '^{"_claim_generation":%d+,(.*)$')
+    return '{"_claim_generation":' .. n .. ',' .. (rest or string.sub(envelope, 2))
+end
+"""
+
+# KEYS: ready, claimed, claim, job
 # ARGV: job_id, ready cutoff score, lease expiry score, queue, token, lease expiry iso
 # Returns the stored envelope and the claim's order, or nil if the job is no
 # longer ready and unclaimed.
-_CLAIM_SCRIPT = """
+_CLAIM_SCRIPT = _GENERATION_LUA + """
 local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if not score or tonumber(score) > tonumber(ARGV[2]) then return false end
 if redis.call('EXISTS', KEYS[3]) == 1 then return false end
 local job = redis.call('GET', KEYS[4])
 if not job then return false end
+local claim_order = generation(job) + 1
+redis.call('SET', KEYS[4], with_generation(job, claim_order))
 redis.call('ZREM', KEYS[1], ARGV[1])
 redis.call('ZADD', KEYS[2], ARGV[3], ARGV[1])
 redis.call('HSET', KEYS[3], 'queue', ARGV[4], 'token', ARGV[5], 'expires_at', ARGV[6])
-return {job, redis.call('INCR', KEYS[5])}
+return {job, claim_order}
 """
 
 # KEYS: claim, job, ready, claimed, dead, dead_at, jobs_by_queue
@@ -67,14 +84,14 @@ return 1
 # Returns -1 if the job is dead-lettered, 0 if its envelope changed, 2 if it is
 # claimed: the wake is then recorded on the claim for its worker's nack to
 # apply (the latest one wins; ack or a lost claim drops it).
-_WAKE_SCRIPT = """
+_WAKE_SCRIPT = _GENERATION_LUA + """
 if redis.call('SISMEMBER', KEYS[5], ARGV[2]) == 1 then return -1 end
 if redis.call('EXISTS', KEYS[2]) == 1 then
     redis.call('HSET', KEYS[2], 'wake_at', ARGV[4])
     return 2
 end
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
-redis.call('SET', KEYS[1], ARGV[3])
+redis.call('SET', KEYS[1], with_generation(ARGV[3], generation(ARGV[1])))
 redis.call('ZREM', KEYS[4], ARGV[2])
 redis.call('ZADD', KEYS[3], ARGV[4], ARGV[2])
 return 1
@@ -147,14 +164,15 @@ return 1
 #       job_json without ready_since
 # A wake recorded on the claim (see _WAKE_SCRIPT) replaces the retry score; the
 # envelope then carries no ready_since, which stats derives from that score.
-_NACK_SCRIPT = """
+_NACK_SCRIPT = _GENERATION_LUA + """
 local claim = redis.call('HMGET', KEYS[1], 'queue', 'token')
 if claim[1] ~= ARGV[1] or claim[2] ~= ARGV[2] then return 0 end
 local pending_wake = redis.call('HGET', KEYS[1], 'wake_at')
+local claims = generation(redis.call('GET', KEYS[2]))
 if pending_wake and ARGV[5] ~= '1' then
-    redis.call('SET', KEYS[2], ARGV[7])
+    redis.call('SET', KEYS[2], with_generation(ARGV[7], claims))
 else
-    redis.call('SET', KEYS[2], ARGV[4])
+    redis.call('SET', KEYS[2], with_generation(ARGV[4], claims))
 end
 redis.call('DEL', KEYS[1])
 redis.call('ZREM', KEYS[4], ARGV[3])
@@ -170,11 +188,11 @@ return 1
 
 # KEYS: claim, job, ready, claimed
 # ARGV: token read by the reaper ("" if none), job_id, job_json, lease cutoff, ready score
-_RELEASE_SCRIPT = """
+_RELEASE_SCRIPT = _GENERATION_LUA + """
 if (redis.call('HGET', KEYS[1], 'token') or '') ~= ARGV[1] then return 0 end
 local expires = redis.call('ZSCORE', KEYS[4], ARGV[2])
 if not expires or tonumber(expires) > tonumber(ARGV[4]) then return 0 end
-redis.call('SET', KEYS[2], ARGV[3])
+redis.call('SET', KEYS[2], with_generation(ARGV[3], generation(redis.call('GET', KEYS[2]))))
 redis.call('DEL', KEYS[1])
 redis.call('ZREM', KEYS[4], ARGV[2])
 redis.call('ZADD', KEYS[3], ARGV[5], ARGV[2])
@@ -703,12 +721,11 @@ class RedisQueue(_RedisBackend):
                 # and hands back the envelope as stored at that moment.
                 stored = await self._client.eval(
                     _CLAIM_SCRIPT,
-                    5,
+                    4,
                     self._ready_key(queue),
                     self._claimed_key(queue),
                     self._claim_key(job_id),
                     self._job_key(job_id),
-                    self._key("queue", "claim_order"),
                     job_id,
                     repr(_score(now)),
                     repr(_score(expires_at)),
