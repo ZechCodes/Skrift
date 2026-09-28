@@ -49,6 +49,30 @@ class _RunnerStopped:
     pass
 
 
+class _RunSuperseded(Exception):
+    """This run no longer owns its session's current turn."""
+
+
+def _claim_turn(runstate: Any, context: WorkerContext) -> None:
+    """Record this run as the owner of the session's current turn, or raise
+    ``_RunSuperseded``, before the run writes the turn's state (#204).
+
+    A run owns the turn while the session's current run job is its job and no
+    later claim of that job has written: a run whose claim expired, and was
+    taken over, then writes nothing, so it cannot fail or finish a turn it
+    no longer runs, or a turn started after its own.
+    """
+    if runstate.current_run_job_id != context.job.id:
+        raise _RunSuperseded
+    order = context.claim_order
+    if order is None:
+        return
+    if runstate.run_owner_job_id == context.job.id and (runstate.run_owner_order or 0) > order:
+        raise _RunSuperseded
+    runstate.run_owner_job_id = context.job.id
+    runstate.run_owner_order = order
+
+
 RUNNER_STOPPED = _RunnerStopped()
 
 
@@ -62,7 +86,15 @@ class AgentIterResult:
 
 async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> Any:
     async with occupying_worker(context):
-        return await _run_agent(payload, context)
+        try:
+            return await _run_agent(payload, context)
+        except _RunSuperseded:
+            logger.info(
+                "Agent run of job %s stopped: another run owns agent session %s's turn",
+                context.job.id,
+                payload.session_id,
+            )
+            return None
 
 
 async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
@@ -85,6 +117,7 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
     prior_status = state.status
 
     async def start(runstate):
+        _claim_turn(runstate, context)
         runstate.status = "running"
         now = utcnow()
         if runstate.started_at is None:
@@ -201,6 +234,7 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
                 dispatch_payload["display"] = display
 
             async def await_detached_tool(runstate):
+                _claim_turn(runstate, context)
                 _record_turn_usage(
                     runstate,
                     agent=agent,
@@ -252,6 +286,7 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
         )
 
         async def await_approval(runstate):
+            _claim_turn(runstate, context)
             runstate.status = "awaiting_approval"
             _record_turn_usage(
                 runstate,
@@ -302,6 +337,7 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
     )
 
     async def complete(runstate):
+        _claim_turn(runstate, context)
         if runstate.terminal_at is not None:
             return runstate
         completed_at = utcnow()

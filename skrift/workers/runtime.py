@@ -160,6 +160,9 @@ class WorkerContext:
     runtime: "WorkerRuntime"
     job: JobEnvelope
     paused_state: dict[str, Any]
+    # Orders this run's claim among the job's claims: a later claim has a
+    # greater value. None for inline runs, and if the queue supplies none.
+    claim_order: int | None = None
 
     async def emit(self, stream: str, event: dict[str, Any]) -> int:
         return await self.runtime.event_log.append(stream, event)
@@ -1095,13 +1098,16 @@ class WorkerRuntime:
         raw_payload = payload if isinstance(payload, dict) else {"value": payload}
         return job_or_type, descriptor, raw_payload
 
-    async def _call_handler(self, descriptor: HandlerDescriptor, job: JobEnvelope) -> Any:
+    async def _call_handler(
+        self, descriptor: HandlerDescriptor, job: JobEnvelope, run: _Run
+    ) -> Any:
         payload = descriptor.payload_model.model_validate(job.payload)
         state = await self.get_job_state(job.id)
         context = WorkerContext(
             runtime=self,
             job=job,
             paused_state=state.paused_state if state is not None else {},
+            claim_order=run.order,
         )
         signature = inspect.signature(descriptor.func)
         if len(signature.parameters) >= 2:
@@ -1124,12 +1130,12 @@ class WorkerRuntime:
         """
         task = None if inline else asyncio.current_task()
         if task is None:
-            return await self._call_handler(descriptor, job)
+            return await self._call_handler(descriptor, job, run)
         if self._stopping_handlers:
             raise _Drained
         self._handler_tasks[task] = run
         try:
-            result = await self._call_handler(descriptor, job)
+            result = await self._call_handler(descriptor, job, run)
         except BaseException:
             if run.abandoned:
                 raise _Abandoned from None
