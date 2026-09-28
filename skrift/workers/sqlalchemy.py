@@ -168,7 +168,15 @@ class SQLAlchemyStateStore(_SQLAlchemyBackend):
             if record is None:
                 return None
             if record.expires_at is not None and _utc(record.expires_at) <= _now():
-                await session.delete(record)
+                # Only while still expired: an update may have rewritten the row
+                # since this read (#217).
+                await session.execute(
+                    delete(WorkerStateRecord).where(
+                        WorkerStateRecord.id == record.id,
+                        WorkerStateRecord.expires_at <= _now(),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
                 await session.commit()
                 return None
             return _value_from_json(record.value)

@@ -1464,8 +1464,9 @@ async def test_inline_then_queued_wake_keeps_attempt_history():
             error="first",
         )
     ]
-    await runtime._set_state(
-        JobState(job=job, status=JobStatus.PAUSED, attempt=1, attempt_history=history)
+    await runtime.state_store.set(
+        runtime._job_key(job.id),
+        JobState(job=job, status=JobStatus.PAUSED, attempt=1, attempt_history=history),
     )
 
     assert await runtime.wake(job.id)

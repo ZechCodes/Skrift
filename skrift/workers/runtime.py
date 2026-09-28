@@ -87,6 +87,10 @@ class _Abandoned(Exception):
     """A job's handler ended after its worker pool's drain abandoned its run."""
 
 
+class _StateRefused(Exception):
+    """A job state change found a stored state it does not apply to."""
+
+
 @dataclass(frozen=True)
 class WorkerConfig:
     """Runtime settings for the MVP local worker executor."""
@@ -495,14 +499,7 @@ class WorkerRuntime:
                 visibility_timeout=visibility_timeout,
                 job_id=job_id,
             )
-            attempt = self._attempt_from_exception(job, exc, started_at=utcnow())
-            await self._dead_letter(
-                job,
-                cause=DeadLetterCause.POISON,
-                attempts=[attempt],
-                error=f"{type(exc).__name__}: {exc}",
-            )
-            return JobHandle(self, job.id)
+            return await self._dead_letter_submission(job, exc)
 
         payload_data = payload_model.model_dump(mode="json")
         job = self._build_job(
@@ -517,12 +514,13 @@ class WorkerRuntime:
             visibility_timeout=visibility_timeout,
             job_id=job_id,
         )
-        existing_state = await self.get_job_state(job.id)
+        existing_state = await self._record_new_job_state(
+            JobState(job=job, status=JobStatus.SUBMITTED)
+        )
         if existing_state is not None:
             if self._same_idempotent_job(existing_state.job, job):
                 return JobHandle(self, job.id)
             raise JobIdConflict(f"job id {job.id!r} already exists")
-        await self._set_state(JobState(job=job, status=JobStatus.SUBMITTED))
         await self.emit_lifecycle(LifecycleEventType.JOB_SUBMITTED, job)
         handle = JobHandle(self, job.id)
         if self.config.mode == "inline":
@@ -565,14 +563,7 @@ class WorkerRuntime:
                 job_id=job_id,
                 metadata=metadata,
             )
-            attempt = self._attempt_from_exception(job, exc, started_at=utcnow())
-            await self._dead_letter(
-                job,
-                cause=DeadLetterCause.POISON,
-                attempts=[attempt],
-                error=f"{type(exc).__name__}: {exc}",
-            )
-            return JobHandle(self, job.id)
+            return await self._dead_letter_submission(job, exc)
 
         payload_data = payload_model.model_dump(mode="json")
         job = self._build_job(
@@ -588,12 +579,13 @@ class WorkerRuntime:
             job_id=job_id,
             metadata=metadata,
         )
-        existing_state = await self.get_job_state(job.id)
+        existing_state = await self._record_new_job_state(
+            JobState(job=job, status=JobStatus.SUBMITTED)
+        )
         if existing_state is not None:
             if self._same_idempotent_job(existing_state.job, job):
                 return JobHandle(self, job.id)
             raise JobIdConflict(f"job id {job.id!r} already exists")
-        await self._set_state(JobState(job=job, status=JobStatus.SUBMITTED))
         await self.emit_lifecycle(LifecycleEventType.JOB_SUBMITTED, job)
         handle = JobHandle(self, job.id)
         await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
@@ -659,12 +651,35 @@ class WorkerRuntime:
         state = await self.get_job_state(job_id)
         if state is None or state.status != JobStatus.SUBMITTED:
             return False
-        cancelled = await self.queue.cancel(state.job.queue, job_id)
-        if not cancelled and self.config.mode != "inline":
+        removed = await self.queue.cancel(state.job.queue, job_id)
+        if not removed and self.config.mode != "inline":
             return False
-        await self._set_state(state.model_copy(update={"status": JobStatus.CANCELLED}))
+        cancelled_state, _ = await self._change_state(
+            job_id, lambda current: self._cancelled_state(current, removed=removed)
+        )
+        if cancelled_state is None:
+            return False
         await self.emit_lifecycle(LifecycleEventType.JOB_CANCELLED, state.job)
         return True
+
+    @staticmethod
+    def _cancelled_state(current: JobState | None, *, removed: bool) -> JobState | None:
+        """The CANCELLED state ``cancel`` writes over ``current``, or None to refuse.
+
+        ``removed`` is whether this cancel's ``queue.cancel`` deleted the job's
+        queue entry. If it did, the job never runs again, so any unsettled
+        state is cancelled: SUBMITTED, PAUSED by a run that claimed the job
+        meanwhile, or RUNNING from a run whose claim expired. Otherwise (an
+        inline job, with no entry) only SUBMITTED is: its run has not started.
+        A settled job, including a dead-lettered entry the queue removed, is
+        left as is. The run id is dropped so a run whose claim expired does not
+        put back the state its start replaced.
+        """
+        if current is None or current.status in TERMINAL_JOB_STATUSES:
+            return None
+        if not removed and current.status != JobStatus.SUBMITTED:
+            return None
+        return current.model_copy(update={"status": JobStatus.CANCELLED, "run_id": None})
 
     async def wake(self, job_id: str, *, resume_at: datetime | None = None) -> bool:
         state = await self.get_job_state(job_id)
@@ -676,7 +691,17 @@ class WorkerRuntime:
         ):
             state.job.scheduled_for = resume_at
             if resume_at is not None and resume_at > utcnow():
-                await self._set_state(state)
+
+                def schedule(current: JobState | None) -> JobState | None:
+                    if current is None or current.status != JobStatus.PAUSED:
+                        return None
+                    current.job.scheduled_for = resume_at
+                    return current
+
+                scheduled, _ = await self._change_state(job_id, schedule)
+                if scheduled is None:
+                    return False
+                state = scheduled
                 await asyncio.sleep((resume_at - utcnow()).total_seconds())
             await self.execute_claim(ClaimedJob(job=state.job, token="inline"), inline=True)
             return True
@@ -684,17 +709,23 @@ class WorkerRuntime:
             state.status == JobStatus.PAUSED
             and state.job.metadata.get("skrift_dispatch") == "inline_then_queued"
         ):
-            state.job.scheduled_for = resume_at
-            await self._set_state(
-                JobState(
-                    job=state.job,
+
+            def resubmit(current: JobState | None) -> JobState | None:
+                if current is None or current.status != JobStatus.PAUSED:
+                    return None
+                current.job.scheduled_for = resume_at
+                return JobState(
+                    job=current.job,
                     status=JobStatus.SUBMITTED,
-                    attempt=state.attempt,
-                    paused_state=state.paused_state,
-                    attempt_history=state.attempt_history,
+                    attempt=current.attempt,
+                    paused_state=current.paused_state,
+                    attempt_history=current.attempt_history,
                 )
-            )
-            await self.queue.submit(state.job, job_id=job_id)
+
+            submitted, _ = await self._change_state(job_id, resubmit)
+            if submitted is None:
+                return False
+            await self.queue.submit(submitted.job, job_id=job_id)
             return True
         return await self.queue.wake(state.job.queue, job_id, resume_at=resume_at)
 
@@ -804,7 +835,9 @@ class WorkerRuntime:
             visibility_timeout=entry.job.visibility_timeout,
             replayed_from=entry.id,
         )
-        await self._set_state(JobState(job=job, status=JobStatus.SUBMITTED))
+        replayed = JobState(job=job, status=JobStatus.SUBMITTED)
+        if await self._record_new_job_state(replayed) is not None:
+            raise JobIdConflict(f"job id {job.id!r} already exists")
         await self.emit_lifecycle(LifecycleEventType.JOB_SUBMITTED, job)
         if self.config.mode == "inline":
             await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
@@ -1470,28 +1503,51 @@ class WorkerRuntime:
 
         Returns whether it was written and the state it found.
         """
-        state.updated_at = utcnow()
-        found: list[JobState | None] = [None]
+        written, found = await self._change_state(
+            state.job.id, lambda current: state if allowed(current) else None
+        )
+        return written is not None, found
 
-        class Refused(Exception):
-            pass
+    async def _record_new_job_state(self, state: JobState) -> JobState | None:
+        """Write a submitted job's first state if its id has none (an expired
+        one counts as none), in one state-store update.
+
+        Returns the state found instead, having written nothing, or None.
+        """
+        _, found = await self._change_state(
+            state.job.id, lambda current: state if current is None else None
+        )
+        return found
+
+    async def _change_state(
+        self, job_id: str, change: Callable[[JobState | None], JobState | None]
+    ) -> tuple[JobState | None, JobState | None]:
+        """Replace a job's state with ``change`` of the stored one, in one
+        state-store update, so no other write lands between the read and the
+        write (#217). ``change`` returns None to leave the state as it is.
+
+        Returns the state written (None if ``change`` refused) and the state found.
+        """
+        found: list[JobState | None] = [None]
 
         def write(current: JobState | None) -> JobState:
             found[0] = current
-            if not allowed(current):
-                raise Refused
+            state = change(current)
+            if state is None:
+                raise _StateRefused
+            state.updated_at = utcnow()
             return state
 
         try:
-            await self.state_store.update(
-                self._job_key(state.job.id), write, ttl=self._job_state_ttl
+            written = await self.state_store.update(
+                self._job_key(job_id), write, ttl=self._job_state_ttl
             )
-        except Refused:
-            return False, found[0]
+        except _StateRefused:
+            return None, found[0]
         async with self._condition:
             self._state_writes += 1
             self._condition.notify_all()
-        return True, found[0]
+        return written, found[0]
 
     async def _nack(self, job: JobEnvelope, token: str, **kwargs: Any) -> None:
         if self._queue_nack_accepts_job():
@@ -1583,6 +1639,7 @@ class WorkerRuntime:
         attempts: list[DeadJobAttempt],
         error: str,
         run: _Run | None = None,
+        state_recorded: bool = False,
     ) -> DeadJobEntry:
         entry = DeadJobEntry(
             job=job.model_copy(deep=True),
@@ -1594,22 +1651,54 @@ class WorkerRuntime:
             retention_until=utcnow() + timedelta(days=30),
         )
         entry = await self.dead_letter_store.create(entry)
-        await self._set_settled_state(
-            JobState(
-                job=job,
-                status=JobStatus.DEAD_LETTERED,
-                attempt=job.attempt,
-                error=error,
-                last_error=error,
-                attempt_history=attempts,
-            ),
-            run,
-        )
+        if not state_recorded:
+            await self._set_settled_state(
+                self._dead_lettered_state(job, attempts, error), run
+            )
         await self.emit_lifecycle(LifecycleEventType.JOB_DEAD_LETTERED, job, error=error)
         descriptor = self.registry.get(job.type)
         if descriptor.dead_callback is not None:
             await self._call_dead_callback(descriptor, entry)
         return entry
+
+    async def _dead_letter_submission(
+        self, job: JobEnvelope, exc: ValidationError
+    ) -> JobHandle:
+        """Dead-letter a submission whose payload failed validation.
+
+        Its id must be new, as for any submission (#217): an equal submission
+        gets the existing job's handle, and a different one ``JobIdConflict``.
+        """
+        error = f"{type(exc).__name__}: {exc}"
+        attempts = [self._attempt_from_exception(job, exc, started_at=utcnow())]
+        existing_state = await self._record_new_job_state(
+            self._dead_lettered_state(job, attempts, error)
+        )
+        if existing_state is not None:
+            if self._same_idempotent_job(existing_state.job, job):
+                return JobHandle(self, job.id)
+            raise JobIdConflict(f"job id {job.id!r} already exists")
+        await self._dead_letter(
+            job,
+            cause=DeadLetterCause.POISON,
+            attempts=attempts,
+            error=error,
+            state_recorded=True,
+        )
+        return JobHandle(self, job.id)
+
+    @staticmethod
+    def _dead_lettered_state(
+        job: JobEnvelope, attempts: list[DeadJobAttempt], error: str
+    ) -> JobState:
+        return JobState(
+            job=job,
+            status=JobStatus.DEAD_LETTERED,
+            attempt=job.attempt,
+            error=error,
+            last_error=error,
+            attempt_history=attempts,
+        )
 
     async def _call_dead_callback(
         self,
@@ -1924,15 +2013,6 @@ class WorkerRuntime:
             "timestamp": current["timestamp"],
             "queues": sorted(queues.values(), key=lambda queue: queue["queue"]),
         }
-
-    async def _set_state(self, state: JobState) -> None:
-        state.updated_at = utcnow()
-        await self.state_store.set(
-            self._job_key(state.job.id), state, ttl=self._job_state_ttl(state)
-        )
-        async with self._condition:
-            self._state_writes += 1
-            self._condition.notify_all()
 
     def _job_state_ttl(self, state: JobState) -> float | None:
         """Expire finished job state after the retention window; keep live jobs."""

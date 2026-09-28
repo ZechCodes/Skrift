@@ -232,6 +232,38 @@ return 1
 """
 
 
+# Deletes a state value if this process still holds its lock, and drops it from
+# the indexes, all in one step, then releases the lock. Returns 1 if it deleted.
+# KEYS: value, lock, state keys set, worker job index, active worker job set
+# ARGV: lock token, state key
+_DELETE_SCRIPT = """
+if redis.call('GET', KEYS[2]) ~= ARGV[1] then return 0 end
+redis.call('DEL', KEYS[1])
+redis.call('SREM', KEYS[3], ARGV[2])
+redis.call('ZREM', KEYS[4], ARGV[2])
+redis.call('SREM', KEYS[5], ARGV[2])
+redis.call('DEL', KEYS[2])
+return 1
+"""
+
+
+# Drops a state key from indexes if its value is still absent, so a concurrent
+# update that has since written it keeps its entries (#217). Returns 1 if it did.
+# KEYS: value, then ARGV[2] sets and the rest sorted sets to drop the key from
+# ARGV: state key, number of sets
+_FORGET_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+for i = 2, #KEYS do
+    if i - 1 <= tonumber(ARGV[2]) then
+        redis.call('SREM', KEYS[i], ARGV[1])
+    else
+        redis.call('ZREM', KEYS[i], ARGV[1])
+    end
+end
+return 1
+"""
+
+
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
@@ -415,8 +447,8 @@ class RedisStateStore(_RedisBackend):
                 continue
             if key.startswith(prefix):
                 keys.append(key)
-        if stale:
-            await self._client.srem(self._key("state", "keys"), *stale)
+        for key in stale:
+            await self._forget(key, sets=(self._key("state", "keys"),))
         return sorted(keys)
 
     async def worker_job_states(self, *, limit: int | None = None) -> tuple[list[JobState], int]:
@@ -433,10 +465,11 @@ class RedisStateStore(_RedisBackend):
                 stale.append(key)
             elif isinstance(state, JobState):
                 states.append(state)
-        if stale:
-            await self._client.zrem(job_index, *stale)
-            await self._client.srem(self._key("state", "worker_jobs_active"), *stale)
-            total = max(0, total - len(stale))
+        for key in stale:
+            if await self._forget(
+                key, sets=(self._key("state", "worker_jobs_active"),), sorted_sets=(job_index,)
+            ):
+                total = max(0, total - 1)
         return states, total
 
     async def worker_job_counts(self) -> dict[str, int]:
@@ -460,13 +493,75 @@ class RedisStateStore(_RedisBackend):
             key = raw_key.decode() if isinstance(raw_key, bytes) else str(raw_key)
             state = await self.get(key)
             if state is None:
-                await self._client.zrem(job_index, key)
-                await self._client.srem(self._key("state", "worker_jobs_active"), key)
+                await self._forget(
+                    key,
+                    sets=(self._key("state", "worker_jobs_active"),),
+                    sorted_sets=(job_index,),
+                )
                 continue
             if isinstance(state, JobState) and state.status in terminal:
-                await self.delete(key)
-                count += 1
+                count += await self._delete_if_prunable(key, terminal, cutoff)
         return count
+
+    async def _forget(
+        self, key: str, *, sets: tuple[str, ...], sorted_sets: tuple[str, ...] = ()
+    ) -> bool:
+        """Drop ``key`` from index ``sets`` and ``sorted_sets`` if its value is
+        still absent, in one step. Returns whether it did."""
+        return bool(
+            await self._client.eval(
+                _FORGET_SCRIPT,
+                1 + len(sets) + len(sorted_sets),
+                self._state_key(key),
+                *sets,
+                *sorted_sets,
+                key,
+                len(sets),
+            )
+        )
+
+    async def _delete_if_prunable(
+        self, key: str, terminal: set[JobStatus], cutoff: float
+    ) -> int:
+        """Delete a job state under the lock ``update`` takes, if it is still
+        terminal and older than ``cutoff`` then, so a concurrent update is
+        neither lost nor undone (#217).
+
+        Returns 1 if it deleted, and 0 if the state had changed or the lock
+        expired before the delete.
+        """
+        from redis.exceptions import LockNotOwnedError
+
+        lock = self._client.lock(self._key("state", "locks", key), timeout=10)
+        await lock.acquire()
+        deleted = False
+        try:
+            state = await self.get(key)
+            if (
+                isinstance(state, JobState)
+                and state.status in terminal
+                and _score(state.updated_at) <= cutoff
+            ):
+                deleted = bool(
+                    await self._client.eval(
+                        _DELETE_SCRIPT,
+                        5,
+                        self._state_key(key),
+                        lock.name,
+                        self._key("state", "keys"),
+                        self._key("state", "worker_jobs"),
+                        self._key("state", "worker_jobs_active"),
+                        lock.local.token,
+                        key,
+                    )
+                )
+        finally:
+            if not deleted:
+                try:
+                    await lock.release()
+                except LockNotOwnedError:
+                    pass
+        return int(deleted)
 
     def _state_key(self, key: str) -> str:
         return self._key("state", "values", key)
