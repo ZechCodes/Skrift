@@ -132,8 +132,14 @@ async def test_a_job_cancelled_before_its_inline_run_starts_does_not_run(
     release.set()
     await submitting
 
+    # The refused run charged no attempt, not even on the stored envelope.
     state = await runtime.get_job_state("job")
-    assert (runs, state.status) == ([], JobStatus.CANCELLED)
+    assert (runs, state.status, state.attempt, state.job.attempt) == (
+        [],
+        JobStatus.CANCELLED,
+        0,
+        0,
+    )
     with pytest.raises(JobCancelled):
         await runtime.wait_for_result("job", timeout=1)
     assert await _events(runtime, "job") == ["job_submitted", "job_cancelled"]
@@ -161,7 +167,12 @@ async def test_a_job_cancelled_before_its_inline_retry_does_not_run_again(backen
     await submitting
 
     state = await runtime.get_job_state("job")
-    assert (runs, state.status, state.attempt) == ([1], JobStatus.CANCELLED, 1)
+    assert (runs, state.status, state.attempt, state.job.attempt) == (
+        [1],
+        JobStatus.CANCELLED,
+        1,
+        1,
+    )
     assert "job_started" not in (await _events(runtime, "job"))[-2:]
 
 
@@ -200,3 +211,4 @@ async def test_an_inline_wake_does_not_rerun_a_job_another_wake_finished(backend
 
     state = await runtime.get_job_state("job")
     assert (runs, state.status, state.result) == ([1, 1], JobStatus.COMPLETED, "done 2")
+    assert (state.attempt, state.job.attempt) == (1, 1)

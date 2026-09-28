@@ -954,6 +954,11 @@ class WorkerRuntime:
         return had_activity
 
     async def execute_claim(self, claimed: ClaimedJob, *, inline: bool = False) -> None:
+        if inline:
+            # An inline claim carries the envelope of the state it was read
+            # from, which the in-memory store keeps as is: the run works on its
+            # own copy, so a start that is refused leaves the stored state alone.
+            claimed = claimed.model_copy(update={"job": claimed.job.model_copy(deep=True)})
         job = claimed.job
         if not inline and self._claim_expired(claimed):
             logger.warning(
