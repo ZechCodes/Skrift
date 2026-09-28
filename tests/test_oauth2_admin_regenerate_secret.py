@@ -1,13 +1,19 @@
 """The admin's "Regenerate secret" action on OAuth2 clients (#193)."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
+from markupsafe import Markup
 
 from skrift.admin.oauth2_clients import OAuth2ClientAdminController
 from skrift.auth.client_secret import hash_client_secret
+from skrift.auth.scopes import SCOPE_DEFINITIONS
 from skrift.db.models.oauth2_client import OAuth2Client
+
+TEMPLATES = Path(__file__).resolve().parent.parent / "skrift" / "templates"
 
 
 def make_client(**fields) -> OAuth2Client:
@@ -74,3 +80,46 @@ async def test_an_admin_created_clients_secret_is_regenerated():
     assert client.client_secret != old_secret
     assert session["new_secret"]
     assert session["flash_messages"][0]["type"] == "success"
+
+
+def render_edit_page(client: OAuth2Client) -> str:
+    """Render the client edit page, with the admin layout reduced to its content."""
+    env = Environment(
+        loader=ChoiceLoader([
+            DictLoader({"admin/base.html": "{% block admin_content %}{% endblock %}"}),
+            FileSystemLoader(str(TEMPLATES)),
+        ]),
+        autoescape=True,
+    )
+    env.globals.update(
+        csrf_field=lambda: Markup('<input type="hidden" name="_csrf_token">'),
+        csp_nonce=lambda: "nonce",
+        site_name=lambda: "Site",
+    )
+    return env.get_template("admin/oauth2/edit.html").render(
+        client=client, available_scopes=SCOPE_DEFINITIONS
+    )
+
+
+@pytest.mark.parametrize("auth_method", ["client_secret_basic", "none"], ids=["confidential", "public"])
+def test_a_dynamically_registered_clients_edit_page_offers_no_regenerate(auth_method):
+    client = make_client(is_dynamically_registered=True, token_endpoint_auth_method=auth_method)
+
+    page = render_edit_page(client)
+
+    assert "regenerate-secret" not in page
+    assert "Regenerate Secret" not in page
+    assert "Use <strong>Regenerate</strong>" not in page
+    assert (
+        "Dynamically registered clients receive their credentials when they "
+        "register; their secrets are not managed from the admin"
+    ) in page
+
+
+def test_an_admin_created_clients_edit_page_offers_regenerate():
+    page = render_edit_page(make_client(client_secret=hash_client_secret("admin-secret")))
+
+    assert "/regenerate-secret" in page
+    assert "Regenerate Secret" in page
+    assert "Use <strong>Regenerate</strong>" in page
+    assert "not managed from the admin" not in page
