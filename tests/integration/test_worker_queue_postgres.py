@@ -1,6 +1,6 @@
 """SQLAlchemyQueue claim races on Postgres, where reapers run concurrently (#186).
 
-Also the SQLAlchemy state store's concurrent updates on Postgres (#195).
+Also the SQLAlchemy state store's concurrent updates on Postgres (#195, #212).
 
 Requires running PostgreSQL — see compose.yml.
 """
@@ -158,10 +158,44 @@ async def test_wake_racing_a_claim_and_retry_keeps_the_new_envelope(queue_sessio
     assert stored["attempt"] == 1
 
 
-async def test_concurrent_state_updates_both_land(pg_session_maker):
+@pytest.mark.parametrize("existing", [True, False], ids=["existing", "missing"])
+async def test_concurrent_state_updates_both_land(pg_session_maker, existing):
     async with pg_session_maker() as session:
         await session.execute(delete(WorkerStateRecord))
         await session.commit()
 
     store = SQLAlchemyStateStore(session_maker=pg_session_maker)
-    await _assert_concurrent_updates_both_land(store, existing=True)
+    await _assert_concurrent_updates_both_land(store, existing=existing)
+
+
+async def test_a_failed_first_update_of_a_missing_key_leaves_no_row(pg_session_maker):
+    """The placeholder a first update inserts to hold the key (#212) goes with
+    its rollback, and an update waiting on it then inserts the key itself."""
+    async with pg_session_maker() as session:
+        await session.execute(delete(WorkerStateRecord))
+        await session.commit()
+    store = SQLAlchemyStateStore(session_maker=pg_session_maker)
+    read, release = asyncio.Event(), asyncio.Event()
+
+    async def fail_after_read(value):
+        read.set()
+        await release.wait()
+        raise RuntimeError("the first update failed")
+
+    first = asyncio.create_task(store.update("jobs:missing", fail_after_read))
+    try:
+        await asyncio.wait_for(read.wait(), 5)
+        second = asyncio.create_task(
+            store.update("jobs:missing", lambda value: [*(value or []), "second"])
+        )
+        await asyncio.sleep(0.2)
+    finally:
+        release.set()
+    with pytest.raises(RuntimeError):
+        await asyncio.wait_for(first, 5)
+    await asyncio.wait_for(second, 5)
+    assert await store.get("jobs:missing") == ["second"]
+
+    with pytest.raises(RuntimeError):
+        await store.update("jobs:alone", fail_after_read)
+    assert await store.keys("jobs:") == ["jobs:missing"]

@@ -82,9 +82,22 @@ async def _lock_state_key(session: Any, key: str) -> None:
     A no-op UPDATE, as in :func:`_lock_queue_row`. On SQLite it opens the write
     transaction even when no row matches yet, so a concurrent update of the key,
     including its first insert, waits until this session ends. On Postgres it
-    locks the row if there is one. Either way the value this session reads stays
-    current until its write commits, and the hold cannot lapse before then.
+    locks the row, first inserting a placeholder if there is none (#212): a
+    concurrent first update then waits on that uncommitted row, and reads the
+    committed one, instead of inserting a second. The update overwrites the
+    placeholder before it commits, and a rollback removes it. Either way the
+    value this session reads stays current until its write commits, and the
+    hold cannot lapse before then.
     """
+    dialect_name = session.bind.dialect.name if session.bind is not None else ""
+    if dialect_name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+
+        await session.execute(
+            insert(WorkerStateRecord)
+            .values(key=key, value=None)
+            .on_conflict_do_nothing(index_elements=["key"])
+        )
     await session.execute(
         update(WorkerStateRecord)
         .where(WorkerStateRecord.key == key)
