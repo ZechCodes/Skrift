@@ -1,5 +1,7 @@
 """SQLAlchemyQueue claim races on Postgres, where reapers run concurrently (#186).
 
+Also the SQLAlchemy state store's concurrent updates on Postgres (#195).
+
 Requires running PostgreSQL — see compose.yml.
 """
 
@@ -12,9 +14,10 @@ import pytest
 from sqlalchemy import delete, select
 
 import skrift.workers.sqlalchemy as sqlalchemy_backend
-from skrift.db.models.worker import WorkerQueueRecord
-from skrift.workers import SQLAlchemyQueue
+from skrift.db.models.worker import WorkerQueueRecord, WorkerStateRecord
+from skrift.workers import SQLAlchemyQueue, SQLAlchemyStateStore
 from skrift.workers.models import JobEnvelope, utcnow
+from tests.test_worker_backend_contracts import _assert_concurrent_updates_both_land
 from tests.test_workers_claim_races import PausingSessions, _expired_claim, _queue_row
 
 pytestmark = pytest.mark.integration
@@ -153,3 +156,12 @@ async def test_wake_racing_a_claim_and_retry_keeps_the_new_envelope(queue_sessio
             await session.execute(select(WorkerQueueRecord.job).where(WorkerQueueRecord.job_id == job.id))
         ).scalar_one()
     assert stored["attempt"] == 1
+
+
+async def test_concurrent_state_updates_both_land(pg_session_maker):
+    async with pg_session_maker() as session:
+        await session.execute(delete(WorkerStateRecord))
+        await session.commit()
+
+    store = SQLAlchemyStateStore(session_maker=pg_session_maker)
+    await _assert_concurrent_updates_both_land(store, existing=True)

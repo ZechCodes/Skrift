@@ -76,6 +76,23 @@ async def _lock_queue_row(session: Any, *conditions: Any) -> bool:
     return result.rowcount == 1
 
 
+async def _lock_state_key(session: Any, key: str) -> None:
+    """Hold ``key`` for this session before its state row is read.
+
+    A no-op UPDATE, as in :func:`_lock_queue_row`. On SQLite it opens the write
+    transaction even when no row matches yet, so a concurrent update of the key,
+    including its first insert, waits until this session ends. On Postgres it
+    locks the row if there is one. Either way the value this session reads stays
+    current until its write commits, and the hold cannot lapse before then.
+    """
+    await session.execute(
+        update(WorkerStateRecord)
+        .where(WorkerStateRecord.key == key)
+        .values(key=WorkerStateRecord.key)
+        .execution_options(synchronize_session=False)
+    )
+
+
 def _unexpired_condition() -> Any:
     """SQL predicate matching rows whose TTL has not yet elapsed."""
     return or_(
@@ -171,6 +188,8 @@ class SQLAlchemyStateStore(_SQLAlchemyBackend):
 
     async def update(self, key: str, fn: UpdateFn, *, ttl: TTL = None) -> Any:
         async with self._session_maker() as session:
+            # SELECT ... FOR UPDATE alone does not lock on SQLite.
+            await _lock_state_key(session, key)
             result = await session.execute(
                 select(WorkerStateRecord)
                 .where(WorkerStateRecord.key == key)
