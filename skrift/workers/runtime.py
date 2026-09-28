@@ -689,21 +689,41 @@ class WorkerRuntime:
             state.status == JobStatus.PAUSED
             and state.job.metadata.get("skrift_dispatch") == "inline"
         ):
-            state.job.scheduled_for = resume_at
+
+            # Only the wake that moves the job out of the pause it read runs
+            # it; any other wake of that pause finds it gone.
+            def resume(current: JobState | None) -> JobState | None:
+                if (
+                    current is None
+                    or current.status != JobStatus.PAUSED
+                    or current.run_id != state.run_id
+                ):
+                    return None
+                return JobState(
+                    job=current.job.model_copy(update={"scheduled_for": resume_at}),
+                    status=JobStatus.SUBMITTED,
+                    attempt=current.attempt,
+                    paused_state=current.paused_state,
+                    attempt_history=current.attempt_history,
+                    run_id=wake_id,
+                )
+
+            wake_id = uuid4().hex
+            woken, _ = await self._change_state(job_id, resume)
+            if woken is None:
+                return False
             if resume_at is not None and resume_at > utcnow():
-
-                def schedule(current: JobState | None) -> JobState | None:
-                    if current is None or current.status != JobStatus.PAUSED:
-                        return None
-                    current.job.scheduled_for = resume_at
-                    return current
-
-                scheduled, _ = await self._change_state(job_id, schedule)
-                if scheduled is None:
-                    return False
-                state = scheduled
                 await asyncio.sleep((resume_at - utcnow()).total_seconds())
-            await self.execute_claim(ClaimedJob(job=state.job, token="inline"), inline=True)
+                # A cancel during the wait took the job, and dropped the wake's id.
+                current = await self.get_job_state(job_id)
+                if (
+                    current is None
+                    or current.status != JobStatus.SUBMITTED
+                    or current.run_id != wake_id
+                ):
+                    return False
+            await self.emit_lifecycle(LifecycleEventType.JOB_RESUMED, woken.job)
+            await self.execute_claim(ClaimedJob(job=woken.job, token="inline"), inline=True)
             return True
         if (
             state.status == JobStatus.PAUSED
