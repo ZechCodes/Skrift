@@ -22,15 +22,19 @@ from skrift.workers.models import JobStatus
 from skrift.workers.registry import registry
 from tests.test_worker_state_writes import (
     CLAIMS,
+    DEAD_LETTER_HOLDS,
+    DEAD_LETTERS,
     PRUNE_RACES,
     READERS,
     SETTLES,
     assert_cancel_after_claim,
+    assert_cancel_or_dead_letter,
     assert_inline_run_kept,
     assert_prune_after_update,
     assert_submitted_once,
     redis_backends,
     run_a_cancel_racing_a_claim,
+    run_a_cancel_racing_a_dead_letter,
     run_a_cancel_racing_a_held_start,
     run_a_cancel_racing_an_inline_run_that_settles_first,
     run_a_prune_racing_a_held_update,
@@ -115,6 +119,13 @@ async def test_a_cancel_whose_queue_delete_succeeds_settles_an_unsettled_job(
     cancelled, state, left, events = await run_a_cancel_racing_a_claim(live_backends, claim)
     assert_cancel_after_claim(claim, cancelled, state, left, events)
 
+
+
+@pytest.mark.parametrize("hold", DEAD_LETTER_HOLDS)
+@pytest.mark.parametrize("cause", DEAD_LETTERS)
+async def test_a_cancel_racing_a_dead_letter_is_never_overwritten(live_backends, cause, hold):
+    outcome = await run_a_cancel_racing_a_dead_letter(live_backends, cause, hold)
+    assert_cancel_or_dead_letter(hold, *outcome)
 
 async def test_two_wakes_of_a_paused_job_queue_it_once(live_backends):
     woken, runs, state = await run_two_wakes_of_a_paused_inline_then_queued_job(live_backends)

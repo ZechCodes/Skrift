@@ -2,7 +2,7 @@
 
 Submit, cancel, wake and DLQ replay used to write job state with a plain
 ``set``, after reading it separately; Redis pruning and index cleanup deleted
-with no lock. Each test holds one side of a race at the point where the other
+with no lock. A cancel could also be overwritten by a dead letter (#224). Each test holds one side of a race at the point where the other
 used to slip in, on the in-memory, SQLite and (fake) Redis backends. The
 scenarios take their backends as arguments so the integration tests can run
 them on Postgres and a real Redis.
@@ -436,6 +436,97 @@ def assert_cancel_after_claim(claim, cancelled, state, left, events):
             ["job_cancelled"],
         )
         assert "job_completed" not in [event for event, _ in events]
+
+
+DEAD_LETTERS = ("permanent_failure", "reclaim_loop")
+DEAD_LETTER_HOLDS = ("after_nack", "before_record")
+
+
+async def run_a_cancel_racing_a_dead_letter(backends, cause, hold):
+    """A cancel reads SUBMITTED and is held before its queue delete while a
+    worker claims the job and dead-letters it (its handler fails permanently,
+    or the claim is over its reclaim limit). The run is held once its
+    dead-letter nack has left the entry unclaimed, or later, just before the
+    dead letter is recorded; the cancel's delete then succeeds (#224)."""
+
+    @handler("state.dead", queue=QUEUE)
+    async def dead_job(payload: Item, context):
+        raise PermanentFailure("no")
+
+    runtime = skrift.configure_workers(mode="in_process", queues=(QUEUE,), **backends)
+    events = _record_lifecycle(runtime)
+    job_id = f"dead-{uuid4().hex}"
+    await runtime.submit("state.dead", Item(n=1), job_id=job_id)
+    queue_cancel, queue_nack = runtime.queue.cancel, runtime.queue.nack
+    create = runtime.dead_letter_store.create
+    cancel_read, cancel_go = asyncio.Event(), asyncio.Event()
+    run_held, run_go = asyncio.Event(), asyncio.Event()
+
+    async def held_cancel(queue, ident):
+        cancel_read.set()
+        await cancel_go.wait()
+        return await queue_cancel(queue, ident)
+
+    async def held_nack(*args, **kwargs):
+        await queue_nack(*args, **kwargs)
+        if hold == "after_nack" and kwargs.get("dead_letter"):
+            run_held.set()
+            await run_go.wait()
+
+    async def held_create(entry):
+        if hold == "before_record":
+            run_held.set()
+            await run_go.wait()
+        return await create(entry)
+
+    runtime.queue.cancel, runtime.queue.nack = held_cancel, held_nack
+    runtime.dead_letter_store.create = held_create
+    cancel = asyncio.create_task(runtime.cancel(job_id))
+    worker = None
+    try:
+        await _within(cancel_read.wait())
+        claimed = await runtime.queue.claim([QUEUE], visibility_timeout=60)
+        if cause == "reclaim_loop":
+            claimed.job.reclaim_count = claimed.job.max_reclaims
+        worker = asyncio.create_task(runtime.execute_claim(claimed))
+        await _within(run_held.wait())
+        cancel_go.set()
+        cancelled = await _within(cancel)
+    finally:
+        cancel_go.set()
+        run_go.set()
+    await _within(worker)
+    dead = [entry for entry in await runtime.dead_letter_store.list() if entry.job.id == job_id]
+    replayed = None
+    if dead:
+        replay = await runtime.retry_dlq_entry(dead[0].id, force=True)
+        replayed = (await runtime.queue.claim([QUEUE], visibility_timeout=60)).job.id == replay.id
+    return cancelled, await runtime.get_job_state(job_id), len(dead), replayed, events
+
+
+@pytest.mark.parametrize("hold", DEAD_LETTER_HOLDS)
+@pytest.mark.parametrize("cause", DEAD_LETTERS)
+async def test_a_cancel_racing_a_dead_letter_is_never_overwritten(backends, cause, hold):
+    outcome = await run_a_cancel_racing_a_dead_letter(backends, cause, hold)
+    assert_cancel_or_dead_letter(hold, *outcome)
+
+
+def assert_cancel_or_dead_letter(hold, cancelled, state, dead, replayed, events):
+    # Whichever of the cancel and the run's DEAD_LETTERED write lands first
+    # wins: a cancel that returned True is never overwritten, and a job that
+    # was dead-lettered keeps its dead letter, which can be replayed.
+    kinds = [event for event, _ in events]
+    if hold == "after_nack":
+        assert (cancelled, state.status, dead) == (True, JobStatus.CANCELLED, 0)
+        assert "job_dead_lettered" not in kinds and kinds.count("job_cancelled") == 1
+    else:
+        assert (cancelled, state.status, dead, replayed) == (
+            False,
+            JobStatus.DEAD_LETTERED,
+            1,
+            True,
+        )
+        assert "job_cancelled" not in kinds and kinds.count("job_dead_lettered") == 1
 
 
 # (c) wake
