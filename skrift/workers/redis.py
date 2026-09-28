@@ -203,6 +203,34 @@ redis.call('ZADD', KEYS[3], ARGV[5], ARGV[2])
 return 1
 """
 
+# A state update's write, which lands only if the update still holds the key's
+# lock: an update that stalls past the lock's expiry must not overwrite one
+# made since (#203). It writes the value, its TTL and its index entries, and
+# releases the lock, all at once.
+# KEYS: value, lock, state keys, worker job index, active worker jobs
+# ARGV: lock token, value, TTL in ms ("" for none), state key,
+#       "active"/"inactive" for a worker job state ("" for any other value),
+#       worker job index score
+_UPDATE_SCRIPT = """
+if redis.call('GET', KEYS[2]) ~= ARGV[1] then return 0 end
+if ARGV[3] == '' then
+    redis.call('SET', KEYS[1], ARGV[2])
+else
+    redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+end
+redis.call('SADD', KEYS[3], ARGV[4])
+if ARGV[5] ~= '' then
+    redis.call('ZADD', KEYS[4], ARGV[6], ARGV[4])
+    if ARGV[5] == 'active' then
+        redis.call('SADD', KEYS[5], ARGV[4])
+    else
+        redis.call('SREM', KEYS[5], ARGV[4])
+    end
+end
+redis.call('DEL', KEYS[2])
+return 1
+"""
+
 
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
@@ -327,15 +355,54 @@ class RedisStateStore(_RedisBackend):
             await self._client.srem(self._key("state", "worker_jobs_active"), key)
 
     async def update(self, key: str, fn: UpdateFn, *, ttl: TTL = None) -> Any:
-        async with self._client.lock(self._key("state", "locks", key), timeout=10):
+        """Replace ``key`` with ``fn`` of its value, under the key's lock.
+
+        Raises ``LockNotOwnedError``, having written nothing, if the lock
+        expired while ``fn`` ran and so another update may have written since.
+        ``fn`` is not run again.
+        """
+        from redis.exceptions import LockNotOwnedError
+
+        lock = self._client.lock(self._key("state", "locks", key), timeout=10)
+        await lock.acquire()
+        written = False
+        try:
             current = await self.get(key)
             next_value = fn(current)
             if inspect.isawaitable(next_value):
                 next_value = await next_value
-            # `set` resolves a callable ttl against next_value, so terminal TTL is
+            # The TTL is resolved against next_value, so terminal TTL is
             # applied based on the post-`fn` state.
-            await self.set(key, next_value, ttl=ttl)
-            return next_value
+            resolved_ttl = resolve_ttl(ttl, next_value)
+            index = self._worker_job_index(key, next_value)
+            written = bool(
+                await self._client.eval(
+                    _UPDATE_SCRIPT,
+                    5,
+                    self._state_key(key),
+                    lock.name,
+                    self._key("state", "keys"),
+                    self._key("state", "worker_jobs"),
+                    self._key("state", "worker_jobs_active"),
+                    lock.local.token,
+                    _json_dumps(_value_to_json(next_value)),
+                    "" if resolved_ttl is None else max(1, int(resolved_ttl * 1000)),
+                    key,
+                    *(index or ("", 0)),
+                )
+            )
+        finally:
+            if not written:
+                # Token-checked, so a lock another update has taken is left alone.
+                try:
+                    await lock.release()
+                except LockNotOwnedError:
+                    pass
+        if not written:
+            raise LockNotOwnedError(
+                f"State update of {key!r} not written: its lock expired before the write"
+            )
+        return next_value
 
     async def keys(self, prefix: str = "") -> list[str]:
         known = await self._client.smembers(self._key("state", "keys"))
@@ -404,17 +471,26 @@ class RedisStateStore(_RedisBackend):
     def _state_key(self, key: str) -> str:
         return self._key("state", "values", key)
 
-    async def _index_worker_job_state(self, key: str, value: Any) -> None:
+    @staticmethod
+    def _worker_job_index(key: str, value: Any) -> tuple[str, float] | None:
+        """Whether a worker job state is active, and its index score."""
+        if not key.startswith("workers:jobs:"):
+            return None
         if not isinstance(value, JobState):
             value = _value_from_json(value)
         if not isinstance(value, JobState):
+            return None
+        active = value.status in {JobStatus.CLAIMED, JobStatus.RUNNING, JobStatus.PAUSED}
+        return ("active" if active else "inactive"), _score(value.updated_at)
+
+    async def _index_worker_job_state(self, key: str, value: Any) -> None:
+        index = self._worker_job_index(key, value)
+        if index is None:
             return
-        await self._client.zadd(
-            self._key("state", "worker_jobs"),
-            {key: _score(value.updated_at)},
-        )
+        status, score = index
+        await self._client.zadd(self._key("state", "worker_jobs"), {key: score})
         active_key = self._key("state", "worker_jobs_active")
-        if value.status in {JobStatus.CLAIMED, JobStatus.RUNNING, JobStatus.PAUSED}:
+        if status == "active":
             await self._client.sadd(active_key, key)
         else:
             await self._client.srem(active_key, key)
