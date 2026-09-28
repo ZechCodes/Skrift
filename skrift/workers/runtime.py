@@ -987,6 +987,11 @@ class WorkerRuntime:
         return had_activity
 
     async def execute_claim(self, claimed: ClaimedJob, *, inline: bool = False) -> None:
+        if inline:
+            # An inline claim carries the envelope of the state it was read
+            # from, which the in-memory store keeps as is: the run works on its
+            # own copy, so a start that is refused leaves the stored state alone.
+            claimed = claimed.model_copy(update={"job": claimed.job.model_copy(deep=True)})
         job = claimed.job
         if not inline and self._claim_expired(claimed):
             logger.warning(
@@ -1017,8 +1022,16 @@ class WorkerRuntime:
                 attempt_history=attempt_history,
             ),
             order=None if inline else claimed.claim_order,
+            inline=inline,
         )
         if run is None:
+            if inline:
+                logger.info(
+                    "Job %s was cancelled or finished before its inline run started; "
+                    "skipping the run",
+                    job.id,
+                )
+                return
             logger.warning(
                 "Job %s was claimed again after this worker's claim; skipping the run",
                 job.id,
@@ -1437,17 +1450,25 @@ class WorkerRuntime:
         expires_at = claimed.claimed_at + timedelta(seconds=claimed.visibility_timeout)
         return utcnow() >= expires_at
 
-    async def _start_run(self, running: JobState, *, order: int | None) -> _Run | None:
+    async def _start_run(
+        self, running: JobState, *, order: int | None, inline: bool = False
+    ) -> _Run | None:
         """Write a run's RUNNING state unless a later claim's run has written.
 
         Returns None, writing nothing, if it has: this worker's claim expired and
         the job was claimed again. What the write replaced is kept so a run whose
-        claim turns out to be lost can put it back.
+        claim turns out to be lost can put it back. An inline run has no claim
+        for ``cancel`` to remove, so it also returns None once the job is
+        cancelled or finished.
         """
         run = _Run(run_id=uuid4().hex, order=order, job_id=running.job.id)
         running.run_id, running.run_order = run.run_id, order
         written, run.replaced = await self._write_state_if(
-            running, lambda current: self._not_superseded(current, run)
+            running,
+            lambda current: (
+                not (inline and current is not None and current.status in TERMINAL_JOB_STATUSES)
+                and self._not_superseded(current, run)
+            ),
         )
         return run if written else None
 
