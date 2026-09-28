@@ -280,6 +280,73 @@ async def test_concurrent_state_store_updates_both_land(
     await _assert_concurrent_updates_both_land(store, existing=existing)
 
 
+def _job_state(status: JobStatus) -> JobState:
+    job = JobEnvelope(id="lost-lock", type="work", queue="default", payload={})
+    return JobState(job=job, status=status)
+
+
+@pytest.mark.parametrize("kind", ["plain", "job"])
+async def test_a_redis_state_update_that_lost_its_lock_does_not_write(kind, fake_redis_client):
+    """An update whose lock expired while it held the value writes nothing (#203).
+
+    The lock's 10 s expiry is simulated by deleting the lock key. Another update
+    then takes the lock and writes; the first one's write must not replace that
+    value, its TTL or its index entries.
+    """
+    from redis.exceptions import LockNotOwnedError
+
+    store = RedisStateStore(client=fake_redis_client, prefix="contract:state")
+    if kind == "plain":
+        key, initial, stale, fresh = "runstate:lost-lock", ["initial"], ["first"], ["second"]
+    else:
+        key = "workers:jobs:lost-lock"
+        initial = _job_state(JobStatus.SUBMITTED)
+        stale, fresh = _job_state(JobStatus.COMPLETED), _job_state(JobStatus.RUNNING)
+    await store.set(key, initial)
+    read, release = asyncio.Event(), asyncio.Event()
+
+    async def stalled(value):
+        read.set()
+        await release.wait()
+        return stale
+
+    first = asyncio.create_task(store.update(key, stalled))
+    try:
+        await asyncio.wait_for(read.wait(), 5)
+        await fake_redis_client.delete(store._key("state", "locks", key))  # expired
+        await asyncio.wait_for(store.update(key, lambda value: fresh, ttl=60), 5)
+    finally:
+        release.set()
+    with pytest.raises(LockNotOwnedError):
+        await asyncio.wait_for(first, 5)
+
+    assert await store.get(key) == fresh
+    assert await fake_redis_client.pttl(store._state_key(key)) > 0
+    if kind == "job":
+        active = store._key("state", "worker_jobs_active")
+        assert await fake_redis_client.sismember(active, key)
+        index = store._key("state", "worker_jobs")
+        assert await fake_redis_client.zscore(index, key) == fresh.updated_at.timestamp()
+
+
+async def test_a_redis_state_update_releases_its_lock_whether_it_writes_or_raises(
+    fake_redis_client,
+):
+    store = RedisStateStore(client=fake_redis_client, prefix="contract:state")
+    lock = store._key("state", "locks", "runstate:release")
+
+    assert await store.update("runstate:release", lambda value: 1) == 1
+    assert not await fake_redis_client.exists(lock)
+
+    def fail(value):
+        raise RuntimeError("fn failed")
+
+    with pytest.raises(RuntimeError):
+        await store.update("runstate:release", fail)
+    assert not await fake_redis_client.exists(lock)
+    assert await asyncio.wait_for(store.update("runstate:release", lambda value: 2), 1) == 2
+
+
 @pytest.mark.parametrize(
     "event_log_factory",
     [
