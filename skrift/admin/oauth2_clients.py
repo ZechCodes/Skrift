@@ -192,10 +192,15 @@ class OAuth2ClientAdminController(Controller):
             flash_error(request, "Client not found")
             return Redirect(path="/admin/oauth-clients")
 
-        # Dynamically-registered clients are public by construction; issuing a
-        # secret would promote them to confidential, which DCR does not permit.
+        # A dynamically registered client gets its credentials from registration.
+        # A secret issued here would promote a public one to confidential, and a
+        # confidential one's registrant has no way to receive the new secret.
         if client.is_dynamically_registered:
-            flash_error(request, "Dynamically registered clients are public and cannot be given a secret")
+            flash_error(
+                request,
+                "Dynamically registered clients receive their credentials when they "
+                "register; their secrets are not managed from the admin",
+            )
             return Redirect(path=f"/admin/oauth-clients/{client_db_id}/edit")
 
         new_secret = await oauth2_service.regenerate_client_secret(db_session, client)

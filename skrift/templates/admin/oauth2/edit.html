@@ -45,11 +45,15 @@
     <p><strong>Client ID:</strong> <code>{{ client.client_id }}</code>
         <button type="button" class="sk-btn-outline sk-btn-small" onclick="copyValue(this, '{{ client.client_id }}')">Copy</button>
     </p>
+    {% if client.is_dynamically_registered %}
+    <p><strong>Client Secret:</strong> <em class="sk-hint">Dynamically registered clients receive their credentials when they register; their secrets are not managed from the admin.</em></p>
+    {% else %}
     <p><strong>Client Secret:</strong> <em class="sk-hint">Stored as a salted hash &mdash; not recoverable. Use <strong>Regenerate</strong> to issue a new secret.</em></p>
     <form method="post" action="/admin/oauth-clients/{{ client.id }}/regenerate-secret" style="display: inline;">
         {{ csrf_field() }}
         <button type="submit" class="sk-btn-outline sk-btn-small" onclick="return confirm('Regenerate secret? The old secret will stop working immediately.')">Regenerate Secret</button>
     </form>
+    {% endif %}
 </div>
 <script nonce="{{ csp_nonce() }}">
 function copyValue(btn, text) {
