@@ -88,7 +88,9 @@ class JobEnvelope(BaseModel):
     submitted_at: datetime = Field(default_factory=utcnow)
     attempt: int = 0
     max_attempts: int = 3
-    visibility_timeout: float = 30.0
+    # Seconds a worker holds the claim for, at least; None means the worker's
+    # own visibility timeout.
+    visibility_timeout: float | None = None
     scheduled_for: datetime | None = None
     ready_since: datetime | None = None
     correlation_id: str | None = None

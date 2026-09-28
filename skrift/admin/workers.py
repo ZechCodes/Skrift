@@ -78,7 +78,9 @@ def _serialize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
                 "payload": handler.payload_model.__name__,
                 "queue": handler.queue,
                 "max_attempts": handler.retry_policy.max_attempts,
-                "visibility_timeout": int(handler.visibility_timeout),
+                "visibility_timeout": int(
+                    max(snapshot["visibility_timeout"], handler.visibility_timeout or 0)
+                ),
             }
             for handler in snapshot["handlers"]
         ],

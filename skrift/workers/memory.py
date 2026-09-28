@@ -379,13 +379,14 @@ class InMemoryQueue:
                 if entry is None:
                     continue
                 token = uuid4().hex
+                lease = max(visibility_timeout, entry.job.visibility_timeout or 0)
                 entry.claim_token = token
-                entry.claim_expires_at = _now() + timedelta(seconds=visibility_timeout)
+                entry.claim_expires_at = _now() + timedelta(seconds=lease)
                 entry.job.ready_since = None
                 return ClaimedJob(
                     job=entry.job,
                     token=token,
-                    visibility_timeout=visibility_timeout,
+                    visibility_timeout=lease,
                     claim_order=next(self._claim_orders),
                 )
             return None

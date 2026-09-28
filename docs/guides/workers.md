@@ -79,6 +79,11 @@ async def resize_image(job: ResizeImage) -> dict:
     return {"asset_id": job.asset_id, "status": "resized"}
 ```
 
+A worker holds each claim for the longer of the handler's `visibility_timeout` and `workers.visibility_timeout`. A handler that sets no `visibility_timeout` gets the worker's.
+
+!!! note "Changed: no implicit 30 s per job"
+    `visibility_timeout` on `@skrift.handler`, `HandlerRegistry.register` and `JobEnvelope` now defaults to `None`, meaning "use the worker's `workers.visibility_timeout`". It used to default to `30.0`, and that value was stored on every job. A job that relied on the implicit 30 s now gets the worker's value instead; set `visibility_timeout=30` on the handler to keep it.
+
 Handlers are registered when their module is imported. Add the module to `workers.imports` if it is not already imported by a controller or hook:
 
 ```yaml
@@ -155,7 +160,7 @@ handle = await skrift.submit(
 | `retry_policy` | Override max attempts, backoff, and jitter |
 | `correlation_id` | Store application metadata such as a trace or request id |
 | `parent_job_id` | Store lineage metadata linking this job to another job |
-| `visibility_timeout` | Override the claim timeout for this job |
+| `visibility_timeout` | Claim timeout for this job; a worker holds the claim for the longer of this and `workers.visibility_timeout`. Defaults to the handler's, and to the worker's when neither sets one |
 
 `correlation_id` and `parent_job_id` are metadata fields. Skrift stores them in job state, but they do not create cascading cancellation, lineage traversal, or admin filtering by themselves.
 

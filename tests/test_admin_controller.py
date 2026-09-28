@@ -160,6 +160,8 @@ class TestWorkersAdminController:
         assert payload["jobs_total"] == 1
         assert payload["jobs_active_total"] == 0
         assert payload["handlers"][0]["payload"] == "AdminObserved"
+        # A handler without its own timeout is held for the worker's.
+        assert payload["handlers"][0]["visibility_timeout"] == 30
         assert payload["events"][0]["type"] == "job_completed"
 
     @pytest.mark.asyncio

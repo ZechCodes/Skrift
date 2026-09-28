@@ -21,7 +21,7 @@ class HandlerDescriptor:
     payload_model: type[BaseModel]
     queue: str
     retry_policy: RetryPolicy
-    visibility_timeout: float
+    visibility_timeout: float | None
     dead_callback: Callable[..., Any] | None = None
 
 
@@ -42,7 +42,7 @@ class HandlerRegistry:
         queue: str = "default",
         retry_policy: RetryPolicy | None = None,
         max_attempts: int | None = None,
-        visibility_timeout: float = 30.0,
+        visibility_timeout: float | None = None,
     ) -> HandlerDescriptor:
         if job_type in self._by_type:
             raise ValueError(f"Handler already registered for job type {job_type!r}")
@@ -131,7 +131,7 @@ def handler(
     queue: str = "default",
     retry_policy: RetryPolicy | None = None,
     max_attempts: int | None = None,
-    visibility_timeout: float = 30.0,
+    visibility_timeout: float | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a worker handler at import time.
 
