@@ -387,8 +387,10 @@ class InMemoryQueue:
                 entry.claim_expires_at = _now() + timedelta(seconds=lease)
                 entry.claimed_by = asyncio.current_task()
                 entry.job.ready_since = None
+                # A copy, so nothing the worker does to its envelope reaches the
+                # queue's, or a later claim's once this one has expired.
                 return ClaimedJob(
-                    job=entry.job,
+                    job=entry.job.model_copy(),
                     token=token,
                     visibility_timeout=lease,
                     claim_order=next(self._claim_orders),

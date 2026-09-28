@@ -363,14 +363,40 @@ def workers_run(
             "Worker process draining "
             f"{', '.join(selected_queues)} with concurrency {runtime.config.concurrency}"
         )
+        exit_code = 0
         try:
             await shutdown_event.wait()
+        except BaseException:
+            exit_code = 1
+            raise
         finally:
-            await runtime.stop()
+            abandoned = await runtime.stop()
             await notifications.stop_backend()
             await db_config.get_engine().dispose()
+            if abandoned:
+                _exit_abandoning(abandoned, exit_code)
 
     asyncio.run(_run())
+
+
+def _exit_abandoning(job_ids: list[str], exit_code: int) -> None:
+    """Exit now, leaving the jobs a worker's drain abandoned.
+
+    A handler that ignored its cancellation is still running, and
+    ``asyncio.run`` would wait for it at exit, so the process exits directly.
+    """
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "Worker stopped with %d job(s) abandoned, their claims held until they "
+        "expire: %s; exiting without waiting for them",
+        len(job_ids),
+        ", ".join(job_ids),
+    )
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)
 
 
 @workers_group.command("persister")

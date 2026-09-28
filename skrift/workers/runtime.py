@@ -186,31 +186,44 @@ class WorkerPool:
         self._busy: set[asyncio.Task] = set()
         self._idling: set[asyncio.Task] = set()
         self._stopping = asyncio.Event()
+        self._drain: asyncio.Task | None = None
 
     async def start(self) -> None:
         if self._tasks:
             return
         self._stopping.clear()
+        self._drain = None
         self._tasks = [
             asyncio.create_task(self._run_worker(), name=f"skrift-worker-{i}")
             for i in range(self._concurrency)
         ]
 
-    async def stop(self) -> None:
+    async def stop(self) -> list[str]:
         """Stop claiming, then drain the jobs already running.
+
+        Every call waits for the same drain.
 
         They get ``drain_timeout`` to finish. Then any still in their handler
         are cancelled and handed back to the queue, and any worker stuck
         claiming is cancelled. A handler still running ``drain_cancel_timeout``
-        later is left behind with its claim, to expire; a job's own ack, nack
+        later is abandoned with its claim, to expire; a job's own ack, nack
         and state writes are always waited for.
+
+        Returns the ids of the jobs abandoned with their claims held: those
+        whose handler ignored its cancellation, still running as tasks, and
+        those the queue failed to take back.
         """
+        if self._drain is None:
+            self._drain = asyncio.create_task(self._drain_workers(), name="skrift-worker-drain")
+        return await asyncio.shield(self._drain)
+
+    async def _drain_workers(self) -> list[str]:
         self._stopping.set()
         for task in self._idling:
             task.cancel()
         tasks, self._tasks = self._tasks, []
         if not tasks:
-            return
+            return []
         config = self._runtime.config
         _, running = await asyncio.wait(tasks, timeout=config.drain_timeout)
         if running:
@@ -222,12 +235,16 @@ class WorkerPool:
         if writing:
             await asyncio.wait(writing)
         for task in running - writing:
+            job_id = self._runtime._handler_tasks.get(task)
+            self._runtime._abandoned.append(job_id)
             logger.warning(
-                "Worker %s's job ignored its cancellation for %ss; leaving it running "
-                "with its claim held until the claim expires",
-                task.get_name(),
+                "Job %s ignored its cancellation for %ss; abandoning it running on "
+                "worker %s, with its claim held until the claim expires",
+                job_id,
                 config.drain_cancel_timeout,
+                task.get_name(),
             )
+        return list(self._runtime._abandoned)
 
     async def _run_worker(self) -> None:
         current_interval = self._poll_interval
@@ -306,11 +323,13 @@ class WorkerRuntime:
         self._queue_history_lock = asyncio.Lock()
         self._queue_history_task: asyncio.Task | None = None
         self._reaper_task: asyncio.Task | None = None
-        # Worker tasks inside a claimed job's handler; those a drain cancelled;
-        # and whether a drain is stopping handlers, so none starts.
-        self._handler_tasks: set[asyncio.Task] = set()
+        # Worker tasks inside a claimed job's handler, with the job's id; those a
+        # drain cancelled; whether a drain is stopping handlers, so none starts;
+        # and the jobs a drain abandoned with their claims held.
+        self._handler_tasks: dict[asyncio.Task, str] = {}
         self._drained_tasks: set[asyncio.Task] = set()
         self._stopping_handlers = False
+        self._abandoned: list[str] = []
         self._nack_accepts_job: tuple[Queue, bool] | None = None
         self._queue_history_interval = 2.0
         self._queue_history_idle_interval = 30.0
@@ -322,6 +341,7 @@ class WorkerRuntime:
             return
         await self.record_queue_history()
         self._stopping_handlers = False
+        self._abandoned = []
         self._pool = WorkerPool(
             self,
             queues=list(self.config.queues),
@@ -342,7 +362,14 @@ class WorkerRuntime:
                 name="skrift-worker-reaper",
             )
 
-    async def stop(self) -> None:
+    async def stop(self) -> list[str]:
+        """Stop the worker pool, draining it; see ``WorkerPool.stop``.
+
+        Returns the ids of the jobs the drain abandoned with their claims held.
+        A handler among them that ignored its cancellation is still running: a
+        process should exit without waiting for it.
+        """
+        abandoned: list[str] = []
         if self._reaper_task is not None:
             self._reaper_task.cancel()
             await asyncio.gather(self._reaper_task, return_exceptions=True)
@@ -352,8 +379,9 @@ class WorkerRuntime:
             await asyncio.gather(self._queue_history_task, return_exceptions=True)
             self._queue_history_task = None
         if self._pool is not None:
-            await self._pool.stop()
+            abandoned = await self._pool.stop()
             self._pool = None
+        return abandoned
 
     async def submit(
         self,
@@ -1009,7 +1037,7 @@ class WorkerRuntime:
             return await self._call_handler(descriptor, job)
         if self._stopping_handlers:
             raise _Drained
-        self._handler_tasks.add(task)
+        self._handler_tasks[task] = job.id
         try:
             return await self._call_handler(descriptor, job)
         except BaseException:
@@ -1017,7 +1045,7 @@ class WorkerRuntime:
                 raise _Drained from None
             raise
         finally:
-            self._handler_tasks.discard(task)
+            self._handler_tasks.pop(task, None)
             if task in self._drained_tasks:
                 self._drained_tasks.discard(task)
                 task.uncancel()
@@ -1028,7 +1056,7 @@ class WorkerRuntime:
     def _stop_handlers(self, tasks: set[asyncio.Task]) -> None:
         """Cancel the handlers these worker tasks are running, and start no more."""
         self._stopping_handlers = True
-        for task in tasks & self._handler_tasks:
+        for task in tasks & self._handler_tasks.keys():
             self._drained_tasks.add(task)
             task.cancel()
 
@@ -1039,27 +1067,44 @@ class WorkerRuntime:
 
         The run charges no attempt, and a nack is not a reclaim. The job's
         state goes back to submitted, keeping the pause state it resumed from.
+        If the queue fails to take the job back, the run's own state is put
+        back and the job is abandoned with its claim, to expire.
         """
-        job = claimed.job
-        job.attempt = max(0, job.attempt - 1)
-        if not await self._set_run_state(
-            JobState(
-                job=job,
-                status=JobStatus.SUBMITTED,
-                attempt=job.attempt,
-                last_error=previous_state.last_error if previous_state is not None else None,
-                paused_state=previous_state.paused_state if previous_state is not None else {},
-                attempt_history=(
-                    previous_state.attempt_history if previous_state is not None else []
-                ),
-            ),
-            run,
-        ):
+        job = claimed.job.model_copy(update={"attempt": max(0, claimed.job.attempt - 1)})
+        handed_back = JobState(
+            job=job,
+            status=JobStatus.SUBMITTED,
+            attempt=job.attempt,
+            last_error=previous_state.last_error if previous_state is not None else None,
+            paused_state=previous_state.paused_state if previous_state is not None else {},
+            attempt_history=previous_state.attempt_history if previous_state is not None else [],
+        )
+        handed_back.run_id, handed_back.run_order = run.run_id, run.order
+        written, running = await self._write_state_if(
+            handed_back, lambda current: self._not_superseded(current, run)
+        )
+        if not written:
             self._log_claim_lost(job)
             return
-        if not await self._settle_claim(
-            job, self._nack(job, claimed.token, retry_at=utcnow()), run=run
-        ):
+        try:
+            settled = await self._settle_claim(
+                job, self._nack(job, claimed.token, retry_at=utcnow()), run=run
+            )
+        except Exception as exc:  # noqa: BLE001 - any failure leaves the claim held
+            if running is not None:
+                await self._write_state_if(
+                    running.model_copy(),
+                    lambda current: current is not None and current.run_id == run.run_id,
+                )
+            self._abandoned.append(job.id)
+            logger.error(
+                "Job %s could not be handed back to the queue (%r); abandoning it "
+                "with its claim held until the claim expires",
+                job.id,
+                exc,
+            )
+            return
+        if not settled:
             return
         logger.info(
             "Job %s was still running when its worker stopped; released it for another worker",
@@ -1134,9 +1179,9 @@ class WorkerRuntime:
     async def _handle_pause(
         self, claimed: ClaimedJob, pause: Pause, *, inline: bool, run: _Run
     ) -> None:
-        job = claimed.job
-        job.attempt = max(0, job.attempt - 1)
-        job.scheduled_for = pause.resume_at
+        job = claimed.job.model_copy(
+            update={"attempt": max(0, claimed.job.attempt - 1), "scheduled_for": pause.resume_at}
+        )
         previous_state = await self.get_job_state(job.id)
         # Recorded before the nack so a run resumed right after it sees this
         # pause state; dropped if another run already owns the job's state.

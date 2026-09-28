@@ -11,6 +11,11 @@ has an upper bound; the runtime's own writes for a job are never cut short.
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import signal
+import sys
+import textwrap
 import time
 
 import pytest
@@ -33,7 +38,7 @@ from skrift.workers import (
     SQLAlchemyQueue,
     SQLAlchemyStateStore,
 )
-from skrift.workers.models import JobStatus
+from skrift.workers.models import JobStatus, utcnow
 from skrift.workers.registry import registry
 
 BACKENDS = ["memory", "sqlalchemy", "redis"]
@@ -136,8 +141,8 @@ class Handler:
         return job.n
 
 
-def _register(handler, **options):
-    @skrift.handler("drain.work", **options)
+def _register(handler, *, name="drain.work", **options):
+    @skrift.handler(name, **options)
     async def work(job: Work):
         return await handler(job)
 
@@ -175,7 +180,9 @@ async def test_a_job_running_past_the_drain_window_goes_straight_to_a_successor(
     handle = await runtime.submit(Work(n=1))
     await handler.started.wait()
 
-    assert await _stop(runtime) < 2
+    started = time.monotonic()
+    assert await asyncio.wait_for(runtime.stop(), 5) == []  # nothing abandoned
+    assert time.monotonic() - started < 2
     state = await handle.status()
     assert state.status == JobStatus.SUBMITTED
     assert state.attempt == 0  # the drain charged no attempt: max_attempts=1 still runs it
@@ -275,7 +282,9 @@ async def test_a_handler_ignoring_its_cancellation_does_not_hold_up_the_stop(bac
     await handler.started.wait()
 
     try:
-        assert await _stop(runtime) < 1
+        started = time.monotonic()
+        assert await asyncio.wait_for(runtime.stop(), 5) == [handle.id]
+        assert time.monotonic() - started < 1
         assert handler.log == [("start", 1), ("cancelled", 1)]
         # Its claim is left to expire: the job is not handed on under it.
         assert (await handle.status()).status == JobStatus.RUNNING
@@ -283,6 +292,183 @@ async def test_a_handler_ignoring_its_cancellation_does_not_hold_up_the_stop(bac
     finally:
         handler.release.set()
         await asyncio.sleep(0.05)
+
+
+@pytest.mark.parametrize("backends", BACKENDS, indirect=True)
+async def test_a_hand_back_the_queue_fails_leaves_the_run_its_claim_and_is_reported(
+    backends, caplog
+):
+    handler = Handler()
+    _register(handler)
+    queue = backends["queue"]
+
+    async def failing_nack(*args, **kwargs):
+        raise RuntimeError("queue disconnected")
+
+    runtime = _worker(backends, visibility_timeout=1, drain_timeout=0.1)
+    await runtime.start()
+    handle = await runtime.submit(Work(n=1))
+    await handler.started.wait()
+    running = await handle.status()
+    queue.nack = failing_nack
+
+    with caplog.at_level(logging.ERROR, logger="skrift.workers.runtime"):
+        assert await asyncio.wait_for(runtime.stop(), 5) == [handle.id]
+
+    del queue.nack
+    state = await handle.status()
+    assert (state.status, state.attempt, state.run_id) == (
+        JobStatus.RUNNING,
+        1,
+        running.run_id,
+    )
+    assert handle.id in caplog.text
+    assert "queue disconnected" in caplog.text
+    assert await queue.claim(["default"], visibility_timeout=30) is None  # still held
+
+    handler.started.clear()
+    handler.seconds = 0
+    successor = _worker(backends, visibility_timeout=1, reaper_interval=0.05)
+    await successor.start()
+    try:
+        assert await asyncio.wait_for(successor.handle(handle.id).result(), 5) == 1
+    finally:
+        await asyncio.wait_for(successor.stop(), 5)
+    assert handler.log == [("start", 1), ("cancelled", 1), ("start", 1), ("finished", 1)]
+
+
+class Stale:
+    """A handler whose first run, on worker A, blocks past its claim until
+    ``a_done`` is set and returns ``a_result`` (or is cancelled); the second, on
+    successor B, waits for ``b_done`` and returns or raises ``b_result``."""
+
+    def __init__(self, *, a_result=None, b_result="B"):
+        self.a_result, self.b_result = a_result, b_result
+        self.a_running, self.a_done = asyncio.Event(), asyncio.Event()
+        self.b_running, self.b_done = asyncio.Event(), asyncio.Event()
+        self.calls = 0
+
+    async def __call__(self, job: Work):
+        self.calls += 1
+        if self.calls == 1:
+            self.a_running.set()
+            await self.a_done.wait()
+            return self.a_result
+        self.b_running.set()
+        await self.b_done.wait()
+        if isinstance(self.b_result, Exception):
+            raise self.b_result
+        return self.b_result
+
+
+class SharingQueue(InMemoryQueue):
+    """Hands out its own stored envelope on a claim, as a custom queue may."""
+
+    async def claim(self, queues, *, visibility_timeout):
+        claimed = await super().claim(queues, visibility_timeout=visibility_timeout)
+        if claimed is not None:
+            claimed.job = self._entries[claimed.job.queue][claimed.job.id].job
+        return claimed
+
+
+async def _stale_worker(queue_class, stale, **config):
+    """Worker A, running the job's first run with a 0.2 s claim."""
+    queue, store = queue_class(), InMemoryStateStore()
+    runtime = _worker({"queue": queue, "state_store": store}, visibility_timeout=0.2, **config)
+    await runtime.start()
+    handle = await runtime.submit(Work(n=1))
+    await asyncio.wait_for(stale.a_running.wait(), 3)
+    return runtime, handle
+
+
+async def _successor_takes_over(runtime, stale):
+    """Once worker A's claim expires, successor B claims the job and starts its run."""
+    queue = runtime.queue
+    await asyncio.sleep(0.25)
+    await queue._release_expired_claims(utcnow())
+    claim = await queue.claim(["default"], visibility_timeout=30)
+    assert claim is not None
+    successor = _worker({"queue": queue, "state_store": runtime.state_store})
+    running = asyncio.create_task(successor.execute_claim(claim))
+    await asyncio.wait_for(stale.b_running.wait(), 3)
+    return successor, claim, running
+
+
+@pytest.mark.parametrize("queue_class", [InMemoryQueue, SharingQueue])
+async def test_a_stale_hand_back_leaves_the_successors_run_alone(queue_class):
+    stale = Stale()
+    _register(stale)
+    runtime, handle = await _stale_worker(queue_class, stale, drain_timeout=0.7)
+    stopping = asyncio.create_task(runtime.stop())
+    successor, claim, running = await _successor_takes_over(runtime, stale)
+    attempt, run_id = claim.job.attempt, (await successor.get_job_state(handle.id)).run_id
+
+    await asyncio.wait_for(stopping, 3)  # A is cancelled and tries to hand the job back
+
+    state = await successor.get_job_state(handle.id)
+    assert (state.status, state.run_id, state.job.attempt) == (JobStatus.RUNNING, run_id, attempt)
+    assert claim.job.attempt == attempt
+    stale.b_done.set()
+    await asyncio.wait_for(running, 3)
+    assert (await successor.get_job_state(handle.id)).result == "B"
+
+
+async def test_a_stale_hand_back_does_not_give_a_failing_successor_another_attempt():
+    # The shared envelope carries A's attempt, so B's run is its last of two.
+    stale = Stale(b_result=RuntimeError("failed on its last attempt"))
+    _register(stale, max_attempts=2)
+    runtime, handle = await _stale_worker(SharingQueue, stale, drain_timeout=0.7)
+    stopping = asyncio.create_task(runtime.stop())
+    successor, claim, running = await _successor_takes_over(runtime, stale)
+    assert claim.job.attempt == claim.job.max_attempts == 2
+
+    await asyncio.wait_for(stopping, 3)
+    stale.b_done.set()
+    await asyncio.wait_for(running, 3)
+
+    state = await successor.get_job_state(handle.id)
+    assert (state.status, state.attempt) == (JobStatus.DEAD_LETTERED, 2)
+
+
+@pytest.mark.parametrize("queue_class", [InMemoryQueue, SharingQueue])
+async def test_a_stale_pause_leaves_the_successors_run_alone(queue_class):
+    stale = Stale(a_result=Pause(state={"step": 2}))
+    _register(stale)
+    runtime, handle = await _stale_worker(queue_class, stale)
+    successor, claim, running = await _successor_takes_over(runtime, stale)
+    attempt, run_id = claim.job.attempt, (await successor.get_job_state(handle.id)).run_id
+
+    stale.a_done.set()  # A's handler pauses after its claim was taken over
+    await asyncio.sleep(0.1)
+
+    state = await successor.get_job_state(handle.id)
+    assert (state.status, state.run_id, state.job.attempt) == (JobStatus.RUNNING, run_id, attempt)
+    assert (claim.job.attempt, claim.job.scheduled_for) == (attempt, None)
+    stale.b_done.set()
+    await asyncio.wait_for(running, 3)
+    assert (await successor.get_job_state(handle.id)).result == "B"
+    await _stop(runtime)
+
+
+@pytest.mark.parametrize("backends", BACKENDS, indirect=True)
+async def test_a_run_whose_claim_expired_is_a_reclaim_not_an_attempt(backends):
+    stale = Stale()
+    _register(stale)
+    runtime = _worker(backends, visibility_timeout=0.2, drain_timeout=0.1)
+    await runtime.start()
+    handle = await runtime.submit(Work(n=1))
+    await asyncio.wait_for(stale.a_running.wait(), 3)
+    stale.b_done.set()
+    successor = _worker(backends, reaper_interval=0.05)
+    await successor.start()
+    try:
+        assert await asyncio.wait_for(successor.handle(handle.id).result(), 5) == "B"
+    finally:
+        await asyncio.wait_for(successor.stop(), 5)
+        await _stop(runtime)
+
+    state = await handle.status()
+    assert (state.attempt, state.job.attempt, state.job.reclaim_count) == (1, 1, 1)
 
 
 async def test_a_handler_turning_its_cancellation_into_an_error_is_handed_back_not_failed():
@@ -365,6 +551,38 @@ async def test_a_stop_waits_for_an_ack_already_under_way(backends):
     assert await queue.claim(["default"], visibility_timeout=30) is None
 
 
+@pytest.mark.parametrize("backends", BACKENDS, indirect=True)
+async def test_a_second_stop_waits_for_the_first_ones_drain(backends):
+    handler = Handler(seconds=0)
+    _register(handler)
+    queue = backends["queue"]
+    ack = queue.ack
+    acking, acked = asyncio.Event(), asyncio.Event()
+
+    async def gated_ack(*args, **kwargs):
+        acking.set()
+        await acked.wait()
+        return await ack(*args, **kwargs)
+
+    queue.ack = gated_ack
+    runtime = _worker(backends)
+    await runtime.start()
+    handle = await runtime.submit(Work(n=1))
+    await asyncio.wait_for(acking.wait(), 3)
+
+    first = asyncio.create_task(runtime.stop())
+    await asyncio.sleep(0.05)
+    second = asyncio.create_task(runtime.stop())
+    await asyncio.sleep(0.05)
+    assert not first.done()
+    assert not second.done()
+
+    acked.set()
+    await asyncio.wait_for(asyncio.gather(first, second), 3)
+    del queue.ack
+    assert (await handle.status()).status == JobStatus.COMPLETED
+
+
 def test_the_default_drain_ends_inside_kubernetes_grace_period():
     from skrift.config import WorkersConfig
 
@@ -384,3 +602,85 @@ def test_the_worker_process_uses_the_configured_drain():
         settings, session_maker=None, queues=["default"], concurrency=1
     )
     assert (runtime.config.drain_timeout, runtime.config.drain_cancel_timeout) == (7, 2)
+
+
+STUBBORN_HANDLER = """
+import asyncio
+import pathlib
+
+from pydantic import BaseModel
+
+import skrift
+
+
+class Work(BaseModel):
+    n: int
+
+
+@skrift.handler("drain.stubborn")
+async def stubborn(job: Work) -> None:
+    pathlib.Path("started").touch()
+    while True:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass
+"""
+
+
+async def test_a_worker_process_exits_past_a_handler_ignoring_its_cancellation(
+    tmp_path, worker_session_maker
+):
+    # A standalone worker's asyncio.run() waits for every task left at exit, so
+    # a handler that swallows its cancellation must not keep the process alive.
+    (tmp_path / "stubborn.py").write_text(STUBBORN_HANDLER)
+    (tmp_path / "app.yaml").write_text(
+        textwrap.dedent(
+            f"""
+            db:
+              url: sqlite+aiosqlite:///{tmp_path / "drain.db"}
+            workers:
+              enabled: true
+              preset: single_node
+              drain_timeout: 0.2
+              drain_cancel_timeout: 0.3
+            """
+        )
+    )
+    backends = {
+        "state_store": SQLAlchemyStateStore(session_maker=worker_session_maker),
+        "event_log": SQLAlchemyEventLog(session_maker=worker_session_maker),
+        "queue": SQLAlchemyQueue(session_maker=worker_session_maker),
+        "dead_letter_store": SQLAlchemyDeadLetterStore(session_maker=worker_session_maker),
+    }
+    _register(Handler(), name="drain.stubborn")
+    handle = await _worker(backends).submit("drain.stubborn", {"n": 1})  # not started
+
+    env = {**os.environ, "SECRET_KEY": "test-secret", "PYTHONPATH": str(tmp_path)}
+    command = ["-m", "skrift", "-f", "app.yaml", "workers", "run", "--import", "stubborn"]
+    worker = await asyncio.create_subprocess_exec(
+        sys.executable,
+        *command,
+        cwd=tmp_path,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        for _ in range(300):
+            if (tmp_path / "started").exists() or worker.returncode is not None:
+                break
+            await asyncio.sleep(0.05)
+        started = time.monotonic()
+        worker.send_signal(signal.SIGTERM)
+        output = (await asyncio.wait_for(worker.communicate(), 10))[0].decode()
+    finally:
+        if worker.returncode is None:
+            worker.kill()
+            await worker.communicate()
+
+    assert (tmp_path / "started").exists(), output
+    assert worker.returncode == 0, output
+    assert time.monotonic() - started < 3, output
+    assert handle.id in output
+    assert "abandon" in output
