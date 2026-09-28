@@ -24,7 +24,7 @@ from skrift.agents.registry import registry as agent_registry
 from skrift.agents.runtime import register_agent_handlers
 from skrift.agents.session import Session
 from skrift.agents.state import load_runstate
-from skrift.workers.models import JobStatus
+from skrift.workers.models import JobStatus, utcnow
 from skrift.workers.registry import handler
 from skrift.workers.registry import registry as worker_registry
 
@@ -192,3 +192,37 @@ async def test_a_run_awaiting_a_sub_agent_no_draining_worker_will_claim_is_hande
         assert await asyncio.wait_for(Session(session.id).result(), 5) == "parent done"
     finally:
         await asyncio.wait_for(successor.stop(), 5)
+
+
+async def test_an_abandoned_agent_run_stops_renewing_its_claim():
+    # Its handler ignores the drain's cancellation and keeps running; the claim
+    # it held must still expire, so another worker can take the job.
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def stubborn_deps(ctx):
+        started.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pass
+
+    agent = skrift.Agent(
+        TestModel(custom_output_text="done"),
+        name="stubborn",
+        deps_factory=stubborn_deps,
+    )
+    runtime = _pool(drain_timeout=0.05, drain_cancel_timeout=0.05)
+    await runtime.start()
+    await agent.run("go", dispatch="queued")
+    await asyncio.wait_for(started.wait(), 5)
+    try:
+        (job_id,) = await asyncio.wait_for(runtime.stop(), 5)
+        await asyncio.sleep(3 * LEASE)
+        queue = runtime.queue
+        await queue._release_expired_claims(utcnow())
+        claimed = await queue.claim(["agents", "agents-priority"], visibility_timeout=30)
+        assert claimed is not None and claimed.job.id == job_id
+    finally:
+        release.set()
+        await asyncio.sleep(0.05)

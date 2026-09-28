@@ -12,7 +12,7 @@ import warnings
 from collections import deque
 from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any, Literal
@@ -124,7 +124,8 @@ class _Run:
 
     ``order`` is None for inline runs, which no other run can overlap. A run
     a drain abandoned in its handler settles nothing: its claim is left to
-    expire, so the process can exit whenever it likes.
+    expire, so the process can exit whenever it likes. ``on_abandon`` is
+    called then, to stop anything keeping the claim alive.
     """
 
     run_id: str | None
@@ -132,6 +133,7 @@ class _Run:
     replaced: JobState | None = None
     job_id: str | None = None
     abandoned: bool = False
+    on_abandon: list[Callable[[], None]] = field(default_factory=list)
 
 
 @dataclass
@@ -1089,6 +1091,13 @@ class WorkerRuntime:
     def _in_handler(self, task: asyncio.Task) -> bool:
         return task in self._handler_tasks
 
+    def _on_abandon(self, callback: Callable[[], None]) -> None:
+        """Have a drain call ``callback`` if it abandons the run of the handler
+        the current task is in."""
+        run = self._handler_tasks.get(asyncio.current_task())
+        if run is not None:
+            run.on_abandon.append(callback)
+
     async def _abandon_handlers(
         self, tasks: set[asyncio.Task], *, timeout: float
     ) -> set[asyncio.Task]:
@@ -1112,6 +1121,8 @@ class WorkerRuntime:
         for task in inside:
             run = self._handler_tasks[task]
             run.abandoned = True
+            for callback in run.on_abandon:
+                callback()
             self._abandoned.append(run.job_id)
             logger.warning(
                 "Job %s ignored its cancellation for %ss; abandoning it running on "

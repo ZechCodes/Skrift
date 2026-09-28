@@ -59,6 +59,8 @@ async def occupying_worker(context: Any) -> AsyncIterator[None]:
     slot = WorkerSlot(runtime, queue, context.job.queue, context.job.id, token)
     reset = _slot.set(slot)
     keeper = asyncio.create_task(_keep_claim(slot))
+    # A run a drain abandons, still running, must let its claim expire.
+    runtime._on_abandon(keeper.cancel)
     try:
         yield
     finally:
