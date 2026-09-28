@@ -467,8 +467,9 @@ async def test_a_settled_outcome_wins_over_the_stored_state(
     worker_b = asyncio.create_task(runtime.execute_claim(claim_b))
     await _within(handler.started[0].wait())
     stored = await handle.status()
-    await runtime._set_state(
-        stored.model_copy(update={"run_id": "slipped-in", "run_order": stored.run_order + 1})
+    await runtime.state_store.set(
+        runtime._job_key(handle.id),
+        stored.model_copy(update={"run_id": "slipped-in", "run_order": stored.run_order + 1}),
     )
 
     handler.release[0].set()

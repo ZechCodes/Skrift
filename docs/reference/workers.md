@@ -283,6 +283,8 @@ class StateStore:
     async def keys(self, prefix: str = "") -> list[str]: ...
 ```
 
+`update` must run `fn` and write its result so that no other `update` of the key lands between the read and the write; `fn` may refuse by raising, and then nothing is written. `set` and `delete` are not ordered against `update`: one can land between an update's read and its write, which then overwrites the set value or recreates the deleted one. On Postgres, a `set` of a missing key racing a first `update` of it can also fail with a uniqueness error once the update commits. So the runtime writes worker job state (`workers:jobs:*`) and agent run state only through `update`. `set` is left to single-writer keys: the queue wait and trend histories (`workers:queue_wait_history`, `workers:queue_trend_history`) and the event archive's flush cursors. No in-tree code calls `delete`; a backend's own pruning of job state (`prune_terminal_job_states`) must take the key's update lock and recheck the state before deleting it.
+
 ```python
 class EventLog:
     async def append(self, stream: str, event: dict[str, Any]) -> int: ...
