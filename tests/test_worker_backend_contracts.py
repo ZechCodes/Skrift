@@ -216,6 +216,70 @@ async def test_state_store_backend_contract(
     )
 
 
+async def _assert_concurrent_updates_both_land(store, *, existing: bool) -> None:
+    """Two updates of one key, the first held after its read, both keep their change."""
+    key = "jobs:concurrent"
+    if existing:
+        await store.set(key, ["initial"])
+    first_read = asyncio.Event()
+    release_first = asyncio.Event()
+    second_read = asyncio.Event()
+
+    async def add_first(value):
+        first_read.set()
+        await release_first.wait()
+        return [*(value or []), "first"]
+
+    def add_second(value):
+        second_read.set()
+        return [*(value or []), "second"]
+
+    first = asyncio.create_task(store.update(key, add_first))
+    second = None
+    try:
+        await asyncio.wait_for(first_read.wait(), 5)
+        second = asyncio.create_task(store.update(key, add_second))
+        # A store that lets the second update read while the first is between
+        # its read and its write finishes the second now. One that serializes
+        # them holds the second until the first has written.
+        try:
+            await asyncio.wait_for(second_read.wait(), 0.5)
+        except TimeoutError:
+            pass
+        else:
+            await asyncio.wait_for(asyncio.shield(second), 5)
+    finally:
+        release_first.set()
+        await asyncio.wait_for(
+            asyncio.gather(first, *([second] if second else []), return_exceptions=True), 10
+        )
+    first.result()
+    second.result()
+
+    expected = ["first", "second"] + (["initial"] if existing else [])
+    assert sorted(await store.get(key)) == sorted(expected)
+
+
+@pytest.mark.parametrize("existing", [True, False], ids=["existing", "missing"])
+@pytest.mark.parametrize(
+    "store_factory",
+    [
+        lambda _: InMemoryStateStore(),
+        lambda deps: SQLAlchemyStateStore(session_maker=deps["session_maker"]),
+        lambda deps: RedisStateStore(client=deps["redis_client"], prefix="contract:state"),
+    ],
+    ids=["memory", "sqlalchemy", "redis"],
+)
+async def test_concurrent_state_store_updates_both_land(
+    store_factory: Callable[[dict], object],
+    existing: bool,
+    worker_session_maker,
+    fake_redis_client,
+):
+    store = store_factory({"session_maker": worker_session_maker, "redis_client": fake_redis_client})
+    await _assert_concurrent_updates_both_land(store, existing=existing)
+
+
 @pytest.mark.parametrize(
     "event_log_factory",
     [
