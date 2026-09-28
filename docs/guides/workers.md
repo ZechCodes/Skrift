@@ -375,6 +375,8 @@ skrift workers run --queue default --queue slow --concurrency 4
 
 Each process claims jobs from the shared queue backend. Keep handlers idempotent because crashes and visibility-timeout reclaims can cause a job to run more than once.
 
+On SIGTERM a worker stops claiming and gives running jobs `workers.drain_timeout` (20 s) to finish. It then cancels the rest and hands their claims back, so the next worker picks them up at once rather than after `visibility_timeout`. A stop takes at most `drain_timeout + drain_cancel_timeout`, 25 s by default; keep your orchestrator's grace period (Kubernetes' `terminationGracePeriodSeconds`, 30 s by default) above that. See [Stopping a worker](../reference/workers.md#stopping-a-worker).
+
 Configured `workers.imports` are imported at startup. If one of those modules raises during import, the web app or worker command fails fast rather than starting with missing handlers.
 
 ## Troubleshooting

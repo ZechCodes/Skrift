@@ -22,6 +22,8 @@ workers:
   visibility_timeout: 30.0
   reaper_interval: 5.0
   max_reclaims: 3
+  drain_timeout: 20.0
+  drain_cancel_timeout: 5.0
   imports:
     - myapp.jobs
   persistence:
@@ -63,6 +65,8 @@ workers:
 | `visibility_timeout` | `30.0` | Seconds before an unacked claim can be reclaimed. A job whose own `visibility_timeout` (set on `@handler` or at submit) is longer keeps its claim for that long instead; a job that sets none uses this value |
 | `reaper_interval` | `5.0` | Seconds between runs of the standalone reaper that reclaims expired claims and sweeps expired state, decoupled from poll frequency |
 | `max_reclaims` | `3` | Number of claim timeouts allowed before dead-lettering as a reclaim loop |
+| `drain_timeout` | `20.0` | Seconds a stopping worker gives its running jobs to finish before cancelling them and handing their claims back. See [Stopping a worker](#stopping-a-worker) |
+| `drain_cancel_timeout` | `5.0` | Seconds a cancelled job's handler then gets to stop before the worker leaves it behind with its claim, to expire |
 | `imports` | `[]` | Modules imported by standalone worker processes and app startup to register handlers |
 
 #### Idle poll backoff
@@ -86,6 +90,25 @@ This protects Skrift's own records only. Anything the stale handler did outside 
 The run-id check is a single atomic state-store update on Postgres and the in-memory store. On SQLite and Redis, `update` is not yet atomic against a plain concurrent write (#195), so a narrow window remains there.
 
 The SQLAlchemy queue keeps the order in a new `worker_queue.claim_generation` column: run `skrift db upgrade head` before starting workers on this release. Jobs already queued start from 0.
+
+#### Stopping a worker
+
+`skrift workers run` stops on SIGTERM or SIGINT, and the web app's in-process pool stops at shutdown. Either way the pool drains:
+
+1. **It claims nothing new.** A worker between polls stops at once. A worker already claiming runs whatever that claim returns as part of the drain, and one still waiting on its claim when the window ends is cancelled.
+2. **Running jobs get `drain_timeout` to finish.** A job that finishes settles as usual: acked, retried, paused or dead-lettered.
+3. **Jobs still in their handler are then cancelled and handed back.** The worker releases each claim so it is visible again at once, and sets the job's state back to `submitted`, keeping any `paused_state` it resumed from. If the queue fails to take a job back (its `nack` raises), the worker puts the job's `running` state back, logs an error with the job id, and abandons the job with its claim held; another worker runs it once the claim expires. A hand-back charges no attempt and is not a reclaim, so it never counts toward `max_attempts` or `max_reclaims`. A handler that turns its `CancelledError` into another exception is still handed back rather than failed; one that swallows it and returns a result completes normally. A job whose claim reaches the handler only after the drain window is handed back without running.
+4. **A handler still running `drain_cancel_timeout` later is abandoned.** A handler that swallows its `CancelledError` cannot be stopped, so it is left running with its claim, which expires; another worker then runs the job. An agent run's claim on the in-memory queue stops being renewed at that point, so it expires too. Its state reads `running` until then. The worker logs a warning with the job id. An abandoned run settles nothing, however its handler later ends: no `ack` or `nack`, no state write, only a warning. So a process that exits while the handler finishes can never leave the job acked but still `running`. A handler that ends while the drain is still waiting on other jobs, before its run was abandoned, settles as usual, and the stop waits for it.
+
+`WorkerRuntime.stop()` returns the ids of the jobs it abandoned, and so does every later call until the runtime starts again. A cancelled `stop()`, such as a server cancelling its shutdown, still drains the pool and waits for the drain before it raises `CancelledError`. When any jobs were abandoned, `skrift workers run` logs them at warning and exits directly, with the exit code it would have used, without waiting for the abandoned handlers: `asyncio.run` would otherwise wait for them forever. The web app's in-process pool cannot do that, because the server owns the event loop; there an abandoned handler can hold the process's exit until the orchestrator kills it at the end of its grace period.
+
+Stopping takes at most `drain_timeout + drain_cancel_timeout`, 25 s by default, which is under Kubernetes' default `terminationGracePeriodSeconds` of 30. Raise the grace period if you raise either timeout. The one exception is the worker's own `ack`, `nack` and state writes for a job: a stop never cuts one short, and waits for any that have started, so a backend that hangs on a write can hold a stop past that bound.
+
+A handed-back job runs again from the start on another worker. Anything it did before it was cancelled has already happened, as with any retry.
+
+Agent runs are jobs too:
+- **A run awaiting a sub-agent** keeps its worker and its claim through the drain window. With the in-memory queue the claim stays renewed (see [Sub-agents on the in-process worker pool](agents.md#sub-agents-on-the-in-process-worker-pool)). If the sub-agent finishes inside the window, the parent finishes too.
+- **A sub-agent a draining pool will not run** means its parent cannot finish. That is a sub-agent that is still queued, since the draining pool claims nothing, or one still running when the window ends. The parent is then handed back with the rest. The sub-agent's own job is left queued, or is handed back itself if it was running. On the successor the parent re-runs its tool call and dispatches a new sub-agent session, while the first sub-agent's job also runs to completion.
 
 ### Execution Modes
 

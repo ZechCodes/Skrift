@@ -1137,6 +1137,8 @@ def create_app() -> ASGIApp:
                 visibility_timeout=settings.workers.visibility_timeout,
                 reaper_interval=settings.workers.reaper_interval,
                 max_reclaims=settings.workers.max_reclaims,
+                drain_timeout=settings.workers.drain_timeout,
+                drain_cancel_timeout=settings.workers.drain_cancel_timeout,
                 terminal_job_state_ttl=settings.workers.retention.terminal_job_state_ttl,
                 backend_imports=settings.workers.backends,
                 settings=settings,
