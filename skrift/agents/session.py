@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from skrift.agents.context import resolve_actor
 from skrift.agents.models import Actor, RunState, Steer
 from skrift.agents.registry import registry
 from skrift.agents.turns import _decode_type_ref, normalize_turn_kwargs
+from skrift.agents.worker_slot import waiting_on_sub_agent
 from skrift.agents.state import (
     actor_payload,
     append_event,
@@ -410,23 +412,30 @@ class Session:
         return self.result().__await__()
 
     async def result(self, *, poll_interval: float = 0.05, turn_id: str | None = None) -> Any:
-        while True:
-            state = await self.state()
-            if turn_id is not None:
-                if turn_id in state.turn_results:
-                    return _rehydrate_result(
-                        state.turn_results[turn_id],
-                        _result_output_type(state, turn_id),
-                    )
-                if turn_id in state.turn_errors:
-                    raise AgentSessionError(str(state.turn_errors[turn_id]))
-            if state.status == "completed":
-                return _rehydrate_result(state.output, _result_output_type(state, None))
-            if state.status == "failed":
-                raise AgentSessionError(str(state.error or "Agent session failed"))
-            if state.status == "cancelled":
-                raise asyncio.CancelledError(f"Agent session {self.id} was cancelled")
-            await asyncio.sleep(poll_interval)
+        async with AsyncExitStack() as waiting:
+            waiting_on_worker = False
+            while True:
+                state = await self.state()
+                if turn_id is not None:
+                    if turn_id in state.turn_results:
+                        return _rehydrate_result(
+                            state.turn_results[turn_id],
+                            _result_output_type(state, turn_id),
+                        )
+                    if turn_id in state.turn_errors:
+                        raise AgentSessionError(str(state.turn_errors[turn_id]))
+                if state.status == "completed":
+                    return _rehydrate_result(state.output, _result_output_type(state, None))
+                if state.status == "failed":
+                    raise AgentSessionError(str(state.error or "Agent session failed"))
+                if state.status == "cancelled":
+                    raise asyncio.CancelledError(f"Agent session {self.id} was cancelled")
+                if not waiting_on_worker:
+                    # Called from an agent run on a pool worker, that worker waits
+                    # too, and the session still needs a worker to finish.
+                    await waiting.enter_async_context(waiting_on_sub_agent())
+                    waiting_on_worker = True
+                await asyncio.sleep(poll_interval)
 
     async def artifacts(
         self,

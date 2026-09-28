@@ -303,6 +303,8 @@ class _QueueEntry:
     dead_lettered: bool = False
     # A wake for the claimed job; its worker's nack applies it.
     pending_wake: datetime | None = None
+    # The task that took the claim.
+    claimed_by: asyncio.Task | None = None
 
 
 class InMemoryQueue:
@@ -353,6 +355,7 @@ class InMemoryQueue:
                 ):
                     entry.claim_token = None
                     entry.claim_expires_at = None
+                    entry.claimed_by = None
                     entry.pending_wake = None
                     entry.visible_at = now
                     entry.job.ready_since = now
@@ -382,6 +385,7 @@ class InMemoryQueue:
                 lease = max(visibility_timeout, entry.job.visibility_timeout or 0)
                 entry.claim_token = token
                 entry.claim_expires_at = _now() + timedelta(seconds=lease)
+                entry.claimed_by = asyncio.current_task()
                 entry.job.ready_since = None
                 return ClaimedJob(
                     job=entry.job,
@@ -390,6 +394,32 @@ class InMemoryQueue:
                     claim_order=next(self._claim_orders),
                 )
             return None
+
+    def claim_held_by(self, queue: str, job_id: str, task: asyncio.Task | None) -> str | None:
+        """The token of the job's claim if ``task`` took it, else None."""
+        entry = self._entries.get(queue, {}).get(job_id)
+        if entry is None or entry.claim_token is None or entry.claimed_by is not task:
+            return None
+        return entry.claim_token
+
+    async def renew_claim(
+        self, queue: str, job_id: str, token: str, *, visibility_timeout: float
+    ) -> bool:
+        """Hold the claim for at least ``visibility_timeout`` more seconds.
+
+        This queue lives in the worker process, so a lease that runs out while
+        its run is still going cannot mean the worker died; renewing it keeps
+        another worker from running the job a second time. Returns False if the
+        claim is no longer held with ``token``.
+        """
+        async with self._condition:
+            entry = self._entries.get(queue, {}).get(job_id)
+            if entry is None or entry.claim_token != token or entry.claim_expires_at is None:
+                return False
+            entry.claim_expires_at = max(
+                entry.claim_expires_at, _now() + timedelta(seconds=visibility_timeout)
+            )
+            return True
 
     async def ack(self, queue: str, job_id: str, token: str) -> None:
         async with self._condition:
@@ -418,6 +448,7 @@ class InMemoryQueue:
             pending_wake, entry.pending_wake = entry.pending_wake, None
             entry.claim_token = None
             entry.claim_expires_at = None
+            entry.claimed_by = None
             entry.dead_lettered = dead_letter
             entry.visible_at = retry_at or _now()
             if pending_wake is not None and not dead_letter:

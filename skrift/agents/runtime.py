@@ -16,6 +16,7 @@ from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from skrift.agents.config import get_agents_config
 from skrift.agents.context import reset_current_session_id, set_current_session_id
+from skrift.agents.worker_slot import occupying_worker
 from skrift.agents.models import (
     AgentUsageRecord,
     AgentUsageTotals,
@@ -61,6 +62,11 @@ class AgentIterResult:
 
 
 async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> Any:
+    async with occupying_worker(context):
+        return await _run_agent(payload, context)
+
+
+async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
     await drain_outbox(payload.session_id)
     state = await load_runstate(payload.session_id)
     if state is None:
@@ -431,6 +437,11 @@ async def agents_run_dead(entry: DeadJobEntry) -> None:
 
 
 async def agents_tool_call_handler(payload: AgentToolCallJob, context: WorkerContext) -> None:
+    async with occupying_worker(context):
+        return await _call_detached_tool(payload, context)
+
+
+async def _call_detached_tool(payload: AgentToolCallJob, context: WorkerContext) -> None:
     await drain_outbox(payload.session_id)
     state = await load_runstate(payload.session_id)
     if state is None:
