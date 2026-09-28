@@ -906,6 +906,7 @@ class WorkersConfig(BaseModel):
     execution: Literal["inline", "in_process", "out_of_process"] = "inline"
     queues: list[str] = ["default"]
     concurrency: int = Field(default=1, ge=1)
+    max_inflight_per_worker: int = Field(default=1, ge=1)
     poll_interval: float = Field(default=0.05, gt=0)
     max_poll_interval: float = Field(default=2.0, gt=0)
     poll_backoff_factor: float = Field(default=2.0, ge=1.0)

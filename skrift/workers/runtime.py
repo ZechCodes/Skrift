@@ -94,6 +94,8 @@ class WorkerConfig:
     mode: ExecutionMode = "inline"
     queues: tuple[str, ...] = ("default",)
     concurrency: int = 1
+    # How many claimed jobs each worker may run at once.
+    max_inflight_per_worker: int = 1
     poll_interval: float = 0.05
     max_poll_interval: float = 2.0
     poll_backoff_factor: float = 2.0
@@ -137,6 +139,15 @@ class _Run:
 
 
 @dataclass
+class _Polling:
+    """A worker's turn at polling its queues, shared by its places, and the
+    wait after an empty poll."""
+
+    interval: float
+    turn: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+@dataclass
 class WorkerContext:
     """Context passed to handlers that accept a second argument."""
 
@@ -172,7 +183,13 @@ class JobHandle:
 
 
 class WorkerPool:
-    """Runs N concurrent in-process worker loops."""
+    """Runs N concurrent in-process workers.
+
+    Each worker has ``max_inflight_per_worker`` places, each running one claimed
+    job at a time; a place claims its own job, so it is the task that holds
+    the claim. A worker polls as one: its free places take turns, one claim at
+    a time, and share the wait after an empty poll.
+    """
 
     def __init__(
         self,
@@ -180,6 +197,7 @@ class WorkerPool:
         *,
         queues: list[str],
         concurrency: int = 1,
+        max_inflight_per_worker: int = 1,
         poll_interval: float = 0.05,
         max_poll_interval: float = 2.0,
         poll_backoff_factor: float = 2.0,
@@ -187,6 +205,7 @@ class WorkerPool:
         self._runtime = runtime
         self._queues = queues
         self._concurrency = concurrency
+        self._max_inflight = max_inflight_per_worker
         self._poll_interval = poll_interval
         self._max_poll_interval = max_poll_interval
         self._poll_backoff_factor = poll_backoff_factor
@@ -203,10 +222,15 @@ class WorkerPool:
             return
         self._stopping.clear()
         self._drain = None
-        self._tasks = [
-            asyncio.create_task(self._run_worker(), name=f"skrift-worker-{i}")
-            for i in range(self._concurrency)
-        ]
+        self._tasks = []
+        for i in range(self._concurrency):
+            polling = _Polling(self._poll_interval)
+            self._tasks += [
+                asyncio.create_task(
+                    self._run_worker(polling), name=f"skrift-worker-{i}" + (f".{j}" if j else "")
+                )
+                for j in range(self._max_inflight)
+            ]
 
     async def stop(self) -> list[str]:
         """Stop claiming, then drain the jobs already running.
@@ -262,21 +286,14 @@ class WorkerPool:
                 await asyncio.wait(writing)
         return list(self._runtime._abandoned)
 
-    async def _run_worker(self) -> None:
-        current_interval = self._poll_interval
+    async def _run_worker(self, polling: _Polling | None = None) -> None:
+        """Run one place of a worker; ``polling`` is shared by its places."""
+        polling = polling or _Polling(self._poll_interval)
         while not self._stopping.is_set():
             try:
-                claimed = await self._runtime.queue.claim(
-                    self._queues, visibility_timeout=self._runtime.default_visibility_timeout
-                )
+                claimed = await self._claim(polling)
                 if claimed is None:
-                    await self._idle(current_interval)
-                    current_interval = min(
-                        current_interval * self._poll_backoff_factor,
-                        self._max_poll_interval,
-                    )
                     continue
-                current_interval = self._poll_interval
                 task = asyncio.current_task()
                 self._busy.add(task)
                 try:
@@ -297,6 +314,29 @@ class WorkerPool:
             await asyncio.sleep(seconds)
         finally:
             self._idling.discard(task)
+
+    async def _claim(self, polling: _Polling) -> ClaimedJob | None:
+        """Take the worker's turn to poll, and claim a job; None after an empty poll."""
+        async with polling.turn:
+            if self._stopping.is_set():
+                return None
+            try:
+                claimed = await self._runtime.queue.claim(
+                    self._queues, visibility_timeout=self._runtime.default_visibility_timeout
+                )
+            except Exception:
+                logger.warning("Worker loop error; continuing", exc_info=True)
+                await self._idle(self._poll_interval)
+                return None
+            if claimed is None:
+                await self._idle(polling.interval)
+                polling.interval = min(
+                    polling.interval * self._poll_backoff_factor,
+                    self._max_poll_interval,
+                )
+                return None
+            polling.interval = self._poll_interval
+            return claimed
 
 
 class WorkerRuntime:
@@ -364,6 +404,7 @@ class WorkerRuntime:
             self,
             queues=list(self.config.queues),
             concurrency=self.config.concurrency,
+            max_inflight_per_worker=self.config.max_inflight_per_worker,
             poll_interval=self.config.poll_interval,
             max_poll_interval=self.config.max_poll_interval,
             poll_backoff_factor=self.config.poll_backoff_factor,
@@ -1982,6 +2023,7 @@ def configure_workers(
     mode: ExecutionMode = "inline",
     queues: tuple[str, ...] = ("default",),
     concurrency: int = 1,
+    max_inflight_per_worker: int = 1,
     poll_interval: float = 0.05,
     max_poll_interval: float = 2.0,
     poll_backoff_factor: float = 2.0,
@@ -2009,6 +2051,7 @@ def configure_workers(
             mode=mode,
             queues=queues,
             concurrency=concurrency,
+            max_inflight_per_worker=max_inflight_per_worker,
             poll_interval=poll_interval,
             max_poll_interval=max_poll_interval,
             poll_backoff_factor=poll_backoff_factor,

@@ -1131,6 +1131,7 @@ def create_app() -> ASGIApp:
                 mode=settings.workers.execution,
                 queues=tuple(settings.workers.queues),
                 concurrency=settings.workers.concurrency,
+                max_inflight_per_worker=settings.workers.max_inflight_per_worker,
                 poll_interval=settings.workers.poll_interval,
                 max_poll_interval=settings.workers.max_poll_interval,
                 poll_backoff_factor=settings.workers.poll_backoff_factor,
