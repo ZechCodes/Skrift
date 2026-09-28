@@ -547,16 +547,21 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
                         claim_token=token,
                         claim_expires_at=_utc(row.db_now)
                         + timedelta(seconds=visibility_timeout),
+                        claim_generation=WorkerQueueRecord.claim_generation + 1,
                     )
                     .execution_options(synchronize_session=False)
                 )
                 if claimed.rowcount != 1:
                     await session.rollback()
                     continue
-                stored = await session.execute(
-                    select(WorkerQueueRecord.job).where(WorkerQueueRecord.id == row.id)
-                )
-                job = JobEnvelope.model_validate(stored.scalar_one())
+                stored = (
+                    await session.execute(
+                        select(WorkerQueueRecord.job, WorkerQueueRecord.claim_generation).where(
+                            WorkerQueueRecord.id == row.id
+                        )
+                    )
+                ).one()
+                job = JobEnvelope.model_validate(stored.job)
                 job.ready_since = None
                 await session.execute(
                     update(WorkerQueueRecord)
@@ -568,7 +573,12 @@ class SQLAlchemyQueue(_SQLAlchemyBackend):
                     .execution_options(synchronize_session=False)
                 )
                 await session.commit()
-                return ClaimedJob(job=job, token=token)
+                return ClaimedJob(
+                    job=job,
+                    token=token,
+                    visibility_timeout=visibility_timeout,
+                    claim_order=stored.claim_generation,
+                )
             return None
 
     async def ack(self, queue: str, job_id: str, token: str) -> None:

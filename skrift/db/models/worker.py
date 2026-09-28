@@ -64,6 +64,11 @@ class WorkerQueueRecord(Base):
         DateTime(timezone=True), nullable=True
     )
     dead_lettered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Counts the claims of this job; each claim increments it and takes the new
+    # value as its order.
+    claim_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
     __table_args__ = (
         Index("ix_worker_queue_queue_visible", "queue", "visible_at"),

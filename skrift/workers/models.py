@@ -113,6 +113,14 @@ class ClaimedJob(BaseModel):
     job: JobEnvelope
     token: str
     claimed_at: datetime = Field(default_factory=utcnow)
+    # Seconds the queue holds this claim for. claimed_at is set once the queue
+    # has granted it, so claimed_at + visibility_timeout is never before the
+    # lease really ends. None if the queue does not report it.
+    visibility_timeout: float | None = None
+    # Orders the claims of one job: a later claim has a greater value. The
+    # queue keeps it with the job, not taken from a clock. None if the queue
+    # does not supply one.
+    claim_order: int | None = None
 
 
 class JobState(BaseModel):
@@ -127,6 +135,11 @@ class JobState(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
     paused_state: dict[str, Any] = Field(default_factory=dict)
     attempt_history: list["DeadJobAttempt"] = Field(default_factory=list)
+    # The run (one execution of a claim) that wrote this state, and its claim's
+    # order. A run writes the job's state only while no later claim's run has,
+    # so a worker whose claim expired and was taken over cannot overwrite it.
+    run_id: str | None = None
+    run_order: int | None = None
 
 
 class WorkerLifecycleEvent(BaseModel):
