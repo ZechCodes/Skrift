@@ -17,6 +17,7 @@ import signal
 import sys
 import textwrap
 import time
+from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
@@ -38,7 +39,7 @@ from skrift.workers import (
     SQLAlchemyQueue,
     SQLAlchemyStateStore,
 )
-from skrift.workers.models import JobStatus, utcnow
+from skrift.workers.models import JobEnvelope, JobStatus, utcnow
 from skrift.workers.registry import registry
 
 BACKENDS = ["memory", "sqlalchemy", "redis"]
@@ -583,6 +584,235 @@ async def test_a_second_stop_waits_for_the_first_ones_drain(backends):
     assert (await handle.status()).status == JobStatus.COMPLETED
 
 
+async def test_a_stale_claims_envelope_shares_nothing_with_the_queue():
+    queue = InMemoryQueue()
+    job = JobEnvelope(type="drain.work", payload={"n": 1}, metadata={"owner": "submitter"})
+    await queue.submit(job)
+    stale = await queue.claim(["default"], visibility_timeout=0.01)
+    await asyncio.sleep(0.02)
+    await queue._release_expired_claims(utcnow())
+    successor = await queue.claim(["default"], visibility_timeout=30)
+
+    stale.job.payload["n"] = 2
+    stale.job.metadata["owner"] = "stale"
+
+    for envelope in (successor.job, queue._entries["default"][job.id].job):
+        assert (envelope.payload, envelope.metadata) == ({"n": 1}, {"owner": "submitter"})
+
+    # Nor does an envelope a worker hands back with its nack.
+    await queue.nack("default", job.id, successor.token, retry_at=utcnow(), job=successor.job)
+    successor.job.payload["n"] = 3
+    successor.job.metadata["owner"] = "successor"
+    after = await queue.claim(["default"], visibility_timeout=30)
+    assert (after.job.payload, after.job.metadata) == ({"n": 1}, {"owner": "submitter"})
+
+
+@pytest.mark.parametrize("backends", BACKENDS, indirect=True)
+@pytest.mark.parametrize("cancel", [None, "before the drain", "during the drain"])
+async def test_a_cancelled_stop_still_waits_for_its_jobs_to_settle(backends, cancel):
+    # An ASGI server may cancel its lifespan shutdown; the drain still settles
+    # the jobs before that cancellation goes on.
+    handler = Handler(seconds=0)
+    _register(handler)
+    queue = backends["queue"]
+    ack = queue.ack
+    acking, order = asyncio.Event(), []
+
+    async def slow_ack(*args, **kwargs):
+        acking.set()
+        await asyncio.sleep(0.4)
+        await ack(*args, **kwargs)
+        order.append("acked")
+
+    queue.ack = slow_ack
+    runtime = _worker(backends, drain_timeout=1)
+    await runtime.start()
+    handle = await runtime.submit(Work(n=1))
+    await asyncio.wait_for(acking.wait(), 3)
+
+    stopping = asyncio.create_task(runtime.stop())
+    if cancel == "before the drain":
+        await asyncio.sleep(0)
+        assert runtime._pool._drain is None
+        stopping.cancel()
+    elif cancel == "during the drain":
+        await asyncio.sleep(0.02)
+        assert runtime._pool._drain is not None
+        stopping.cancel()
+    try:
+        assert await asyncio.wait_for(stopping, 3) == []
+    except asyncio.CancelledError:
+        order.append("stop raised CancelledError")
+    status = (await handle.status()).status
+    del queue.ack
+
+    assert order == (["acked", "stop raised CancelledError"] if cancel else ["acked"])
+    assert status == JobStatus.COMPLETED
+
+
+@pytest.mark.parametrize("backends", BACKENDS, indirect=True)
+async def test_a_handler_stopping_its_own_worker_is_handed_back(backends):
+    @skrift.handler("drain.stopper")
+    async def stopper(job: Work, context):
+        await context.runtime.stop()
+
+    runtime = _worker(backends, drain_timeout=0.1)
+    await runtime.start()
+    handle = await runtime.submit("drain.stopper", {"n": 1})
+    for _ in range(100):
+        if runtime._pool is None or runtime._pool._drain is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert await asyncio.wait_for(runtime.stop(), 3) == []
+    state = await handle.status()
+    assert (state.status, state.attempt) == (JobStatus.SUBMITTED, 0)
+
+
+def _two_gated_jobs(backends):
+    """A job acking behind a gate, and one whose handler ignores its cancellation
+    until released, then acks behind its own gate."""
+
+    fast, slow = Handler(seconds=0), Handler(on_cancel="ignore")
+    _register(fast, name="drain.fast")
+    _register(slow, name="drain.slow")
+    queue = backends["queue"]
+    ack = queue.ack
+    ids: dict[str, str] = {}
+    acking = {"fast": asyncio.Event(), "slow": asyncio.Event()}
+    acked = {"fast": asyncio.Event(), "slow": asyncio.Event()}
+
+    async def gated_ack(name, job_id, token):
+        which = "fast" if job_id == ids["fast"] else "slow"
+        acking[which].set()
+        await acked[which].wait()
+        return await ack(name, job_id, token)
+
+    queue.ack = gated_ack
+
+    async def start(runtime):
+        ids["fast"] = (await runtime.submit("drain.fast", {"n": 1})).id
+        ids["slow"] = (await runtime.submit("drain.slow", {"n": 2})).id
+        await runtime.start()
+        await asyncio.wait_for(asyncio.gather(slow.started.wait(), acking["fast"].wait()), 3)
+
+    return SimpleNamespace(slow=slow, ids=ids, acking=acking, acked=acked, start=start)
+
+
+@pytest.mark.parametrize("backends", BACKENDS, indirect=True)
+async def test_a_drain_waits_for_a_handler_that_ends_while_another_job_settles(backends):
+    jobs = _two_gated_jobs(backends)
+    runtime = _worker(backends, concurrency=2, drain_timeout=0.05, drain_cancel_timeout=2)
+    await jobs.start(runtime)
+    looked = asyncio.Event()
+    in_handler = runtime._in_handler
+
+    def observe(task):
+        looked.set()
+        return in_handler(task)
+
+    runtime._in_handler = observe
+    stopping = asyncio.create_task(runtime.stop())
+    await asyncio.wait_for(looked.wait(), 3)
+    # The drain has seen the slow job still in its handler and the fast one acking.
+    jobs.slow.release.set()
+    await asyncio.wait_for(jobs.acking["slow"].wait(), 3)
+    jobs.acked["fast"].set()
+    await asyncio.sleep(0.1)
+    assert not stopping.done()
+
+    jobs.acked["slow"].set()
+    assert await asyncio.wait_for(stopping, 3) == []
+    del backends["queue"].ack
+    for job_id in jobs.ids.values():
+        assert (await runtime.get_job_state(job_id)).status == JobStatus.COMPLETED
+
+
+@pytest.mark.parametrize("backends", BACKENDS, indirect=True)
+async def test_an_abandoned_run_settles_nothing_however_late_its_handler_ends(
+    backends, caplog
+):
+    jobs = _two_gated_jobs(backends)
+    runtime = _worker(
+        backends,
+        concurrency=2,
+        drain_timeout=0.05,
+        drain_cancel_timeout=0.2,
+        visibility_timeout=1.5,
+    )
+    await jobs.start(runtime)
+    stopping = asyncio.create_task(runtime.stop())
+    await asyncio.sleep(0.5)  # past the drain: the slow job is abandoned, the fast one acking
+    assert not stopping.done()
+
+    # The slow handler ends while the drain is still waiting for the fast ack.
+    with caplog.at_level(logging.WARNING, logger="skrift.workers.runtime"):
+        jobs.slow.release.set()
+        for _ in range(100):
+            if ("finished", 2) in jobs.slow.log:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        jobs.acked["fast"].set()
+        assert await asyncio.wait_for(stopping, 3) == [jobs.ids["slow"]]
+
+    assert "settling nothing" in caplog.text
+    assert not jobs.acking["slow"].is_set()
+    del backends["queue"].ack
+    fast, slow = jobs.ids["fast"], jobs.ids["slow"]
+    assert (await runtime.get_job_state(fast)).status == JobStatus.COMPLETED
+    assert (await runtime.get_job_state(slow)).status == JobStatus.RUNNING
+
+    # Its claim expires, and another worker runs it.
+    successor = _worker(backends, reaper_interval=0.05)
+    await successor.start()
+    try:
+        assert await asyncio.wait_for(successor.handle(slow).result(), 5) == 2
+    finally:
+        await asyncio.wait_for(successor.stop(), 5)
+    state = await successor.get_job_state(slow)
+    assert (state.status, state.job.reclaim_count) == (JobStatus.COMPLETED, 1)
+
+
+def test_a_worker_process_whose_stop_is_cancelled_still_exits_past_abandoned_jobs():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from click.testing import CliRunner
+
+    from skrift.cli import cli
+    from skrift.notifications import notifications
+
+    class CancelledStop:
+        config = SimpleNamespace(concurrency=1)
+        stops = 0
+
+        async def start(self):
+            asyncio.get_running_loop().call_soon(os.kill, os.getpid(), signal.SIGTERM)
+
+        async def stop(self):
+            self.stops += 1
+            if self.stops == 1:
+                raise asyncio.CancelledError
+            return ["job-1"]
+
+    db_config = MagicMock()
+    db_config.get_engine.return_value.dispose = AsyncMock()
+    with (
+        patch.dict(os.environ, {"SECRET_KEY": "test-secret"}, clear=False),
+        patch("skrift.cli._build_db_config", return_value=db_config),
+        patch("skrift.cli._configure_worker_runtime", return_value=CancelledStop()),
+        patch.object(notifications, "ensure_backend_started", AsyncMock()),
+        patch.object(notifications, "stop_backend", AsyncMock()) as stop_backend,
+        patch("skrift.cli._exit_abandoning") as exit_abandoning,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        CliRunner().invoke(cli, ["workers", "run", "--allow-memory-backends"])
+
+    exit_abandoning.assert_called_once_with(["job-1"], 1)
+    stop_backend.assert_awaited_once()
+    db_config.get_engine.return_value.dispose.assert_awaited_once()
+
+
 def test_the_default_drain_ends_inside_kubernetes_grace_period():
     from skrift.config import WorkersConfig
 
@@ -684,3 +914,127 @@ async def test_a_worker_process_exits_past_a_handler_ignoring_its_cancellation(
     assert time.monotonic() - started < 3, output
     assert handle.id in output
     assert "abandon" in output
+
+
+LATE_HANDLER = """
+import asyncio
+import pathlib
+
+from pydantic import BaseModel
+
+import skrift
+from skrift.notifications import notifications
+
+
+class Work(BaseModel):
+    n: int
+
+
+@skrift.handler("drain.late")
+async def late(job: Work) -> int:
+    pathlib.Path("started").touch()
+    try:
+        await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        # Ignored until the worker is cleaning up after its drain abandoned the run.
+        while not pathlib.Path("cleaning_up").exists():
+            await asyncio.sleep(0.01)
+    pathlib.Path("returned").touch()
+    return job.n
+
+
+stop_backend = notifications.stop_backend
+
+
+async def cleanup():
+    # Held until the abandoned handler has ended and had time to settle.
+    pathlib.Path("cleaning_up").touch()
+    while not pathlib.Path("returned").exists():
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.3)
+    await stop_backend()
+
+
+notifications.stop_backend = cleanup
+"""
+
+
+async def run_a_worker_process_whose_abandoned_run_ends_during_cleanup(
+    tmp_path, backends, *, db_url, preset="single_node", redis=None, queue="default"
+):
+    """Run ``skrift workers run`` on a job whose handler ignores its cancellation
+    and ends while the process is cleaning up, then check the job is left whole
+    for another worker, and that one runs it."""
+
+    redis_config = f"redis:\n  url: {redis['url']}\n  prefix: {redis['prefix']}\n" if redis else ""
+    (tmp_path / "late.py").write_text(LATE_HANDLER)
+    (tmp_path / "app.yaml").write_text(
+        f"db:\n  url: {db_url}\n"
+        + redis_config
+        + "workers:\n"
+        "  enabled: true\n"
+        f"  preset: {preset}\n"
+        f"  queues: [{queue}]\n"
+        "  visibility_timeout: 1\n"
+        "  drain_timeout: 0.1\n"
+        "  drain_cancel_timeout: 0.1\n"
+    )
+    _register(Handler(seconds=0), name="drain.late", queue=queue)
+    handle = await _worker(backends, queues=(queue,)).submit("drain.late", {"n": 1})
+
+    env = {**os.environ, "SECRET_KEY": "test-secret", "PYTHONPATH": str(tmp_path)}
+    command = ["-m", "skrift", "-f", "app.yaml", "workers", "run", "--import", "late"]
+    worker = await asyncio.create_subprocess_exec(
+        sys.executable,
+        *command,
+        cwd=tmp_path,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        for _ in range(300):
+            if (tmp_path / "started").exists() or worker.returncode is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert (tmp_path / "started").exists()
+        worker.send_signal(signal.SIGTERM)
+        output = (await asyncio.wait_for(worker.communicate(), 10))[0].decode()
+    finally:
+        if worker.returncode is None:
+            worker.kill()
+            await worker.communicate()
+
+    assert (tmp_path / "returned").exists(), output
+    assert worker.returncode == 0, output
+    assert handle.id in output and "abandon" in output, output
+    assert "settling nothing" in output, output
+    # Neither acked nor recorded: still the running job whose claim will expire.
+    state = await handle.status()
+    assert state.status == JobStatus.RUNNING, output
+    assert await backends["queue"].claim([queue], visibility_timeout=30) is None
+
+    successor = _worker(backends, queues=(queue,), reaper_interval=0.05)
+    await successor.start()
+    try:
+        assert await asyncio.wait_for(successor.handle(handle.id).result(), 5) == 1
+    finally:
+        await asyncio.wait_for(successor.stop(), 5)
+    state = await handle.status()
+    assert (state.status, state.job.reclaim_count) == (JobStatus.COMPLETED, 1)
+
+
+async def test_a_worker_process_settles_nothing_for_a_run_it_abandoned(
+    tmp_path, worker_session_maker
+):
+    # The handler ends while the process cleans up after its drain, just before
+    # the direct exit; its ack and state write must not be cut in half.
+    backends = {
+        "state_store": SQLAlchemyStateStore(session_maker=worker_session_maker),
+        "event_log": SQLAlchemyEventLog(session_maker=worker_session_maker),
+        "queue": SQLAlchemyQueue(session_maker=worker_session_maker),
+        "dead_letter_store": SQLAlchemyDeadLetterStore(session_maker=worker_session_maker),
+    }
+    await run_a_worker_process_whose_abandoned_run_ends_during_cleanup(
+        tmp_path, backends, db_url=f"sqlite+aiosqlite:///{tmp_path / 'drain.db'}"
+    )

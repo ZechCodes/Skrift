@@ -370,11 +370,20 @@ def workers_run(
             exit_code = 1
             raise
         finally:
-            abandoned = await runtime.stop()
-            await notifications.stop_backend()
-            await db_config.get_engine().dispose()
-            if abandoned:
-                _exit_abandoning(abandoned, exit_code)
+            abandoned: list[str] = []
+            try:
+                abandoned = await runtime.stop()
+            except asyncio.CancelledError:
+                # stop() drained the pool before it raised; asked again, it
+                # returns what the drain abandoned.
+                exit_code = 1
+                abandoned = await runtime.stop()
+                raise
+            finally:
+                await notifications.stop_backend()
+                await db_config.get_engine().dispose()
+                if abandoned:
+                    _exit_abandoning(abandoned, exit_code)
 
     asyncio.run(_run())
 

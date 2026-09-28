@@ -387,10 +387,11 @@ class InMemoryQueue:
                 entry.claim_expires_at = _now() + timedelta(seconds=lease)
                 entry.claimed_by = asyncio.current_task()
                 entry.job.ready_since = None
-                # A copy, so nothing the worker does to its envelope reaches the
-                # queue's, or a later claim's once this one has expired.
+                # A deep copy, so nothing the worker does to its envelope, its
+                # payload or metadata included, reaches the queue's, or a later
+                # claim's once this one has expired.
                 return ClaimedJob(
-                    job=entry.job.model_copy(),
+                    job=entry.job.model_copy(deep=True),
                     token=token,
                     visibility_timeout=lease,
                     claim_order=next(self._claim_orders),
@@ -446,7 +447,8 @@ class InMemoryQueue:
             if entry is None or entry.claim_token != token:
                 raise ValueError(f"Invalid claim token for job {job_id}")
             if job is not None:
-                entry.job = job
+                # A copy, for the same reason as a claim's.
+                entry.job = job.model_copy(deep=True)
             pending_wake, entry.pending_wake = entry.pending_wake, None
             entry.claim_token = None
             entry.claim_expires_at = None
