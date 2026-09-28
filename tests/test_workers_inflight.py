@@ -35,6 +35,7 @@ from skrift.workers import (
     SQLAlchemyEventLog,
     SQLAlchemyQueue,
     SQLAlchemyStateStore,
+    WorkerConfig,
 )
 from skrift.workers.models import JobStatus
 from skrift.workers.registry import registry
@@ -286,6 +287,15 @@ def test_max_inflight_per_worker_defaults_to_one_and_reaches_the_worker_process(
         settings, session_maker=None, queues=["default"], concurrency=1
     )
     assert runtime.config.max_inflight_per_worker == 8
+
+
+@pytest.mark.parametrize("setting", ["concurrency", "max_inflight_per_worker"])
+def test_configuring_workers_in_python_rejects_a_pool_with_no_places(setting):
+    # A pool with no places would start and never claim a job.
+    with pytest.raises(ValueError, match=setting):
+        skrift.configure_workers(mode="in_process", **{setting: 0})
+    with pytest.raises(ValueError, match=setting):
+        WorkerConfig(**{setting: -1})
 
 
 # Sub-agents awaited on the in-process pool (#141) count a worker's places.

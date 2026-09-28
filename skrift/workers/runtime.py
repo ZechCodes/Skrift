@@ -108,6 +108,12 @@ class WorkerConfig:
     drain_timeout: float = 20.0
     drain_cancel_timeout: float = 5.0
 
+    def __post_init__(self) -> None:
+        # A pool with no places would start and never claim a job.
+        for setting in ("concurrency", "max_inflight_per_worker"):
+            if getattr(self, setting) < 1:
+                raise ValueError(f"{setting} must be at least 1, got {getattr(self, setting)}")
+
 
 @dataclass(frozen=True)
 class WorkerBackendConfig:
