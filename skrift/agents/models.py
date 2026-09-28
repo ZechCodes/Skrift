@@ -161,6 +161,10 @@ class RunState(BaseModel):
     ] = "queued"
     version: int = 0
     current_run_job_id: str | None = None
+    # The claim order of the latest run of the job named here to write this
+    # state; a run of that job with an earlier claim writes nothing (#204).
+    run_owner_job_id: str | None = None
+    run_owner_order: int | None = None
     current_turn_id: str | None = None
     current_tool_execution: ToolExecutionState | None = None
     messages: list[dict[str, Any]] = Field(default_factory=list)

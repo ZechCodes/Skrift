@@ -114,6 +114,7 @@ The context exposes:
 | `context.runtime` | The active `WorkerRuntime` |
 | `context.job` | The current `JobEnvelope` metadata |
 | `context.paused_state` | Empty unless this attempt is resuming from a previous `skrift.Pause` |
+| `context.claim_order` | Orders this run's claim among the job's claims: a later claim has a greater value. A run whose claim expired and was taken over can compare it with one recorded by the later run to tell it no longer owns the job. `None` for inline runs, and for a queue that supplies no order |
 | `context.emit(stream, event)` | Append a JSON-serializable custom event to the configured event log |
 
 Use application-owned stream names for custom events, such as `reports:{job_id}` or `media:resize`. Avoid the `workers:` prefix unless you are intentionally writing framework-level worker events.
