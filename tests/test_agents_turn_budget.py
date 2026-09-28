@@ -44,9 +44,9 @@ def clean_registries():
 def _broken_agent(where: str):
     """An agent whose every run fails the same way, and a count of its runs.
 
-    ``deps_factory`` fails before the agent loop, so the job's attempts run out
-    and it dead-letters as RETRIES_EXHAUSTED. ``tool`` fails inside the loop,
-    where the handler fails the turn itself.
+    ``deps_factory`` fails before the agent loop and ``tool`` fails inside it;
+    either way the job's attempts run out and it dead-letters as
+    RETRIES_EXHAUSTED (#202).
     """
 
     runs = {"count": 0}
@@ -126,15 +126,49 @@ async def test_a_failed_turn_put_back_on_the_pending_queue_is_not_run_again(
     finally:
         await asyncio.wait_for(runtime.stop(), 5)
 
-    attempts = 3 if where == "deps_factory" else 1
     assert refills["count"] == 1
-    assert runs["count"] == 2 * attempts  # the first turn, then "again" once
+    assert runs["count"] == 2 * 3  # the first turn, then "again" once, 3 attempts each
     assert turn_id in state.turn_errors
     events = [event for _, event in await runtime.event_log.read(stream_name(session.id))]
     event_types = [event["type"] for event in events]
     assert event_types.count("UserMessageReceived") == 2  # "hi" and "again"
     assert event_types.count("UserMessageActivated") == 1
+    assert event_types.count("AgentFailed") == 2  # once per turn, not per attempt
     assert f"turn {turn_id}" in caplog.text
+
+
+async def test_a_turn_that_fails_inside_the_loop_is_retried(clean_hooks):
+    # A failure inside the agent loop gets the job's attempts, as one before it
+    # does (#202): here the tool fails once, and the retry completes the turn.
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",), poll_interval=0.01)
+    agent = skrift.Agent(TestModel(call_tools=["flaky"]), name="flaky")
+    calls = {"count": 0}
+
+    @agent.tool
+    async def flaky(ctx: RunContext) -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("transient")
+        return "ok"
+
+    session = await agent.run("hi", dispatch="queued")
+    await runtime.start()
+    try:
+        for _ in range(500):
+            state = await load_runstate(session.id)
+            if state.terminal_at is not None:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        await asyncio.wait_for(runtime.stop(), 5)
+
+    assert state.status == "completed"
+    assert calls["count"] == 2
+    assert state.turn_errors == {}
+    events = [event for _, event in await runtime.event_log.read(stream_name(session.id))]
+    event_types = [event["type"] for event in events]
+    assert "AgentFailed" not in event_types
+    assert event_types.count("AgentCompleted") == 1
 
 
 def _dead(session_id: str, job_id: str) -> DeadJobEntry:

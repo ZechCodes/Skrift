@@ -73,6 +73,8 @@ reply = await chat.send(
 
 When an active turn finishes and queued user messages exist, the runtime emits `UserMessageActivated`, submits the next run job, and processes the next queued message. Queued turns are processed one at a time in arrival order.
 
+A turn that raises is retried by the worker like any other job, whether the exception comes before the agent loop (for example from `deps_factory`) or inside it (from the model or a tool). A retry runs the turn again from the start of its message history, so tools called before the failure are called again. The session stays `running` between attempts, and the turn fails, with one `AgentFailed` event, only when its run job's `max_attempts` run out.
+
 Each turn runs at most once to a failure. Its run job's `max_attempts` is the whole retry budget for the turn, so a turn that has failed is never given a fresh job; if a copy of it is found on the pending queue, the runtime drops the copy with a warning and moves on to the next queued turn.
 
 ## Approvals and tools

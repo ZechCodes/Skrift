@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-import traceback
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -142,55 +141,23 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
     if initial_message_history:
         message_history = [*initial_message_history, *message_history]
     run_kwargs.pop("deferred_tool_results", None)
-    try:
-        iter_result = await _drive_agent_iter(
-            agent,
-            payload.session_id,
-            prompt,
-            deps=deps,
-            message_history=message_history,
-            deferred_tool_results=deferred_tool_results,
-            run_kwargs=run_kwargs,
-        )
-        if iter_result is RUNNER_STOPPED:
-            return None
-        result = iter_result.result
-        streamed_message_count = iter_result.streamed_message_count
-        if isinstance(result, Pause):
-            return result
-    except Exception as exc:
-        async def fail(runstate):
-            if runstate.terminal_at is not None:
-                return runstate
-            runstate.status = "failed"
-            runstate.terminal_at = utcnow()
-            runstate.current_run_job_id = None
-            runstate.error = {
-                "exception_type": type(exc).__name__,
-                "exception_message": str(exc),
-                "traceback": traceback.format_exc(),
-            }
-            if runstate.current_turn_id:
-                runstate.turn_errors[runstate.current_turn_id] = runstate.error
-            append_event(
-                runstate,
-                "AgentFailed",
-                {
-                    "cause": "exception",
-                    "exception_type": type(exc).__name__,
-                    "exception_message": str(exc),
-                    "traceback": traceback.format_exc(),
-                    "failed_at": runstate.terminal_at.isoformat(),
-                },
-            )
-            _activate_next_pending_turn(runstate)
-            return runstate
-
-        failed_state = await update_runstate(payload.session_id, fail)
-        await drain_outbox(payload.session_id)
-        if failed_state.status == "failed":
-            await _emit_subagent_completed(payload.session_id, "failed")
-        raise
+    # A failure in the loop propagates like one before it: the worker retries
+    # the job, and the turn fails once its attempts run out (agents_run_dead).
+    iter_result = await _drive_agent_iter(
+        agent,
+        payload.session_id,
+        prompt,
+        deps=deps,
+        message_history=message_history,
+        deferred_tool_results=deferred_tool_results,
+        run_kwargs=run_kwargs,
+    )
+    if iter_result is RUNNER_STOPPED:
+        return None
+    result = iter_result.result
+    streamed_message_count = iter_result.streamed_message_count
+    if isinstance(result, Pause):
+        return result
 
     output = getattr(result, "output", result)
     new_messages = []
