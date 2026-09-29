@@ -28,7 +28,7 @@ from skrift.agents.state import (
     new_session_id,
     update_runstate,
 )
-from skrift.agents.turns import normalize_turn_kwargs
+from skrift.agents.turns import check_turn_kwargs_storable, normalize_turn_kwargs
 
 if TYPE_CHECKING:
     from skrift.agents._materialize import MaterializedAgent
@@ -385,6 +385,7 @@ class Agent:
                 f"Agent {self.skrift_name!r} has no deps_factory; deps_ref would be ignored."
             )
         run_kwargs = normalize_turn_kwargs(kwargs)
+        check_turn_kwargs_storable(run_kwargs)
         inherited_parent_session_id = parent_session_id or current_session_id()
         inherited_root_session_id = root_session_id
         if inherited_parent_session_id and inherited_root_session_id is None:

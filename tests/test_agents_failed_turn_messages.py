@@ -30,7 +30,13 @@ import skrift
 from skrift.agents.blob import InMemoryBlobStore
 from skrift.agents.models import AgentRunJob
 from skrift.agents.registry import registry as agent_registry
-from skrift.agents.runtime import agents_run_dead, agents_run_handler, register_agent_handlers
+from skrift.agents.runtime import (
+    RUNNER_STOPPED,
+    _runner_check_pass,
+    agents_run_dead,
+    agents_run_handler,
+    register_agent_handlers,
+)
 from skrift.agents.state import load_runstate, stream_name
 from skrift.workers import PermanentFailure, WorkerContext
 from skrift.workers.models import DeadJobEntry, DeadLetterCause, JobEnvelope, Pause
@@ -426,3 +432,119 @@ async def test_cancelling_a_session_drops_what_a_failed_attempt_kept():
     state = await load_runstate(session.id)
     assert state.status == "cancelled"
     assert state.failed_run_messages is None
+
+
+def _gated_failing_agent():
+    """An agent whose tool raises on every call, waiting for ``gate`` on its
+    second call and setting ``entered`` first."""
+
+    def call_work(messages, info):
+        return ModelResponse(parts=[ToolCallPart("work", {})])
+
+    agent = skrift.Agent(FunctionModel(call_work), name="failing")
+    calls = {"count": 0}
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+
+    @agent.tool
+    async def work(ctx: RunContext) -> str:
+        calls["count"] += 1
+        if calls["count"] == 2:
+            entered.set()
+            await gate.wait()
+        raise RuntimeError(f"failed attempt {calls['count']}")
+
+    return agent, entered, gate
+
+
+async def _claim_and_run(runtime) -> None:
+    claimed = await runtime.queue.claim(["agents"], visibility_timeout=60)
+    assert claimed is not None
+    await runtime.execute_claim(claimed)
+
+
+async def _failed_while_cancelling(runtime, agent, entered, gate, cancel):
+    """Fail the turn's first attempt, then cancel the session with ``cancel``
+    while the second attempt's tool is running and let that attempt fail too."""
+    session = await agent.run("hi", dispatch="queued")
+    await _claim_and_run(runtime)
+    assert (await load_runstate(session.id)).failed_run_messages is not None
+    second = asyncio.create_task(_claim_and_run(runtime))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await cancel(session, second)
+    finally:
+        gate.set()
+        await asyncio.gather(second, return_exceptions=True)
+    return session
+
+
+@pytest.mark.parametrize("finalized_by", ["next_attempt", "runner_boundary"])
+async def test_the_runtimes_cancel_finalizer_drops_what_an_attempt_kept_after_the_request(
+    finalized_by,
+):
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent, entered, gate = _gated_failing_agent()
+
+    async def cancel(session, second):
+        # The live claim stays; its tool then fails and keeps its messages.
+        await session.cancel()
+        gate.set()
+        await asyncio.wait_for(second, 5)
+
+    session = await _failed_while_cancelling(runtime, agent, entered, gate, cancel)
+    state = await load_runstate(session.id)
+    assert state.status == "cancelled" and state.terminal_at is None
+    assert state.failed_run_messages is not None
+
+    if finalized_by == "next_attempt":
+        await _claim_and_run(runtime)
+    else:
+        assert await _runner_check_pass(session.id, object()) is RUNNER_STOPPED
+    state = await load_runstate(session.id)
+    assert state.status == "cancelled" and state.terminal_at is not None
+    assert state.current_run_job_id is None
+    assert state.failed_run_messages is None
+    assert _history(state) == []
+
+
+async def test_session_cancels_finalizer_drops_what_an_attempt_kept_after_the_request(
+    monkeypatch,
+):
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent, entered, gate = _gated_failing_agent()
+    read, resume = asyncio.Event(), asyncio.Event()
+    cancelling = None
+    get_job_state = runtime.get_job_state
+
+    async def gated_get_job_state(job_id):
+        # Session.cancel reads the job after clearing the capture and before
+        # it finalizes; hold it there.
+        if asyncio.current_task() is cancelling:
+            read.set()
+            await resume.wait()
+        return await get_job_state(job_id)
+
+    monkeypatch.setattr(runtime, "get_job_state", gated_get_job_state)
+
+    async def cancel(session, second):
+        nonlocal cancelling
+        cancelling = asyncio.create_task(session.cancel())
+        try:
+            await asyncio.wait_for(read.wait(), 5)
+            assert (await load_runstate(session.id)).failed_run_messages is None
+            # The attempt fails, keeps its messages and goes back to the queue,
+            # so the cancel that resumes finds a job it can cancel.
+            gate.set()
+            await asyncio.wait_for(second, 5)
+            assert (await load_runstate(session.id)).failed_run_messages is not None
+        finally:
+            resume.set()
+            await asyncio.wait_for(cancelling, 5)
+
+    session = await _failed_while_cancelling(runtime, agent, entered, gate, cancel)
+    state = await load_runstate(session.id)
+    assert state.status == "cancelled" and state.terminal_at is not None
+    assert state.current_run_job_id is None
+    assert state.failed_run_messages is None
+    assert _history(state) == []
