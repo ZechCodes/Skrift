@@ -287,13 +287,17 @@ DLQ entries use `DeadJobEntry` records with a structured `cause` and `state`.
 
 ### When the DLQ record fails to save
 
-A job's state is set to `DEAD_LETTERED`, and its queue entry dead-lettered, before its DLQ record is created. If the dead-letter store then fails, the job has no DLQ record: nothing runs it again, and `dlq retry` cannot replay it.
-- The runtime logs this at error level, with the exception. The message names the job id, queue, job type and cause, and says the job has no dead-letter record.
+A job's state is set to `DEAD_LETTERED`, and its queue entry dead-lettered, before its DLQ record is created. The runtime then writes the record to the state store as a pending marker (`workers:dead_letter_pending:JOB_ID`), creates the record, emits `job_dead_lettered`, calls the handler's dead callback, and deletes the marker. If the dead-letter store fails, the job has no DLQ record yet, and `dlq retry` cannot replay it:
+- The runtime logs this at error level, with the exception. The message names the job id, queue, job type and cause, says the job has no dead-letter record, and says whether its pending marker was saved.
 - The same fields are on the log record as `job_id`, `queue`, `job_type` and `cause`, for structured log handlers.
 - The exception is still raised. A worker's loop logs it and goes on, and an inline or poison submission raises it to the caller.
 - No `job_dead_lettered` event is emitted, and the handler's dead callback is not called.
 
-To recover such a job, find its state by job id (`skrift workers jobs inspect JOB_ID`). The state store keeps the job's envelope, its attempts and its error; resubmit the job from them if it should run again. Recreating the missing records automatically is tracked in #232.
+`skrift workers dlq reconcile` (or `WorkerRuntime.reconcile_dead_letters()`) finishes every dead letter whose marker is still stored: it creates the record unless one with the same entry id exists, emits `job_dead_lettered`, calls the dead callback, and deletes the marker. A marker that fails again is kept and reported, and the command exits 1. Every worker start runs one reconcile pass before it polls; a failure there is logged and the worker starts anyway. Reconciling also finishes a dead letter whose process stopped between writing the marker and deleting it.
+
+Concurrent reconciles, such as two workers starting at once, create one record, but the `job_dead_lettered` event and the dead callback are at-least-once: a dead letter can deliver them more than once, so callbacks should tolerate a repeat.
+
+If the marker itself failed to save (the log says so), reconciling cannot recover the job. Find its state by job id (`skrift workers jobs inspect JOB_ID`). The state store keeps the job's envelope, its attempts and its error; resubmit the job from them if it should run again.
 
 ## Custom Backends
 
@@ -412,5 +416,6 @@ Optional admin methods fall back to slower scans or generic summaries when absen
 | `skrift workers dlq retry [ENTRY_ID...]` | Replay one or more DLQ entries, or a filtered set, as new jobs |
 | `skrift workers dlq discard [ENTRY_ID...]` | Mark one or more DLQ entries, or a filtered set, discarded |
 | `skrift workers dlq export` | Export DLQ entries as JSON |
+| `skrift workers dlq reconcile` | Recreate DLQ records that failed to save |
 
 All process-oriented commands reject memory backends by default because process-local data cannot be shared. Use `--allow-memory-backends` only for local tests.

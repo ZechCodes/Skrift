@@ -1146,6 +1146,51 @@ def workers_dlq_export(
     asyncio.run(_run())
 
 
+@workers_dlq.command("reconcile")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+@click.option("--allow-memory-backends", is_flag=True, help="Allow process-local backends.")
+def workers_dlq_reconcile(as_json, allow_memory_backends):
+    """Recreate dead-letter records that failed to save."""
+    import asyncio
+
+    from skrift.config import get_settings
+
+    settings = get_settings()
+    _validate_worker_process_backends(
+        settings,
+        allow_memory_backends=allow_memory_backends,
+        context="inspect",
+    )
+    _import_worker_modules(settings)
+
+    async def _run():
+        db_config = _build_db_config(settings)
+        try:
+            runtime = _configure_worker_runtime(
+                settings,
+                session_maker=db_config.get_session,
+                queues=tuple(settings.workers.queues),
+                concurrency=settings.workers.concurrency,
+                mode=settings.workers.execution,
+            )
+            summary = await runtime.reconcile_dead_letters()
+            if as_json:
+                click.echo(json.dumps(summary, indent=2, sort_keys=True))
+            else:
+                for job_id in summary["recovered"]:
+                    click.echo(f"Reconciled the dead letter of job {job_id}")
+                for job_id in summary["failed"]:
+                    click.echo(f"Failed to reconcile the dead letter of job {job_id}", err=True)
+                if not summary["recovered"] and not summary["failed"]:
+                    click.echo("No dead letters to reconcile.")
+            if summary["failed"]:
+                click.get_current_context().exit(1)
+        finally:
+            await db_config.get_engine().dispose()
+
+    asyncio.run(_run())
+
+
 @cli.command()
 @click.option(
     "--write",

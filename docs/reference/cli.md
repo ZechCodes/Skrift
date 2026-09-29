@@ -148,6 +148,7 @@ skrift workers [COMMAND] [OPTIONS]
 | `skrift workers dlq retry [ENTRY_ID...]` | Replay explicit or filtered dead-letter entries as new jobs |
 | `skrift workers dlq discard [ENTRY_ID...]` | Mark explicit or filtered dead-letter entries discarded |
 | `skrift workers dlq export` | Export dead-letter entries as JSON |
+| `skrift workers dlq reconcile` | Recreate dead-letter records that failed to save |
 
 Common examples:
 
@@ -171,6 +172,7 @@ skrift workers dlq retry ENTRY_ID
 skrift workers dlq retry --queue webhooks --cause retries_exhausted --since 1h
 skrift workers dlq discard ENTRY_ID --reason "not actionable"
 skrift workers dlq discard --job-type media.resize_image --dry-run
+skrift workers dlq reconcile
 ```
 
 DLQ list, export, retry, and discard support `--queue`, `--job-type`, `--cause`, `--state`, `--exception-type`, `--since`, and `--until`. `--since` and `--until` accept ISO datetimes or durations such as `15m`, `1h`, and `2d`. Filtered retry/discard defaults to `--state open`; permanent-failure and poison retries require `--force`.

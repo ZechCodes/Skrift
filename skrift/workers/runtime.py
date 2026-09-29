@@ -48,6 +48,7 @@ from skrift.workers.registry import HandlerDescriptor, HandlerRegistry, registry
 
 
 LIFECYCLE_STREAM = "workers:lifecycle"
+DEAD_LETTER_PENDING_PREFIX = "workers:dead_letter_pending:"
 QUEUE_WAIT_HISTORY_STATE_KEY = "workers:queue_wait_history"
 QUEUE_TREND_HISTORY_STATE_KEY = "workers:queue_trend_history"
 # How long a finished job's state stays queryable before the store reclaims it.
@@ -481,6 +482,10 @@ class WorkerRuntime:
         # further, so nothing it would install outlives that stop.
         stops = self._stops
         await self.record_queue_history()
+        try:
+            await self.reconcile_dead_letters()
+        except Exception:
+            logger.exception("Reconciling dead letters on worker start failed; starting anyway")
         if self._stops != stops or self._pool is not None:
             return  # stopped, or another start installed the pool
         self._stopping_handlers = False
@@ -1795,19 +1800,42 @@ class WorkerRuntime:
         ):
             logger.info("Job %s was cancelled before it was dead-lettered", job.id)
             return None
+        # The pending marker holds the record until it is saved and announced,
+        # so reconcile_dead_letters can finish a dead letter this one could not.
+        pending_key = self._dead_letter_pending_key(job.id)
+        try:
+            await self.state_store.set(pending_key, entry)
+        except Exception:
+            pending_key = None
+            logger.warning(
+                "Job %s: saving its pending dead-letter marker failed, so its "
+                "dead letter cannot be reconciled if its record fails to save",
+                job.id,
+                exc_info=True,
+            )
         try:
             entry = await self.dead_letter_store.create(entry)
         except Exception:
-            # Nothing will run the job again, and with no record nothing can
-            # replay it; its state still holds the envelope, attempts and error.
+            # Nothing will run the job again, and without a record nothing can
+            # replay it until reconciling recreates the record from the marker.
+            if pending_key is not None:
+                outcome = (
+                    "its pending marker keeps the record, and `skrift workers dlq "
+                    "reconcile`, or the next worker start, recreates it."
+                )
+            else:
+                outcome = (
+                    "it cannot be replayed. Its job state keeps the envelope, "
+                    "attempts and error."
+                )
             logger.exception(
                 "Job %s (queue %s, type %s, cause %s) is DEAD_LETTERED with no "
-                "dead-letter record: saving the record failed, so it cannot be "
-                "replayed. Its job state keeps the envelope, attempts and error.",
+                "dead-letter record: saving the record failed, so %s",
                 job.id,
                 job.queue,
                 job.type,
                 cause.value,
+                outcome,
                 extra={
                     "job_id": job.id,
                     "queue": job.queue,
@@ -1820,7 +1848,67 @@ class WorkerRuntime:
         descriptor = self.registry.get(job.type)
         if descriptor.dead_callback is not None:
             await self._call_dead_callback(descriptor, entry)
+        if pending_key is not None:
+            await self.state_store.delete(pending_key)
         return entry
+
+    async def reconcile_dead_letters(self) -> dict[str, list[str]]:
+        """Finish the dead letters whose pending marker is still stored.
+
+        A marker stays when saving a job's record, emitting its
+        ``job_dead_lettered`` event or calling its dead callback failed, or the
+        process stopped first. Each marker's record is created unless its id
+        is already stored, the event and callback are delivered, and the
+        marker is deleted. Two concurrent runs create one record, but either
+        may deliver the event and callback: they are at-least-once.
+
+        Returns the job ids ``recovered`` and those that ``failed``, which
+        keep their markers for the next run.
+        """
+        recovered: list[str] = []
+        failed: list[str] = []
+        for key in await self.state_store.keys(DEAD_LETTER_PENDING_PREFIX):
+            entry = await self.state_store.get(key)
+            if not isinstance(entry, DeadJobEntry):
+                continue
+            try:
+                await self._recreate_dead_letter(entry)
+                await self.state_store.delete(key)
+            except Exception:
+                logger.exception(
+                    "Reconciling the dead letter of job %s failed; its pending "
+                    "marker is kept for the next run",
+                    entry.job.id,
+                    extra={"job_id": entry.job.id},
+                )
+                failed.append(entry.job.id)
+                continue
+            logger.info(
+                "Reconciled the dead letter of job %s (entry %s)",
+                entry.job.id,
+                entry.id,
+                extra={"job_id": entry.job.id},
+            )
+            recovered.append(entry.job.id)
+        return {"recovered": recovered, "failed": failed}
+
+    async def _recreate_dead_letter(self, entry: DeadJobEntry) -> None:
+        if await self.dead_letter_store.get(entry.id) is None:
+            try:
+                await self.dead_letter_store.create(entry)
+            except Exception:
+                # A concurrent run may have created it first.
+                if await self.dead_letter_store.get(entry.id) is None:
+                    raise
+        await self.emit_lifecycle(
+            LifecycleEventType.JOB_DEAD_LETTERED, entry.job, error=entry.latest_error
+        )
+        try:
+            descriptor = self.registry.get(entry.job_type)
+        except KeyError:
+            return  # no handler left to call back
+        if descriptor.dead_callback is not None:
+            await self._call_dead_callback(descriptor, entry)
 
     async def _dead_letter_submission(
         self, job: JobEnvelope, exc: ValidationError
@@ -2184,6 +2272,10 @@ class WorkerRuntime:
     @staticmethod
     def _job_key(job_id: str) -> str:
         return f"workers:jobs:{job_id}"
+
+    @staticmethod
+    def _dead_letter_pending_key(job_id: str) -> str:
+        return f"{DEAD_LETTER_PENDING_PREFIX}{job_id}"
 
     @staticmethod
     def _same_idempotent_job(existing: JobEnvelope, incoming: JobEnvelope) -> bool:
