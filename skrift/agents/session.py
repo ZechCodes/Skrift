@@ -125,6 +125,7 @@ class Session:
                 state.error = None
                 state.pending_approvals = []
                 state.deferred_tool_results = {}
+                state.failed_run_messages = None
                 state.current_tool_execution = None
                 state.paused_at = None
                 state.status_before_pause = None
@@ -231,6 +232,7 @@ class Session:
             run_job_id = state.current_run_job_id
             prior_status = state.status
             state.status = "cancelled"
+            state.failed_run_messages = None
             append_event(
                 state,
                 "AgentCancellationRequested",

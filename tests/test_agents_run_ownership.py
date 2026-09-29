@@ -135,6 +135,7 @@ async def test_a_stale_run_does_not_settle_the_turn_a_later_claim_is_running(sta
         state = await load_runstate(session.id)
         assert state.status == "running"
         assert state.current_run_job_id == job
+        assert state.failed_run_messages is None
     finally:
         gates[0].set()
         gates[1].set()
