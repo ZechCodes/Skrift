@@ -10,7 +10,13 @@ from typing import Any
 from uuid import uuid4
 
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
-from pydantic_ai.messages import ModelMessagesTypeAdapter
+from pydantic_ai import exceptions as pydantic_ai_exceptions
+from pydantic_ai.messages import (
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    ToolReturnPart,
+)
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from skrift.agents.config import get_agents_config
@@ -22,6 +28,7 @@ from skrift.agents.models import (
     AgentRunJob,
     AgentToolCallJob,
     ApprovalRejection,
+    FailedRunMessages,
     OutboxSubmit,
     ResumeContext,
     ToolDisplayContext,
@@ -53,6 +60,15 @@ class _RunSuperseded(Exception):
     """This run no longer owns its session's current turn."""
 
 
+class UsageLimitExceeded(PermanentFailure, pydantic_ai_exceptions.UsageLimitExceeded):
+    """The run hit its pydantic-ai ``UsageLimits``. A retry would start from
+    the same messages and hit them again, so the turn fails without one (#230).
+
+    It keeps pydantic-ai's name, which is the ``exception_type`` the turn's
+    error records.
+    """
+
+
 def _claim_turn(runstate: Any, context: WorkerContext) -> None:
     """Record this run as the owner of the session's current turn, or raise
     ``_RunSuperseded``, before the run writes the turn's state (#204).
@@ -82,6 +98,13 @@ class AgentIterResult:
     streamed_message_count: int
     usage: Any = None
     response: Any = None
+
+
+@dataclass
+class _FailedRun:
+    # Set when the agent loop raises: the messages the run produced before it
+    # did, dumped for the turn's history.
+    messages: list[dict[str, Any]] | None = None
 
 
 async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> Any:
@@ -175,16 +198,26 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
         message_history = [*initial_message_history, *message_history]
     run_kwargs.pop("deferred_tool_results", None)
     # A failure in the loop propagates like one before it: the worker retries
-    # the job, and the turn fails once its attempts run out (agents_run_dead).
-    iter_result = await _drive_agent_iter(
-        agent,
-        payload.session_id,
-        prompt,
-        deps=deps,
-        message_history=message_history,
-        deferred_tool_results=deferred_tool_results,
-        run_kwargs=run_kwargs,
-    )
+    # the job, and the turn fails once its attempts run out (agents_run_dead),
+    # keeping the messages its last failed run produced (#230).
+    failed_run = _FailedRun()
+    try:
+        iter_result = await _drive_agent_iter(
+            agent,
+            payload.session_id,
+            prompt,
+            deps=deps,
+            message_history=message_history,
+            deferred_tool_results=deferred_tool_results,
+            run_kwargs=run_kwargs,
+            failed_run=failed_run,
+        )
+    except pydantic_ai_exceptions.UsageLimitExceeded as exc:
+        await _keep_failed_run_messages(payload.session_id, context, failed_run)
+        raise UsageLimitExceeded(exc.message) from exc
+    except Exception:
+        await _keep_failed_run_messages(payload.session_id, context, failed_run)
+        raise
     if iter_result is RUNNER_STOPPED:
         return None
     result = iter_result.result
@@ -246,6 +279,7 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
                     runstate.messages.extend(
                         {"role": "model", "content": item} for item in new_messages
                     )
+                runstate.failed_run_messages = None
                 for event_type, event_payload in formatted_events:
                     append_event(runstate, event_type, event_payload)
                 runstate.current_tool_execution = ToolExecutionState(
@@ -299,6 +333,7 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
                 runstate.messages.extend(
                     {"role": "model", "content": item} for item in new_messages
                 )
+            runstate.failed_run_messages = None
             for event_type, event_payload in formatted_events:
                 append_event(runstate, event_type, event_payload)
             for call in output.approvals:
@@ -361,6 +396,7 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
         )
         if new_messages:
             runstate.messages.extend({"role": "model", "content": item} for item in new_messages)
+        runstate.failed_run_messages = None
         for event_type, payload in formatted_events:
             append_event(runstate, event_type, payload)
         append_event(
@@ -404,6 +440,14 @@ async def agents_run_dead(entry: DeadJobEntry) -> None:
         dropped_pending_messages = (
             len(runstate.pending_user_messages) if discard_pending else 0
         )
+        kept = runstate.failed_run_messages
+        runstate.failed_run_messages = None
+        if (
+            kept is not None
+            and kept.run_job_id == entry.job.id
+            and kept.turn_id == runstate.current_turn_id
+        ):
+            runstate.messages.extend({"role": "model", "content": item} for item in kept.messages)
         runstate.status = "failed"
         runstate.terminal_at = utcnow()
         runstate.current_run_job_id = None
@@ -578,6 +622,7 @@ async def _drive_agent_iter(
     message_history: list[Any],
     deferred_tool_results: DeferredToolResults | None,
     run_kwargs: dict[str, Any],
+    failed_run: _FailedRun,
 ) -> Any:
     token = set_current_session_id(session_id)
     try:
@@ -597,48 +642,119 @@ async def _drive_agent_iter(
             deferred_tool_results=deferred_tool_results,
             **iter_kwargs,
         ) as run:
-            node_index = 0
-            streamed_message_count = 0
-            async for node in run:
-                pause = await _runner_check_pass(session_id, node)
-                if pause is not None:
-                    return AgentIterResult(
-                        result=pause,
-                        streamed_message_count=streamed_message_count,
-                        usage=run.usage(),
-                        response=_latest_response(run),
+            try:
+                node_index = 0
+                streamed_message_count = 0
+                async for node in run:
+                    pause = await _runner_check_pass(session_id, node)
+                    if pause is not None:
+                        return AgentIterResult(
+                            result=pause,
+                            streamed_message_count=streamed_message_count,
+                            usage=run.usage(),
+                            response=_latest_response(run),
+                        )
+                    node_kind = type(node).__name__
+                    message_delta, streamed_message_count = _new_message_delta(
+                        run,
+                        streamed_message_count,
                     )
-                node_kind = type(node).__name__
-                message_delta, streamed_message_count = _new_message_delta(
-                    run,
-                    streamed_message_count,
-                )
-                formatted_events = await _formatted_tool_events_from_messages(
-                    agent,
-                    session_id,
-                    message_delta,
-                )
+                    formatted_events = await _formatted_tool_events_from_messages(
+                        agent,
+                        session_id,
+                        message_delta,
+                    )
 
-                async def record_cursor(runstate):
-                    runstate.cursor = {
-                        "node_index": node_index,
-                        "node_kind": node_kind,
-                    }
-                    for event_type, event_payload in formatted_events:
-                        append_event(runstate, event_type, event_payload)
-                    return runstate
+                    async def record_cursor(runstate):
+                        runstate.cursor = {
+                            "node_index": node_index,
+                            "node_kind": node_kind,
+                        }
+                        for event_type, event_payload in formatted_events:
+                            append_event(runstate, event_type, event_payload)
+                        return runstate
 
-                await update_runstate(session_id, record_cursor)
-                await drain_outbox(session_id)
-                node_index += 1
-            return AgentIterResult(
-                result=run.result,
-                streamed_message_count=streamed_message_count,
-                usage=run.usage(),
-                response=_latest_response(run),
-            )
+                    await update_runstate(session_id, record_cursor)
+                    await drain_outbox(session_id)
+                    node_index += 1
+                return AgentIterResult(
+                    result=run.result,
+                    streamed_message_count=streamed_message_count,
+                    usage=run.usage(),
+                    response=_latest_response(run),
+                )
+            except Exception as exc:
+                failed_run.messages = _failed_run_messages(run, exc)
+                raise
     finally:
         reset_current_session_id(token)
+
+
+async def _keep_failed_run_messages(
+    session_id: str, context: WorkerContext, failed_run: _FailedRun
+) -> None:
+    """Keep what a run that raised in the agent loop produced, for the turn's
+    messages should it fail (agents_run_dead). A retry does not see them: it
+    runs the turn again from the start of its message history."""
+    if failed_run.messages is None:
+        return
+
+    async def keep(runstate):
+        _claim_turn(runstate, context)
+        runstate.failed_run_messages = FailedRunMessages(
+            run_job_id=context.job.id,
+            turn_id=runstate.current_turn_id,
+            messages=failed_run.messages,
+        )
+        return runstate
+
+    try:
+        await update_runstate(session_id, keep)
+    except _RunSuperseded:
+        pass
+    except Exception:
+        # The run's own exception is the one the worker should record.
+        logger.exception(
+            "Could not keep the messages of agent session %s's failed run", session_id
+        )
+
+
+def _failed_run_messages(run: Any, exc: Exception) -> list[dict[str, Any]]:
+    """The messages ``run`` produced before it raised ``exc``, dumped for the
+    turn's history in a form the next turn's run accepts.
+
+    A run can raise after a model response that calls tools and before their
+    results are in, when a tool raises or the tool-call limit is hit, and
+    pydantic-ai refuses a new prompt after a history that ends in unanswered
+    tool calls. Each such call gets a failed tool return saying so.
+    """
+    try:
+        messages = list(run.new_messages())
+    except Exception:
+        return []
+    last = messages[-1] if messages else None
+    if isinstance(last, ModelResponse) and last.tool_calls:
+        content = (
+            f"No result: the run stopped with {type(exc).__name__} "
+            "before this tool call returned."
+        )
+        messages.append(
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name=call.tool_name,
+                        content=content,
+                        tool_call_id=call.tool_call_id,
+                        outcome="failed",
+                    )
+                    for call in last.tool_calls
+                ]
+            )
+        )
+    try:
+        return ModelMessagesTypeAdapter.dump_python(messages, mode="json")
+    except Exception:
+        return []
 
 
 def _record_turn_usage(
@@ -812,6 +928,7 @@ def _activate_next_pending_turn(runstate: Any) -> bool:
         )
     else:
         return False
+    runstate.failed_run_messages = None
     runstate.messages.append(
         {"role": "user", "content": turn.get("message"), "turn_id": turn.get("turn_id")}
     )

@@ -147,6 +147,19 @@ class OutboxWake(BaseModel):
 OutboxEntry = OutboxEvent | OutboxSubmit | OutboxWake
 
 
+class FailedRunMessages(BaseModel):
+    """The messages a run of the current turn produced before it raised (#230).
+
+    Each failed attempt of the run job replaces them. If the job dead-letters,
+    the turn fails with them added to its messages; a run of the job that
+    pauses or completes drops them.
+    """
+
+    run_job_id: str
+    turn_id: str | None = None
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class RunState(BaseModel):
     session_id: str
     agent_name: str
@@ -168,6 +181,7 @@ class RunState(BaseModel):
     current_turn_id: str | None = None
     current_tool_execution: ToolExecutionState | None = None
     messages: list[dict[str, Any]] = Field(default_factory=list)
+    failed_run_messages: FailedRunMessages | None = None
     pending_user_messages: list[dict[str, Any]] = Field(default_factory=list)
     pending_approvals: list[dict[str, Any]] = Field(default_factory=list)
     pending_steers: list[Steer] = Field(default_factory=list)

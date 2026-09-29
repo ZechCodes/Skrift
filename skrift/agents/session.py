@@ -125,6 +125,7 @@ class Session:
                 state.error = None
                 state.pending_approvals = []
                 state.deferred_tool_results = {}
+                state.failed_run_messages = None
                 state.current_tool_execution = None
                 state.paused_at = None
                 state.status_before_pause = None

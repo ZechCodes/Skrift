@@ -15,6 +15,8 @@ import logging
 
 import pytest
 from pydantic_ai import RunContext
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
 import skrift
@@ -46,7 +48,9 @@ def _broken_agent(where: str):
 
     ``deps_factory`` fails before the agent loop and ``tool`` fails inside it;
     either way the job's attempts run out and it dead-letters as
-    RETRIES_EXHAUSTED (#202).
+    RETRIES_EXHAUSTED (#202). The ``tool`` model calls the tool on every
+    request: a failed turn's messages, which the next turn sees (#230), end in
+    a tool return, and TestModel answers with text after one.
     """
 
     runs = {"count": 0}
@@ -57,8 +61,11 @@ def _broken_agent(where: str):
             return ctx.deps_ref["account_id"]
         return None
 
+    def call_boom(messages, info):
+        return ModelResponse(parts=[ToolCallPart("boom", {})])
+
     agent = skrift.Agent(
-        TestModel(call_tools=["boom"] if where == "tool" else []),
+        FunctionModel(call_boom) if where == "tool" else TestModel(call_tools=[]),
         name="broken",
         deps_factory=deps_factory,
     )
