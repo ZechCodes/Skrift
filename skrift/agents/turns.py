@@ -80,29 +80,28 @@ def _dataclass_kwarg_values(run_kwargs: dict[str, Any]) -> list[tuple[str, Any]]
 
 
 def check_turn_kwargs_storable(run_kwargs: dict[str, Any]) -> None:
-    """Raise TypeError for a run kwarg the state store would save as something
-    the worker cannot rebuild, instead of storing it for the run to fail on.
+    """Raise TypeError for a run kwarg the worker would not get back as given,
+    instead of storing it for the run to fail on.
 
     Every dispatch stores its turn's kwargs and runs them from the store, so
-    this holds for inline dispatch too. The in-memory store keeps the objects
-    themselves; the others save them as JSON.
+    this holds for inline dispatch too. The in-memory store keeps objects as
+    they are, and the others save them as JSON; on any store, the worker
+    rebuilds a dict given for a Pydantic AI dataclass.
     """
 
     store = get_runtime().state_store
-    if isinstance(store, InMemoryStateStore):
-        return
+    saves_json = not isinstance(store, InMemoryStateStore)
     model = run_kwargs.get("model")
-    if model is not None and not isinstance(model, str):
+    if saves_json and model is not None and not isinstance(model, str):
         raise TypeError(
             f"Pass model by name, such as 'openai:gpt-5.4-mini', not as a "
             f"{type(model).__name__} instance: {type(store).__name__} saves a "
             "turn's run kwargs as JSON, and a model object cannot be rebuilt from it."
         )
-    # A dict is stored and rebuilt as it is.
     values = [
         (name, value)
         for name, value in _dataclass_kwarg_values(run_kwargs)
-        if not isinstance(value, dict)
+        if saves_json or isinstance(value, dict)
     ]
     if not values:
         return
@@ -116,11 +115,31 @@ def check_turn_kwargs_storable(run_kwargs: dict[str, Any]) -> None:
             rebuilt = to_jsonable_python(adapters[name].validate_python(stored))
         except (ValueError, TypeError, PydanticSerializationError):
             rebuilt = None
-        if rebuilt != stored:
+        # A dict may leave out fields that have defaults; an object's JSON has
+        # every field.
+        if not (_json_includes(rebuilt, stored) if isinstance(value, dict) else rebuilt == stored):
             raise TypeError(
-                f"{name} holds a {type(value).__name__} that {type(store).__name__} "
-                "cannot store: the run would not get the same value back from its JSON."
+                f"{name} holds a {type(value).__name__} that the run would not get back "
+                f"as given from {type(store).__name__}: pass the Pydantic AI object, or "
+                "a dict of its fields with values of their types."
             )
+
+
+def _json_includes(rebuilt: Any, given: Any) -> bool:
+    """Whether ``rebuilt`` has every key of ``given``, at any depth, with the
+    same value and JSON type."""
+
+    if isinstance(given, dict):
+        return isinstance(rebuilt, dict) and all(
+            key in rebuilt and _json_includes(rebuilt[key], value) for key, value in given.items()
+        )
+    if isinstance(given, list):
+        return (
+            isinstance(rebuilt, list)
+            and len(rebuilt) == len(given)
+            and all(map(_json_includes, rebuilt, given))
+        )
+    return type(rebuilt) is type(given) and rebuilt == given
 
 
 def decode_turn_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:

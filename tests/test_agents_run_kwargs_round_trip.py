@@ -287,8 +287,65 @@ async def test_a_kwarg_that_would_not_come_back_the_same_is_refused(backend, kwa
     agent = skrift.Agent(TestModel(), name="rebuilt")
     async with AsyncExitStack() as stack:
         await _worker_runtime(backend, stack, tmp_path)
-        with pytest.raises(TypeError, match="cannot store"):
+        with pytest.raises(TypeError, match="would not get back as given"):
             await agent.run("hi", dispatch="queued", session_id="s1", **kwargs)
         assert await load_runstate("s1") is None
-        # A dict is stored as it is, and one the worker rebuilds is accepted.
-        await agent.run("hi", dispatch="queued", usage_limits={"request_limit": 2})
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"usage_limits": {"request_limit": "not-an-int"}},
+        # The worker would coerce "2" and drop the unknown key.
+        {"usage_limits": {"request_limit": "2", "unrecognized_limit": 0}},
+        {"usage_limits": {"request_limit": 2, "unrecognized_limit": 0}},
+        {"usage": {"requests": "1"}},
+        {"message_history": [{"kind": "request", "parts": [], "extra": 1}]},
+        {"builtin_tools": [{"kind": "no_such_tool"}]},
+    ],
+    ids=[
+        "usage_limits bad type",
+        "usage_limits coerced and extra key",
+        "usage_limits extra key",
+        "usage bad type",
+        "message_history extra key",
+        "builtin_tools unknown kind",
+    ],
+)
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_a_dict_the_run_would_not_rebuild_as_given_is_refused(backend, kwargs, tmp_path):
+    # The worker rebuilds these dicts on every store, the in-memory one too.
+    agent = skrift.Agent(TestModel(), name="rebuilt")
+    async with AsyncExitStack() as stack:
+        await _worker_runtime(backend, stack, tmp_path)
+        with pytest.raises(TypeError, match="would not get back as given"):
+            await agent.run("hi", dispatch="queued", session_id="s1", **kwargs)
+        assert await load_runstate("s1") is None
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_a_dict_for_a_dataclass_kwarg_is_accepted_and_enforced(backend, tmp_path):
+    agent, seen = _searching_agent("mapped")
+    history = [
+        {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "earlier"}]},
+        {"kind": "response", "parts": [{"part_kind": "text", "content": "noted"}]},
+    ]
+    async with AsyncExitStack() as stack:
+        runtime = await _worker_runtime(backend, stack, tmp_path)
+        session = await agent.run(
+            "now",
+            dispatch="queued",
+            message_history=history,
+            usage={"requests": 1},
+            usage_limits={"request_limit": 2},
+            builtin_tools=[],
+        )
+        turn_id = (await load_runstate(session.id)).current_turn_id
+        await runtime.start()
+        stack.push_async_callback(lambda: asyncio.wait_for(runtime.stop(), 5))
+        state = await _turn_errors(session.id, 1)
+
+    assert state.turn_errors[turn_id]["exception_type"] == "UsageLimitExceeded"
+    assert "request_limit of 2" in state.turn_errors[turn_id]["exception_message"]
+    assert len(seen) == 1
+    assert _prompts(seen[0]) == ["earlier", "now"]
