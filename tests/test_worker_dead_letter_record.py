@@ -638,3 +638,178 @@ async def test_worker_start_logs_a_failed_reconcile_and_starts(backends, caplog)
         assert isinstance(error.exc_info[1], StoreDown)
     finally:
         await runtime.stop()
+
+
+def _pending_entry():
+    job = JobEnvelope(type="record.fails", queue=QUEUE, payload={"n": 1})
+    return DeadJobEntry(
+        job=job,
+        queue=QUEUE,
+        job_type="record.fails",
+        cause=DeadLetterCause.RETRIES_EXHAUSTED,
+        latest_error="RuntimeError: boom",
+    )
+
+
+async def test_a_dead_callback_can_stop_the_runtime_during_the_start_pass(backends, caplog):
+    caplog.set_level(logging.INFO, logger="skrift.workers.runtime")
+    called = []
+    runtime = skrift.configure_workers(
+        mode="in_process", queues=(QUEUE,), poll_interval=0.01, **backends
+    )
+
+    @handler("record.fails", queue=QUEUE, max_attempts=1)
+    async def fails(payload: Item, context):
+        raise RuntimeError("boom")
+
+    @fails.on_dead
+    async def on_dead(entry):
+        called.append(entry.id)
+        if len(called) == 1:
+            await runtime.stop()
+
+    entries = {entry.id: entry for entry in (_pending_entry(), _pending_entry())}
+    for entry in entries.values():
+        await runtime.state_store.set(_key(entry), entry)
+
+    await asyncio.wait_for(runtime.start(), timeout=5)
+    task = runtime._reconcile_task
+    try:
+        await asyncio.wait({task}, timeout=10)
+        assert task.done() and not task.cancelled() and task.exception() is None
+        assert runtime._pool is None
+        assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+
+        # The called-back dead letter is finished; the other keeps its marker.
+        [stopped_by] = called
+        [left] = [entry for entry_id, entry in entries.items() if entry_id != stopped_by]
+        assert await runtime.state_store.keys(PENDING) == [_key(left)]
+        assert len(await _records(runtime, entries[stopped_by].job.id)) == 1
+        assert await _records(runtime, left.job.id) == []
+
+        await asyncio.wait_for(runtime.start(), timeout=5)
+        await asyncio.wait_for(runtime._reconcile_task, timeout=10)
+        assert called == [stopped_by, left.id]
+        assert await runtime.state_store.keys(PENDING) == []
+        assert len(await _records(runtime, left.job.id)) == 1
+    finally:
+        await asyncio.wait_for(runtime.stop(), timeout=10)
+
+
+async def test_a_stop_from_elsewhere_cancels_the_start_pass_in_a_dead_callback(backends):
+    in_callback = asyncio.Event()
+    cancelled = []
+    runtime = skrift.configure_workers(
+        mode="in_process", queues=(QUEUE,), poll_interval=0.01, **backends
+    )
+
+    @handler("record.fails", queue=QUEUE, max_attempts=1)
+    async def fails(payload: Item, context):
+        raise RuntimeError("boom")
+
+    @fails.on_dead
+    async def on_dead(entry):
+        in_callback.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(entry.id)
+            raise
+
+    entry = _pending_entry()
+    await runtime.state_store.set(_key(entry), entry)
+
+    await asyncio.wait_for(runtime.start(), timeout=5)
+    task = runtime._reconcile_task
+    try:
+        await asyncio.wait_for(in_callback.wait(), timeout=10)
+    finally:
+        await asyncio.wait_for(runtime.stop(), timeout=10)
+
+    assert cancelled == [entry.id]
+    assert task.cancelled() and runtime._reconcile_task is None and runtime._pool is None
+    assert await runtime.state_store.keys(PENDING) == [_key(entry)]
+
+
+async def test_a_dead_callback_ignoring_its_cancellation_does_not_hold_up_stop(backends, caplog):
+    caplog.set_level(logging.INFO, logger="skrift.workers.runtime")
+    in_callback = asyncio.Event()
+    release = asyncio.Event()
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        queues=(QUEUE,),
+        poll_interval=0.01,
+        drain_timeout=0.05,
+        drain_cancel_timeout=0.05,
+        **backends,
+    )
+
+    @handler("record.fails", queue=QUEUE, max_attempts=1)
+    async def fails(payload: Item, context):
+        raise RuntimeError("boom")
+
+    @fails.on_dead
+    async def on_dead(entry):
+        in_callback.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()  # its own cleanup, deaf to the stop
+
+    entry = _pending_entry()
+    await runtime.state_store.set(_key(entry), entry)
+
+    await asyncio.wait_for(runtime.start(), timeout=5)
+    task = runtime._reconcile_task
+    try:
+        await asyncio.wait_for(in_callback.wait(), timeout=10)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await asyncio.wait_for(runtime.stop(), timeout=1)
+        assert loop.time() - started < 0.5
+        assert runtime._pool is None and not task.done()
+        [warning] = [record for record in caplog.records if record.levelno == logging.WARNING]
+        assert "ignored its cancellation" in warning.getMessage()
+    finally:
+        release.set()
+        await asyncio.wait({task}, timeout=10)
+        await runtime.stop()
+
+    # The callback swallowed its cancellation and returned, so it ran: its
+    # dead letter is finished.
+    assert task.done() and runtime._reconcile_task is None
+    assert await runtime.state_store.keys(PENDING) == []
+
+
+@pytest.mark.parametrize("held", ["record", "event"])
+async def test_a_reconcile_leaves_its_dead_letter_when_the_runtime_stops_meanwhile(backends, held):
+    dead = []
+    _register(dead)
+    runtime = skrift.configure_workers(
+        mode="in_process", queues=(QUEUE,), poll_interval=0.01, **backends
+    )
+    events = _record_lifecycle(runtime)
+    entry = _pending_entry()
+    await runtime.state_store.set(_key(entry), entry)
+    holding, release = asyncio.Event(), asyncio.Event()
+    target = runtime.dead_letter_store if held == "record" else runtime
+    name = "create" if held == "record" else "emit_lifecycle"
+    real = getattr(target, name)
+
+    async def hold(*args, **kwargs):
+        holding.set()
+        await release.wait()
+        return await real(*args, **kwargs)
+
+    setattr(target, name, hold)
+    # Not the start pass, so the stop does not cancel it.
+    reconcile = asyncio.create_task(runtime.reconcile_dead_letters())
+    await asyncio.wait_for(holding.wait(), timeout=10)
+    await runtime.stop()
+    release.set()
+
+    assert await asyncio.wait_for(reconcile, timeout=10) == {"recovered": [], "failed": []}
+    assert dead == []
+    assert len(_dead_lettered(events)) == (1 if held == "event" else 0)
+    assert len(await _records(runtime, entry.job.id)) == 1
+    assert await runtime.state_store.keys(PENDING) == [_key(entry)]
