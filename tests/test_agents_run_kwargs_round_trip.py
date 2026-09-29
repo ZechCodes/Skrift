@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 
 import pytest
 from pydantic_ai import RunContext
@@ -23,6 +24,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.models.test import TestModel
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 import skrift
@@ -31,6 +33,7 @@ from skrift.agents.models import RunState
 from skrift.agents.registry import registry as agent_registry
 from skrift.agents.runtime import register_agent_handlers
 from skrift.agents.state import load_runstate
+from skrift.agents.session import Session
 from skrift.agents.turns import decode_turn_kwargs
 from skrift.workers.registry import registry as worker_registry
 
@@ -51,7 +54,7 @@ async def _worker_runtime(backend, stack, tmp_path):
     """An in-process worker runtime on the given queue/state backend."""
     if backend == "memory":
         return skrift.configure_workers(
-            mode="in_process", queues=("agents",), poll_interval=0.01
+            mode="in_process", queues=("agents-priority", "agents"), poll_interval=0.01
         )
 
     from skrift.workers import (
@@ -76,7 +79,7 @@ async def _worker_runtime(backend, stack, tmp_path):
         session_maker = async_sessionmaker(engine, expire_on_commit=False)
         return skrift.configure_workers(
             mode="in_process",
-            queues=("agents",),
+            queues=("agents-priority", "agents"),
             poll_interval=0.01,
             state_store=SQLAlchemyStateStore(session_maker=session_maker),
             event_log=SQLAlchemyEventLog(session_maker=session_maker),
@@ -89,7 +92,7 @@ async def _worker_runtime(backend, stack, tmp_path):
     await client.flushall()
     return skrift.configure_workers(
         mode="in_process",
-        queues=("agents",),
+        queues=("agents-priority", "agents"),
         poll_interval=0.01,
         state_store=RedisStateStore(client=client, prefix="test:agents"),
         event_log=RedisEventLog(client=client, prefix="test:agents"),
@@ -222,3 +225,70 @@ def test_decoding_rebuilds_dataclass_kwargs_from_json_and_keeps_objects():
     assert live["usage_limits"] is kwargs["usage_limits"]
     assert live["message_history"][0] is history[0]
     assert live["builtin_tools"][1] is dynamic_tool
+
+
+@pytest.mark.parametrize("dispatch", ["queued", "inline"])
+@pytest.mark.parametrize("backend", ["sqlalchemy", "redis"])
+async def test_a_model_instance_is_refused_when_the_state_store_saves_json(
+    backend, dispatch, tmp_path
+):
+    # Inline dispatch runs its turn from the stored kwargs too, so it would
+    # fail the same way in the worker.
+    agent = skrift.Agent(TestModel(custom_output_text="default"), name="named")
+    async with AsyncExitStack() as stack:
+        await _worker_runtime(backend, stack, tmp_path)
+        with pytest.raises(TypeError, match="Pass model by name"):
+            await agent.run("hi", dispatch=dispatch, session_id="s1", model=TestModel())
+        assert await load_runstate("s1") is None
+
+        session = await agent.run("hi", dispatch="queued", session_id="s2", model="test")
+        stored = await load_runstate(session.id)
+        assert stored.run_kwargs["model"] == "test"
+        with pytest.raises(TypeError, match="Pass model by name"):
+            await session.send("again", model=TestModel())
+        state = await load_runstate(session.id)
+        assert state.messages == stored.messages
+        assert state.pending_user_messages == []
+
+
+@pytest.mark.parametrize("dispatch", ["queued", "inline"])
+async def test_the_in_memory_store_runs_a_model_instance(dispatch):
+    runtime = skrift.configure_workers(
+        mode="in_process", queues=("agents-priority", "agents"), poll_interval=0.01
+    )
+    agent = skrift.Agent(TestModel(custom_output_text="default"), name="named")
+    session = await agent.run(
+        "hi", dispatch=dispatch, model=TestModel(custom_output_text="override")
+    )
+    await runtime.start()
+    try:
+        assert await asyncio.wait_for(session.result(), 5) == "override"
+    finally:
+        await asyncio.wait_for(runtime.stop(), 5)
+
+
+@dataclass(kw_only=True)
+class _TaggedLimits(UsageLimits):
+    """A UsageLimits whose extra field JSON keeps but UsageLimits drops."""
+
+    tag: str
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"usage_limits": _TaggedLimits(tag="mine", request_limit=2)},
+        {"message_history": ["not a message"]},
+    ],
+    ids=["usage_limits subclass", "message_history item"],
+)
+@pytest.mark.parametrize("backend", ["sqlalchemy", "redis"])
+async def test_a_kwarg_that_would_not_come_back_the_same_is_refused(backend, kwargs, tmp_path):
+    agent = skrift.Agent(TestModel(), name="rebuilt")
+    async with AsyncExitStack() as stack:
+        await _worker_runtime(backend, stack, tmp_path)
+        with pytest.raises(TypeError, match="cannot store"):
+            await agent.run("hi", dispatch="queued", session_id="s1", **kwargs)
+        assert await load_runstate("s1") is None
+        # A dict is stored as it is, and one the worker rebuilds is accepted.
+        await agent.run("hi", dispatch="queued", usage_limits={"request_limit": 2})

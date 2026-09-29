@@ -8,6 +8,10 @@ from functools import cache
 from typing import Any
 
 from pydantic import TypeAdapter
+from pydantic_core import PydanticSerializationError, to_jsonable_python
+
+from skrift.workers import get_runtime
+from skrift.workers.memory import InMemoryStateStore
 
 
 class ReasoningLevel(str, Enum):
@@ -38,27 +42,85 @@ def normalize_turn_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return run_kwargs
 
 
-@cache
-def _dataclass_kwarg_adapters() -> tuple[dict[str, TypeAdapter[Any]], dict[str, TypeAdapter[Any]]]:
-    """Adapters for the run kwargs holding Pydantic AI dataclasses, which a JSON
-    state store (SQLAlchemy, Redis) saves as plain dicts (#235): one for each
-    single value, and one for each item of a list.
+# Run kwargs holding Pydantic AI dataclasses, which a JSON state store
+# (SQLAlchemy, Redis) saves as plain dicts (#235): single values, and lists of
+# them.
+_DATACLASS_KWARGS = ("usage_limits", "usage")
+_DATACLASS_LIST_KWARGS = ("message_history", "builtin_tools")
 
-    Built on first use, in the worker: defining and dispatching an agent must
-    not import pydantic-ai.
+
+@cache
+def _dataclass_kwarg_adapters() -> dict[str, TypeAdapter[Any]]:
+    """The adapters that rebuild each dataclass run kwarg, or each item of one.
+
+    Built on first use: defining and dispatching an agent must not import
+    pydantic-ai.
     """
 
     from pydantic_ai.builtin_tools import AbstractBuiltinTool
     from pydantic_ai.messages import ModelMessage
     from pydantic_ai.usage import RunUsage, UsageLimits
 
-    return (
-        {"usage_limits": TypeAdapter(UsageLimits), "usage": TypeAdapter(RunUsage)},
-        {
-            "message_history": TypeAdapter(ModelMessage),
-            "builtin_tools": TypeAdapter(AbstractBuiltinTool),
-        },
-    )
+    return {
+        "usage_limits": TypeAdapter(UsageLimits),
+        "usage": TypeAdapter(RunUsage),
+        "message_history": TypeAdapter(ModelMessage),
+        "builtin_tools": TypeAdapter(AbstractBuiltinTool),
+    }
+
+
+def _dataclass_kwarg_values(run_kwargs: dict[str, Any]) -> list[tuple[str, Any]]:
+    values = [
+        (name, run_kwargs[name]) for name in _DATACLASS_KWARGS if run_kwargs.get(name) is not None
+    ]
+    for name in _DATACLASS_LIST_KWARGS:
+        if isinstance(run_kwargs.get(name), (list, tuple)):
+            values.extend((name, item) for item in run_kwargs[name])
+    return values
+
+
+def check_turn_kwargs_storable(run_kwargs: dict[str, Any]) -> None:
+    """Raise TypeError for a run kwarg the state store would save as something
+    the worker cannot rebuild, instead of storing it for the run to fail on.
+
+    Every dispatch stores its turn's kwargs and runs them from the store, so
+    this holds for inline dispatch too. The in-memory store keeps the objects
+    themselves; the others save them as JSON.
+    """
+
+    store = get_runtime().state_store
+    if isinstance(store, InMemoryStateStore):
+        return
+    model = run_kwargs.get("model")
+    if model is not None and not isinstance(model, str):
+        raise TypeError(
+            f"Pass model by name, such as 'openai:gpt-5.4-mini', not as a "
+            f"{type(model).__name__} instance: {type(store).__name__} saves a "
+            "turn's run kwargs as JSON, and a model object cannot be rebuilt from it."
+        )
+    # A dict is stored and rebuilt as it is.
+    values = [
+        (name, value)
+        for name, value in _dataclass_kwarg_values(run_kwargs)
+        if not isinstance(value, dict)
+    ]
+    if not values:
+        return
+    adapters = _dataclass_kwarg_adapters()
+    for name, value in values:
+        try:
+            stored = to_jsonable_python(value)
+        except PydanticSerializationError:
+            continue  # saving the turn raises this itself
+        try:
+            rebuilt = to_jsonable_python(adapters[name].validate_python(stored))
+        except (ValueError, TypeError, PydanticSerializationError):
+            rebuilt = None
+        if rebuilt != stored:
+            raise TypeError(
+                f"{name} holds a {type(value).__name__} that {type(store).__name__} "
+                "cannot store: the run would not get the same value back from its JSON."
+            )
 
 
 def decode_turn_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -69,14 +131,14 @@ def decode_turn_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
         run_kwargs["output_type"] = _decode_type_ref(run_kwargs["output_type"])
     # Only dicts are rebuilt: the in-memory store keeps the objects, and a list
     # may also hold values JSON cannot carry, such as builtin tool functions.
-    single, listed = _dataclass_kwarg_adapters()
-    for name, adapter in single.items():
+    adapters = _dataclass_kwarg_adapters()
+    for name in _DATACLASS_KWARGS:
         if isinstance(run_kwargs.get(name), dict):
-            run_kwargs[name] = adapter.validate_python(run_kwargs[name])
-    for name, adapter in listed.items():
+            run_kwargs[name] = adapters[name].validate_python(run_kwargs[name])
+    for name in _DATACLASS_LIST_KWARGS:
         if isinstance(run_kwargs.get(name), (list, tuple)):
             run_kwargs[name] = [
-                adapter.validate_python(item) if isinstance(item, dict) else item
+                adapters[name].validate_python(item) if isinstance(item, dict) else item
                 for item in run_kwargs[name]
             ]
     return run_kwargs

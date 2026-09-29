@@ -15,7 +15,11 @@ from skrift.agents.blob import dereference_blob_refs
 from skrift.agents.context import resolve_actor
 from skrift.agents.models import Actor, RunState, Steer
 from skrift.agents.registry import registry
-from skrift.agents.turns import _decode_type_ref, normalize_turn_kwargs
+from skrift.agents.turns import (
+    _decode_type_ref,
+    check_turn_kwargs_storable,
+    normalize_turn_kwargs,
+)
 from skrift.agents.worker_slot import waiting_on_sub_agent
 from skrift.agents.state import (
     actor_payload,
@@ -89,6 +93,7 @@ class Session:
                 f"Agent {state.agent_name!r} has no deps_factory; deps_ref would be ignored."
             )
         run_kwargs = normalize_turn_kwargs(kwargs)
+        check_turn_kwargs_storable(run_kwargs)
 
         def apply_deps_ref(state: RunState) -> None:
             if deps_ref is None or deps_ref == state.deps_ref:
