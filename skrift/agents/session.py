@@ -258,6 +258,9 @@ class Session:
                         return state
                     state.terminal_at = utcnow()
                     state.current_run_job_id = None
+                    # An attempt that failed after the request above cleared
+                    # this may have kept its messages again.
+                    state.failed_run_messages = None
                     append_event(
                         state,
                         "AgentCancelled",
