@@ -469,6 +469,8 @@ class WorkerRuntime:
         self._queue_history_task: asyncio.Task | None = None
         self._reaper_task: asyncio.Task | None = None
         self._reconcile_task: asyncio.Task | None = None
+        # Every start pass still running, with any a stop gave up on.
+        self._reconcile_tasks: set[asyncio.Task] = set()
         # Worker tasks inside a claimed job's handler, with the job's run; those a
         # drain cancelled; set whenever a handler ends; whether a drain is
         # stopping handlers, so none starts; and the jobs a drain abandoned with
@@ -513,13 +515,14 @@ class WorkerRuntime:
                 self._record_queue_history_loop(),
                 name="skrift-worker-queue-history",
             )
-        if self._reconcile_task is None or self._reconcile_task.done():
-            # In the background, once the pool polls: a slow store cannot hold
-            # up start, and a dead callback can wait on queued work.
-            self._reconcile_task = asyncio.create_task(
-                self._reconcile_dead_letters_on_start(),
-                name="skrift-worker-dead-letter-reconcile",
-            )
+        # In the background, once the pool polls: a slow store cannot hold up
+        # start, and a dead callback can wait on queued work.
+        self._reconcile_task = asyncio.create_task(
+            self._reconcile_dead_letters_on_start(set(self._reconcile_tasks)),
+            name="skrift-worker-dead-letter-reconcile",
+        )
+        self._reconcile_tasks.add(self._reconcile_task)
+        self._reconcile_task.add_done_callback(self._reconcile_tasks.discard)
         if self._reaper_task is None and hasattr(self.queue, "_release_expired_claims"):
             self._reaper_task = asyncio.create_task(
                 self._release_expired_claims_loop(),
@@ -566,6 +569,13 @@ class WorkerRuntime:
                 await self._pool.stop()
                 self._pool = None
         return list(self._abandoned)
+
+    @property
+    def reconcile_abandoned(self) -> bool:
+        """Whether, after ``stop()``, a start's dead-letter reconcile pass is
+        still running: its dead callback ignored the stop's cancellation.
+        ``asyncio.run`` would wait for it at exit, as for an abandoned job."""
+        return any(not task.done() for task in self._reconcile_tasks)
 
     async def submit(
         self,
@@ -1902,6 +1912,9 @@ class WorkerRuntime:
         stops = self._stops
         keys = await self.state_store.keys(DEAD_LETTER_PENDING_PREFIX)
         for index, key in enumerate(keys):
+            # From the key, so a marker that fails to read is reported as its
+            # own job; entry ids have no colon, job ids may.
+            job_id = key.removeprefix(DEAD_LETTER_PENDING_PREFIX).rpartition(":")[0]
             try:
                 self._check_not_stopped(stops)
                 entry = await self.state_store.get(key)
@@ -1922,28 +1935,28 @@ class WorkerRuntime:
                 logger.warning(
                     "Cannot finish the dead letter of job %s: %s; its pending "
                     "marker is kept until the handler is registered",
-                    entry.job.id,
+                    job_id,
                     exc,
-                    extra={"job_id": entry.job.id},
+                    extra={"job_id": job_id},
                 )
-                failed.append({"job_id": entry.job.id, "error": str(exc)})
+                failed.append({"job_id": job_id, "error": str(exc)})
                 continue
             except Exception as exc:
                 logger.exception(
                     "Reconciling the dead letter of job %s failed; its pending "
                     "marker is kept for the next run",
-                    entry.job.id,
-                    extra={"job_id": entry.job.id},
+                    job_id,
+                    extra={"job_id": job_id},
                 )
-                failed.append({"job_id": entry.job.id, "error": f"{type(exc).__name__}: {exc}"})
+                failed.append({"job_id": job_id, "error": f"{type(exc).__name__}: {exc}"})
                 continue
             logger.info(
                 "Reconciled the dead letter of job %s (entry %s)",
-                entry.job.id,
+                job_id,
                 entry.id,
-                extra={"job_id": entry.job.id},
+                extra={"job_id": job_id},
             )
-            recovered.append(entry.job.id)
+            recovered.append(job_id)
         return {"recovered": recovered, "failed": failed}
 
     async def _save_dead_letter_record(self, entry: DeadJobEntry) -> DeadJobEntry:
@@ -1981,7 +1994,11 @@ class WorkerRuntime:
         if self._stops != stops:
             raise _ReconcileStopped
 
-    async def _reconcile_dead_letters_on_start(self) -> None:
+    async def _reconcile_dead_letters_on_start(self, earlier: set[asyncio.Task]) -> None:
+        if earlier:
+            # A pass whose callback ignored an earlier stop, or stopped the
+            # runtime, has not ended: wait, so two passes never call back at once.
+            await asyncio.wait(earlier)
         try:
             await self.reconcile_dead_letters()
         except Exception:

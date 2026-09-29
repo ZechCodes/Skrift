@@ -384,26 +384,40 @@ def workers_run(
             finally:
                 await notifications.stop_backend()
                 await db_config.get_engine().dispose()
-                if abandoned:
-                    _exit_abandoning(abandoned, exit_code)
+                if abandoned or runtime.reconcile_abandoned:
+                    _exit_abandoning(
+                        abandoned, exit_code, reconcile_abandoned=runtime.reconcile_abandoned
+                    )
 
     asyncio.run(_run())
 
 
-def _exit_abandoning(job_ids: list[str], exit_code: int) -> None:
-    """Exit now, leaving the jobs a worker's drain abandoned.
+def _exit_abandoning(
+    job_ids: list[str], exit_code: int, *, reconcile_abandoned: bool = False
+) -> None:
+    """Exit now, leaving the jobs a worker's drain abandoned, and a dead-letter
+    reconcile pass whose dead callback ignored its cancellation.
 
-    A handler that ignored its cancellation is still running, and
+    A handler or callback that ignored its cancellation is still running, and
     ``asyncio.run`` would wait for it at exit, so the process exits directly.
     """
     import logging
 
-    logging.getLogger(__name__).warning(
-        "Worker stopped with %d job(s) abandoned, their claims held until they "
-        "expire: %s; exiting without waiting for them",
-        len(job_ids),
-        ", ".join(job_ids),
-    )
+    logger = logging.getLogger(__name__)
+    if job_ids:
+        logger.warning(
+            "Worker stopped with %d job(s) abandoned, their claims held until they "
+            "expire: %s; exiting without waiting for them",
+            len(job_ids),
+            ", ".join(job_ids),
+        )
+    if reconcile_abandoned:
+        logger.warning(
+            "Worker stopped with its dead-letter reconcile pass still in a dead "
+            "callback that ignored its cancellation; exiting without waiting for "
+            "it. Its pending markers are kept for the next start or `skrift "
+            "workers dlq reconcile`."
+        )
     logging.shutdown()
     sys.stdout.flush()
     sys.stderr.flush()

@@ -813,3 +813,218 @@ async def test_a_reconcile_leaves_its_dead_letter_when_the_runtime_stops_meanwhi
     assert len(_dead_lettered(events)) == (1 if held == "event" else 0)
     assert len(await _records(runtime, entry.job.id)) == 1
     assert await runtime.state_store.keys(PENDING) == [_key(entry)]
+
+
+async def _restart_while_a_callback_ignores_its_stop(backends):
+    """Two markers; the first one's callback ignores the stop's cancellation,
+    and the runtime starts again before that callback is released."""
+    state = {"called": [], "running": 0, "most": 0}
+    in_callback, release = asyncio.Event(), asyncio.Event()
+    runtime = skrift.configure_workers(
+        mode="in_process",
+        queues=(QUEUE,),
+        poll_interval=0.01,
+        drain_timeout=0.05,
+        drain_cancel_timeout=0.05,
+        **backends,
+    )
+
+    @handler("record.fails", queue=QUEUE, max_attempts=1)
+    async def fails(payload: Item, context):
+        raise RuntimeError("boom")
+
+    @fails.on_dead
+    async def on_dead(entry):
+        state["called"].append(entry.id)
+        state["running"] += 1
+        state["most"] = max(state["most"], state["running"])
+        try:
+            if len(state["called"]) == 1:
+                in_callback.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+            await asyncio.sleep(0)
+        finally:
+            state["running"] -= 1
+
+    entries = [_pending_entry(), _pending_entry()]
+    for entry in entries:
+        await runtime.state_store.set(_key(entry), entry)
+
+    await asyncio.wait_for(runtime.start(), timeout=5)
+    old = runtime._reconcile_task
+    await asyncio.wait_for(in_callback.wait(), timeout=10)
+    await asyncio.wait_for(runtime.stop(), timeout=1)
+    assert not old.done()
+    await asyncio.wait_for(runtime.start(), timeout=5)
+    new = runtime._reconcile_task
+    assert new is not old and runtime._pool is not None
+    return runtime, entries, state, release, old, new
+
+
+async def test_a_restart_reconciles_what_a_pass_left_after_its_stop(backends):
+    runtime, entries, state, release, old, new = await _restart_while_a_callback_ignores_its_stop(
+        backends
+    )
+    try:
+        await asyncio.sleep(0.1)
+        assert len(state["called"]) == 1  # the new pass waits for the old one
+        release.set()
+        await asyncio.wait_for(asyncio.gather(old, new), timeout=10)
+        assert runtime._pool is not None
+        assert sorted(state["called"]) == sorted(entry.id for entry in entries)
+        assert state["most"] == 1
+        assert await runtime.state_store.keys(PENDING) == []
+        for entry in entries:
+            assert len(await _records(runtime, entry.job.id)) == 1
+    finally:
+        release.set()
+        await asyncio.wait_for(runtime.stop(), timeout=10)
+
+
+async def test_a_stop_while_a_restart_waits_on_the_old_pass_leaves_nothing_running(backends):
+    runtime, entries, state, release, old, new = await _restart_while_a_callback_ignores_its_stop(
+        backends
+    )
+    try:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await asyncio.wait_for(runtime.stop(), timeout=1)
+        assert loop.time() - started < 0.5
+        assert new.cancelled() and runtime._pool is None and runtime._reconcile_task is None
+        assert runtime._reconcile_tasks == {old}
+    finally:
+        release.set()
+        await asyncio.wait({old}, timeout=10)
+
+    assert old.done() and runtime._reconcile_tasks == set()
+    [called] = state["called"]
+    [left] = [entry for entry in entries if entry.id != called]
+    assert await runtime.state_store.keys(PENDING) == [_key(left)]
+
+
+STUBBORN_DEAD_CALLBACK = """
+import asyncio
+import pathlib
+
+from pydantic import BaseModel
+
+import skrift
+
+
+class Item(BaseModel):
+    n: int
+
+
+@skrift.handler("record.fails", queue="dead-letter-record")
+async def fails(payload: Item, context):
+    raise RuntimeError("boom")
+
+
+@fails.on_dead
+async def on_dead(entry):
+    pathlib.Path("called_back").touch()
+    while True:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            if not pathlib.Path("stubborn").exists():
+                raise
+"""
+
+
+@pytest.mark.parametrize("stubborn", [False, True], ids=["cooperative", "stubborn"])
+async def test_a_worker_process_exits_past_a_dead_callback_ignoring_its_cancellation(
+    tmp_path, worker_session_maker, stubborn
+):
+    import os
+    import signal
+    import sys
+    import textwrap
+    import time
+
+    from skrift.workers import SQLAlchemyStateStore
+
+    entry = _pending_entry()
+    await SQLAlchemyStateStore(session_maker=worker_session_maker).set(_key(entry), entry)
+    (tmp_path / "stubborn_dead.py").write_text(STUBBORN_DEAD_CALLBACK)
+    if stubborn:
+        (tmp_path / "stubborn").touch()
+    (tmp_path / "app.yaml").write_text(
+        textwrap.dedent(
+            f"""
+            db:
+              url: sqlite+aiosqlite:///{tmp_path / "dead_letter_record.db"}
+            workers:
+              enabled: true
+              preset: single_node
+              queues: [{QUEUE}]
+              drain_timeout: 0.1
+              drain_cancel_timeout: 0.2
+            """
+        )
+    )
+    env = {**os.environ, "SECRET_KEY": "test-secret", "PYTHONPATH": str(tmp_path)}
+    command = ["-m", "skrift", "-f", "app.yaml", "workers", "run", "--import", "stubborn_dead"]
+    worker = await asyncio.create_subprocess_exec(
+        sys.executable,
+        *command,
+        cwd=tmp_path,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        for _ in range(300):
+            if (tmp_path / "called_back").exists() or worker.returncode is not None:
+                break
+            await asyncio.sleep(0.05)
+        started = time.monotonic()
+        worker.send_signal(signal.SIGTERM)
+        output = (await asyncio.wait_for(worker.communicate(), 10))[0].decode()
+    finally:
+        if worker.returncode is None:
+            worker.kill()
+            await worker.communicate()
+
+    assert (tmp_path / "called_back").exists(), output
+    assert worker.returncode == 0, output
+    assert time.monotonic() - started < 3, output
+    forced = "reconcile pass still in a dead callback" in output
+    assert forced == stubborn, output
+    assert ("ignored its cancellation for" in output) == stubborn, output
+    # The callback never returned, so its marker is kept either way.
+    keys = await SQLAlchemyStateStore(session_maker=worker_session_maker).keys(PENDING)
+    assert keys == [_key(entry)]
+
+
+@pytest.mark.parametrize("bad_read", [0, 1], ids=["first", "later"])
+async def test_a_marker_that_fails_to_read_is_reported_as_its_own_job(backends, bad_read):
+    _register([])
+    runtime = skrift.configure_workers(mode="in_process", queues=(QUEUE,), **backends)
+    entries = {entry.job.id: entry for entry in (_pending_entry(), _pending_entry())}
+    for entry in entries.values():
+        await runtime.state_store.set(_key(entry), entry)
+    real_get = runtime.state_store.get
+    reads = []
+
+    async def get(key):
+        if key.startswith(PENDING):
+            reads.append(key)
+            if len(reads) == bad_read + 1:
+                raise StoreDown("marker read failed")
+        return await real_get(key)
+
+    runtime.state_store.get = get
+    result = await runtime.reconcile_dead_letters()
+    del runtime.state_store.get
+
+    bad = next(entry for entry in entries.values() if _key(entry) == reads[bad_read])
+    [good] = [entry for entry in entries.values() if entry is not bad]
+    assert result == {
+        "recovered": [good.job.id],
+        "failed": [{"job_id": bad.job.id, "error": "StoreDown: marker read failed"}],
+    }
+    assert await runtime.state_store.keys(PENDING) == [_key(bad)]
