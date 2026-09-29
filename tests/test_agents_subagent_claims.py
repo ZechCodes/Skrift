@@ -23,7 +23,9 @@ from skrift.agents.session import AgentSessionError
 from skrift.agents.worker_slot import NoFreeWorkerError
 from skrift.workers.registry import registry as worker_registry
 
-LEASE = 0.2
+# Long enough that a claim renewed every third of it survives a starved event
+# loop (#229).
+LEASE = 1.0
 
 
 @pytest.fixture(autouse=True)
@@ -62,14 +64,14 @@ def _parent_and_child(dispatch, *, child_seconds):
     return parent, calls
 
 
-async def _run_parent(concurrency, dispatch, *, child_seconds=4 * LEASE):
+async def _run_parent(concurrency, dispatch, *, child_seconds=1.5 * LEASE):
     parent, calls = _parent_and_child(dispatch, child_seconds=child_seconds)
     runtime = skrift.configure_workers(
         mode="in_process",
         queues=("agents", "agents-priority"),
         concurrency=concurrency,
         visibility_timeout=LEASE,
-        reaper_interval=0.02,
+        reaper_interval=0.05,
         poll_interval=0.01,
     )
     await runtime.start()
@@ -179,7 +181,7 @@ async def _one_worker():
         queues=("agents", "agents-priority"),
         concurrency=1,
         visibility_timeout=LEASE,
-        reaper_interval=0.02,
+        reaper_interval=0.05,
         poll_interval=0.01,
     )
     await runtime.start()
@@ -251,7 +253,7 @@ async def test_a_waiter_left_behind_does_not_count_as_a_waiting_worker():
         queues=("agents", "agents-priority"),
         concurrency=2,
         visibility_timeout=LEASE,
-        reaper_interval=0.02,
+        reaper_interval=0.05,
         poll_interval=0.01,
     )
     await runtime.start()

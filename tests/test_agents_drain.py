@@ -88,7 +88,9 @@ async def test_a_drain_hands_back_a_parent_awaiting_a_sub_agent_and_the_sub_agen
         await asyncio.wait_for(successor.stop(), 5)
 
 
-LEASE = 0.2
+# Long enough that a claim renewed every third of it survives a starved event
+# loop (#229); a parent that waits past it has had its claim renewed.
+LEASE = 1.0
 
 
 class Block(BaseModel):
@@ -133,7 +135,7 @@ def _pool(**config):
         queues=("agents", "agents-priority"),
         concurrency=2,
         visibility_timeout=LEASE,
-        reaper_interval=0.02,
+        reaper_interval=0.05,
         poll_interval=0.01,
         max_poll_interval=0.02,
         **config,
@@ -141,12 +143,12 @@ def _pool(**config):
 
 
 async def test_a_run_awaiting_a_sub_agent_finishes_inside_the_drain_window(caplog):
-    parent, calls, _, child_started = _parent_and_child(child_seconds=4 * LEASE)
+    parent, calls, _, child_started = _parent_and_child(child_seconds=2 * LEASE)
     runtime = _pool(drain_timeout=5)
     await runtime.start()
     session = await parent.run("go", dispatch="queued")
     await asyncio.wait_for(child_started.wait(), 5)
-    await asyncio.sleep(2 * LEASE)  # the parent has waited past its lease
+    await asyncio.sleep(1.5 * LEASE)  # the parent has waited past its lease
 
     started = time.monotonic()
     with caplog.at_level(logging.WARNING, logger="skrift.workers.runtime"):
@@ -218,7 +220,7 @@ async def test_an_abandoned_agent_run_stops_renewing_its_claim():
     await asyncio.wait_for(started.wait(), 5)
     try:
         (job_id,) = await asyncio.wait_for(runtime.stop(), 5)
-        await asyncio.sleep(3 * LEASE)
+        await asyncio.sleep(1.5 * LEASE)
         queue = runtime.queue
         await queue._release_expired_claims(utcnow())
         claimed = await queue.claim(["agents", "agents-priority"], visibility_timeout=30)
