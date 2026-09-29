@@ -150,9 +150,9 @@ OutboxEntry = OutboxEvent | OutboxSubmit | OutboxWake
 class FailedRunMessages(BaseModel):
     """The messages a run of the current turn produced before it raised (#230).
 
-    Each failed attempt of the run job replaces them. If the job dead-letters,
-    the turn fails with them added to its messages; a run of the job that
-    pauses or completes drops them.
+    Each run of the job that raises, is cancelled or pauses replaces them, with
+    nothing unless it raised in the agent loop. If the job dead-letters, the
+    turn fails with them added to its messages.
     """
 
     run_job_id: str

@@ -28,9 +28,12 @@ from pydantic_ai.usage import UsageLimits
 
 import skrift
 from skrift.agents.blob import InMemoryBlobStore
+from skrift.agents.models import AgentRunJob
 from skrift.agents.registry import registry as agent_registry
-from skrift.agents.runtime import register_agent_handlers
+from skrift.agents.runtime import agents_run_dead, agents_run_handler, register_agent_handlers
 from skrift.agents.state import load_runstate, stream_name
+from skrift.workers import WorkerContext
+from skrift.workers.models import DeadJobEntry, DeadLetterCause, JobEnvelope, Pause
 from skrift.workers.registry import registry as worker_registry
 
 
@@ -220,3 +223,158 @@ async def test_a_retried_turn_that_completes_keeps_only_its_completed_run():
     assert flaky_state.failed_run_messages is None
     assert _part_kinds(flaky_state) == _part_kinds(steady_state)
     assert _prompts(_history(flaky_state)) == ["hi"]
+
+
+async def test_a_last_attempt_that_fails_before_the_loop_keeps_nothing_from_an_earlier_one():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",), poll_interval=0.01)
+    attempts = {"count": 0}
+
+    def deps_factory(ctx):
+        attempts["count"] += 1
+        if attempts["count"] > 1:
+            raise RuntimeError("before the loop")
+        return None
+
+    def call_boom(messages, info):
+        return ModelResponse(parts=[ToolCallPart("boom", {})])
+
+    agent = skrift.Agent(FunctionModel(call_boom), name="mixed", deps_factory=deps_factory)
+
+    @agent.tool
+    async def boom(ctx: RunContext) -> str:
+        raise RuntimeError("inside the loop")
+
+    session = await agent.run("hi", dispatch="queued", deps_ref={})
+    turn_id = (await load_runstate(session.id)).current_turn_id
+    await runtime.start()
+    try:
+        state = await _settled(session.id, "failed")
+    finally:
+        await asyncio.wait_for(runtime.stop(), 5)
+
+    assert attempts["count"] == 3
+    assert state.turn_errors[turn_id]["exception_message"] == "before the loop"
+    assert _history(state) == []
+    assert state.failed_run_messages is None
+
+
+def _gated_boom_agent():
+    """An agent whose tool raises on its first call and waits for ``gate`` on
+    later ones, setting ``entered`` first."""
+
+    def call_boom(messages, info):
+        return ModelResponse(parts=[ToolCallPart("boom", {})])
+
+    agent = skrift.Agent(FunctionModel(call_boom), name="gated")
+    calls = {"count": 0}
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+
+    @agent.tool
+    async def boom(ctx: RunContext) -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("inside the loop")
+        entered.set()
+        await gate.wait()
+        return "ok"
+
+    return agent, entered, gate
+
+
+async def _run(runtime, job_id: str, claim_order: int):
+    envelope = (await runtime.get_job_state(job_id)).job
+    context = WorkerContext(
+        runtime=runtime, job=envelope, paused_state={}, claim_order=claim_order
+    )
+    return await agents_run_handler(AgentRunJob.model_validate(envelope.payload), context)
+
+
+async def _failed_first_attempt(runtime, agent):
+    session = await agent.run("hi", dispatch="queued")
+    job_id = (await load_runstate(session.id)).current_run_job_id
+    with pytest.raises(RuntimeError, match="inside the loop"):
+        await _run(runtime, job_id, 1)
+    kept = (await load_runstate(session.id)).failed_run_messages
+    assert kept is not None and kept.messages
+    return session, job_id
+
+
+async def _dead_letter(session_id: str, job_id: str):
+    await agents_run_dead(
+        DeadJobEntry(
+            job=JobEnvelope(
+                id=job_id, type="agents.run", queue="agents", payload={"session_id": session_id}
+            ),
+            queue="agents",
+            job_type="agents.run",
+            cause=DeadLetterCause.RETRIES_EXHAUSTED,
+        )
+    )
+    return await load_runstate(session_id)
+
+
+async def test_a_cancelled_attempt_drops_what_an_earlier_attempt_kept():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent, entered, gate = _gated_boom_agent()
+    session, job_id = await _failed_first_attempt(runtime, agent)
+
+    second = asyncio.create_task(_run(runtime, job_id, 2))
+    await asyncio.wait_for(entered.wait(), 5)
+    second.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second
+    assert (await load_runstate(session.id)).failed_run_messages is None
+
+    state = await _dead_letter(session.id, job_id)
+    assert state.status == "failed"
+    assert _history(state) == []
+
+
+async def test_a_paused_attempt_drops_what_an_earlier_attempt_kept():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent, entered, gate = _gated_boom_agent()
+    session, job_id = await _failed_first_attempt(runtime, agent)
+
+    second = asyncio.create_task(_run(runtime, job_id, 2))
+    await asyncio.wait_for(entered.wait(), 5)
+    await session.pause()
+    gate.set()
+    assert isinstance(await asyncio.wait_for(second, 5), Pause)
+    assert (await load_runstate(session.id)).failed_run_messages is None
+
+    state = await _dead_letter(session.id, job_id)
+    assert state.status == "failed"
+    assert _history(state) == []
+
+
+async def test_a_stale_claim_that_is_cancelled_keeps_what_its_successor_kept():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+
+    def call_boom(messages, info):
+        return ModelResponse(parts=[ToolCallPart("boom", {})])
+
+    agent = skrift.Agent(FunctionModel(call_boom), name="stale_cancel")
+    calls = {"count": 0}
+    entered = asyncio.Event()
+
+    @agent.tool
+    async def boom(ctx: RunContext) -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            entered.set()
+            await asyncio.Event().wait()
+        raise RuntimeError("inside the loop")
+
+    session = await agent.run("hi", dispatch="queued")
+    job_id = (await load_runstate(session.id)).current_run_job_id
+    stale = asyncio.create_task(_run(runtime, job_id, 1))
+    await asyncio.wait_for(entered.wait(), 5)
+    with pytest.raises(RuntimeError, match="inside the loop"):
+        await _run(runtime, job_id, 2)
+    stale.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stale
+
+    kept = (await load_runstate(session.id)).failed_run_messages
+    assert kept is not None and kept.messages

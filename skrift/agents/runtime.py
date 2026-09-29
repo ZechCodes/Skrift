@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -109,8 +110,9 @@ class _FailedRun:
 
 async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> Any:
     async with occupying_worker(context):
+        failed_run = _FailedRun()
         try:
-            return await _run_agent(payload, context)
+            result = await _run_agent(payload, context, failed_run)
         except _RunSuperseded:
             logger.info(
                 "Agent run of job %s stopped: another run owns agent session %s's turn",
@@ -118,9 +120,18 @@ async def agents_run_handler(payload: AgentRunJob, context: WorkerContext) -> An
                 payload.session_id,
             )
             return None
+        except (Exception, asyncio.CancelledError):
+            # A run that ends without completing replaces what an earlier
+            # failed run of the job kept: with its own messages if it raised
+            # in the agent loop, otherwise with nothing (#230).
+            await _keep_failed_run_messages(payload.session_id, context, failed_run.messages)
+            raise
+        if isinstance(result, Pause):
+            await _keep_failed_run_messages(payload.session_id, context, None)
+        return result
 
 
-async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
+async def _run_agent(payload: AgentRunJob, context: WorkerContext, failed_run: _FailedRun) -> Any:
     await drain_outbox(payload.session_id)
     state = await load_runstate(payload.session_id)
     if state is None:
@@ -200,7 +211,6 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
     # A failure in the loop propagates like one before it: the worker retries
     # the job, and the turn fails once its attempts run out (agents_run_dead),
     # keeping the messages its last failed run produced (#230).
-    failed_run = _FailedRun()
     try:
         iter_result = await _drive_agent_iter(
             agent,
@@ -213,11 +223,7 @@ async def _run_agent(payload: AgentRunJob, context: WorkerContext) -> Any:
             failed_run=failed_run,
         )
     except pydantic_ai_exceptions.UsageLimitExceeded as exc:
-        await _keep_failed_run_messages(payload.session_id, context, failed_run)
         raise UsageLimitExceeded(exc.message) from exc
-    except Exception:
-        await _keep_failed_run_messages(payload.session_id, context, failed_run)
-        raise
     if iter_result is RUNNER_STOPPED:
         return None
     result = iter_result.result
@@ -691,20 +697,27 @@ async def _drive_agent_iter(
 
 
 async def _keep_failed_run_messages(
-    session_id: str, context: WorkerContext, failed_run: _FailedRun
+    session_id: str, context: WorkerContext, messages: list[dict[str, Any]] | None
 ) -> None:
-    """Keep what a run that raised in the agent loop produced, for the turn's
-    messages should it fail (agents_run_dead). A retry does not see them: it
-    runs the turn again from the start of its message history."""
-    if failed_run.messages is None:
-        return
+    """Keep ``messages``, what a run that did not complete produced, for the
+    turn's messages should it fail (agents_run_dead), in place of what an
+    earlier run kept. A retry does not see them: it runs the turn again from
+    the start of its message history."""
+    if not messages:
+        state = await load_runstate(session_id)
+        if state is None or state.failed_run_messages is None:
+            return
 
     async def keep(runstate):
         _claim_turn(runstate, context)
-        runstate.failed_run_messages = FailedRunMessages(
-            run_job_id=context.job.id,
-            turn_id=runstate.current_turn_id,
-            messages=failed_run.messages,
+        runstate.failed_run_messages = (
+            FailedRunMessages(
+                run_job_id=context.job.id,
+                turn_id=runstate.current_turn_id,
+                messages=messages,
+            )
+            if messages
+            else None
         )
         return runstate
 
