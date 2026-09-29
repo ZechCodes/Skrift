@@ -1795,7 +1795,27 @@ class WorkerRuntime:
         ):
             logger.info("Job %s was cancelled before it was dead-lettered", job.id)
             return None
-        entry = await self.dead_letter_store.create(entry)
+        try:
+            entry = await self.dead_letter_store.create(entry)
+        except Exception:
+            # Nothing will run the job again, and with no record nothing can
+            # replay it; its state still holds the envelope, attempts and error.
+            logger.exception(
+                "Job %s (queue %s, type %s, cause %s) is DEAD_LETTERED with no "
+                "dead-letter record: saving the record failed, so it cannot be "
+                "replayed. Its job state keeps the envelope, attempts and error.",
+                job.id,
+                job.queue,
+                job.type,
+                cause.value,
+                extra={
+                    "job_id": job.id,
+                    "queue": job.queue,
+                    "job_type": job.type,
+                    "cause": cause.value,
+                },
+            )
+            raise
         await self.emit_lifecycle(LifecycleEventType.JOB_DEAD_LETTERED, job, error=error)
         descriptor = self.registry.get(job.type)
         if descriptor.dead_callback is not None:

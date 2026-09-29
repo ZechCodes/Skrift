@@ -285,6 +285,16 @@ DLQ entries use `DeadJobEntry` records with a structured `cause` and `state`.
 
 `dlq retry` and `dlq discard` accept explicit entry IDs or filters. Filtered actions default to `state=open`; pass `--state` to target another state. `permanent_failure` and `poison` retries require `--force`.
 
+### When the DLQ record fails to save
+
+A job's state is set to `DEAD_LETTERED`, and its queue entry dead-lettered, before its DLQ record is created. If the dead-letter store then fails, the job has no DLQ record: nothing runs it again, and `dlq retry` cannot replay it.
+- The runtime logs this at error level, with the exception. The message names the job id, queue, job type and cause, and says the job has no dead-letter record.
+- The same fields are on the log record as `job_id`, `queue`, `job_type` and `cause`, for structured log handlers.
+- The exception is still raised. A worker's loop logs it and goes on, and an inline or poison submission raises it to the caller.
+- No `job_dead_lettered` event is emitted, and the handler's dead callback is not called.
+
+To recover such a job, find its state by job id (`skrift workers jobs inspect JOB_ID`). The state store keeps the job's envelope, its attempts and its error; resubmit the job from them if it should run again. Recreating the missing records automatically is tracked in #232.
+
 ## Custom Backends
 
 Use `tests/test_worker_backend_contracts.py` as the compatibility suite for new backend implementations.
