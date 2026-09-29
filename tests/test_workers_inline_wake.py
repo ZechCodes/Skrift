@@ -5,7 +5,8 @@ both run it: each read PAUSED and called ``execute_claim``, and an inline run's
 start accepts any stored state. Each test holds one wake where the other used
 to slip in, on the in-memory, SQLite and (fake) Redis backends. A wake also
 gives the job up to a cancel before its run starts, and never runs a job
-that replaced its own under the same id.
+that replaced its own under the same id. A pause's own timer (``resume_at``)
+resumes the job as a wake does, so a wake and the timer resume it once (#225).
 """
 
 from __future__ import annotations
@@ -101,7 +102,10 @@ class PausedJob:
         self.finish = asyncio.Event()
 
     @classmethod
-    async def paused(cls, backends, pauses=1, **config):
+    async def paused(cls, backends, pauses=1, *, held_timer=None, **config):
+        """With ``held_timer`` (``_hold_the_wait``'s gate), the first pause has a
+        ``resume_at``: its timer waits in the submitting task, named "wake",
+        which is kept as ``job.timer``."""
         job = cls(skrift.configure_workers(mode="inline", **backends, **config))
 
         @handler("inline.wake", queue="inline-wake")
@@ -109,14 +113,20 @@ class PausedJob:
             job.runs.append(dict(context.paused_state))
             job.payloads.append(item.n)
             if item.n == 2 or len(job.runs) <= pauses:
-                return Pause(state={"step": len(job.runs)})
+                resume_at = _soon() if held_timer is not None and len(job.runs) == 1 else None
+                return Pause(state={"step": len(job.runs)}, resume_at=resume_at)
             job.resumed.set()
             await job.finish.wait()
             return "done"
 
-        await job.runtime.submit_inline(
+        submit = job.runtime.submit_inline(
             "inline.wake", Item(n=1), job_id="job", metadata={"skrift_dispatch": "inline"}
         )
+        if held_timer is None:
+            await submit
+        else:
+            job.timer = asyncio.create_task(submit, name="wake")
+            await _within(held_timer.wait())  # the pause's timer is waiting
         assert (await job.runtime.get_job_state("job")).status == JobStatus.PAUSED
         return job
 
@@ -343,3 +353,67 @@ async def test_a_wake_does_not_run_a_resubmitted_job_before_its_run(backends, mo
     await _within(resubmit)
     assert job.payloads == [1, 2]
     assert (await job.runtime.get_job_state("job")).status == JobStatus.PAUSED
+
+
+RESUMED_ONCE = [
+    "job_submitted",
+    "job_claimed",
+    "job_started",
+    "job_paused",
+    "job_claimed",
+    "job_resumed",
+    "job_started",
+    "job_completed",
+]
+
+
+@pytest.mark.parametrize("timer_fires", ("during_the_wakes_run", "after_the_wakes_run"))
+async def test_a_wake_during_a_pause_timer_resumes_the_job_once(
+    backends, monkeypatch, timer_fires
+):
+    reached, release = _hold_the_wait(monkeypatch)
+    job = await PausedJob.paused(backends, held_timer=reached)
+    woken = asyncio.create_task(job.runtime.wake("job"))
+    if timer_fires == "during_the_wakes_run":
+        await _within(job.resumed.wait())  # the wake's run is live
+        release.set()
+        await _within(job.timer)
+        job.finish.set()
+    else:
+        job.finish.set()
+        await _within(woken)
+        release.set()
+        await _within(job.timer)
+
+    assert await _within(woken) is True
+    assert await job.outcome() == ([{}, {"step": 1}], JobStatus.COMPLETED, 1)
+    assert await job.events() == RESUMED_ONCE
+
+
+async def test_a_pause_timer_before_a_wake_resumes_the_job_once(backends, monkeypatch):
+    reached, release = _hold_the_wait(monkeypatch)
+    job = await PausedJob.paused(backends, held_timer=reached)
+    job.finish.set()
+    read, release_read = job.hold_next_read()
+    woken = asyncio.create_task(job.runtime.wake("job"))
+    await _within(read.wait())  # the wake read PAUSED
+    release.set()
+    await _within(job.timer)  # the timer resumed and ran the job
+
+    release_read.set()
+    assert await _within(woken) is False
+    assert await job.outcome() == ([{}, {"step": 1}], JobStatus.COMPLETED, 1)
+    assert await job.events() == RESUMED_ONCE
+
+
+async def test_a_pause_timer_does_not_resume_a_later_pause(backends, monkeypatch):
+    reached, release = _hold_the_wait(monkeypatch)
+    job = await PausedJob.paused(backends, pauses=2, held_timer=reached)
+    assert await job.runtime.wake("job") is True  # resumed, and paused again
+    release.set()
+    await _within(job.timer)
+
+    state = await job.runtime.get_job_state("job")
+    assert (state.status, state.paused_state) == (JobStatus.PAUSED, {"step": 2})
+    assert job.runs == [{}, {"step": 1}]
+    assert (await job.events()).count("job_resumed") == 1

@@ -689,36 +689,7 @@ class WorkerRuntime:
             state.status == JobStatus.PAUSED
             and state.job.metadata.get("skrift_dispatch") == "inline"
         ):
-
-            # Only the wake that moves the job out of the pause it read runs
-            # it; any other wake of that pause finds it gone.
-            def resume(current: JobState | None) -> JobState | None:
-                if (
-                    current is None
-                    or current.status != JobStatus.PAUSED
-                    or current.run_id != state.run_id
-                ):
-                    return None
-                return JobState(
-                    job=current.job.model_copy(update={"scheduled_for": resume_at}),
-                    status=JobStatus.SUBMITTED,
-                    attempt=current.attempt,
-                    paused_state=current.paused_state,
-                    attempt_history=current.attempt_history,
-                    run_id=wake_id,
-                )
-
-            wake_id = uuid4().hex
-            woken, _ = await self._change_state(job_id, resume)
-            if woken is None:
-                return False
-            if resume_at is not None and resume_at > utcnow():
-                await asyncio.sleep((resume_at - utcnow()).total_seconds())
-            # The run starts only if the job is still the state this wake wrote:
-            # a cancel since then drops the wake's id.
-            return await self.execute_claim(
-                ClaimedJob(job=woken.job, token="inline"), inline=True, wake_id=wake_id
-            )
+            return await self._resume_inline(job_id, state.run_id, resume_at=resume_at)
         if (
             state.status == JobStatus.PAUSED
             and state.job.metadata.get("skrift_dispatch") == "inline_then_queued"
@@ -742,6 +713,43 @@ class WorkerRuntime:
             await self.queue.submit(submitted.job, job_id=job_id)
             return True
         return await self.queue.wake(state.job.queue, job_id, resume_at=resume_at)
+
+    async def _resume_inline(
+        self, job_id: str, paused_by: str | None, *, resume_at: datetime | None
+    ) -> bool:
+        """Resume a paused inline job from the pause the run ``paused_by`` wrote.
+
+        Only the wake (or pause timer) that moves the job out of that pause runs
+        it; any other finds it gone and returns False, having emitted nothing.
+        """
+
+        def resume(current: JobState | None) -> JobState | None:
+            if (
+                current is None
+                or current.status != JobStatus.PAUSED
+                or current.run_id != paused_by
+            ):
+                return None
+            return JobState(
+                job=current.job.model_copy(update={"scheduled_for": resume_at}),
+                status=JobStatus.SUBMITTED,
+                attempt=current.attempt,
+                paused_state=current.paused_state,
+                attempt_history=current.attempt_history,
+                run_id=wake_id,
+            )
+
+        wake_id = uuid4().hex
+        woken, _ = await self._change_state(job_id, resume)
+        if woken is None:
+            return False
+        if resume_at is not None and resume_at > utcnow():
+            await asyncio.sleep((resume_at - utcnow()).total_seconds())
+        # The run starts only if the job is still the state this wake wrote:
+        # a cancel since then drops the wake's id.
+        return await self.execute_claim(
+            ClaimedJob(job=woken.job, token="inline"), inline=True, wake_id=wake_id
+        )
 
     async def inspect(
         self,
@@ -1425,8 +1433,8 @@ class WorkerRuntime:
             delay = max(0.0, (pause.resume_at - utcnow()).total_seconds())
             if delay:
                 await asyncio.sleep(delay)
-            await self.emit_lifecycle(LifecycleEventType.JOB_RESUMED, job)
-            await self.execute_claim(ClaimedJob(job=job, token="inline"), inline=True)
+            # Resumed as a wake would: not if a wake already resumed this pause.
+            await self._resume_inline(job.id, run.run_id, resume_at=pause.resume_at)
             return
         retry_at = pause.resume_at or datetime.max.replace(tzinfo=utcnow().tzinfo)
         if not await self._settle_claim(

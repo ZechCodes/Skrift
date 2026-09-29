@@ -310,7 +310,9 @@ def agents():
     agent_registry.clear()
 
 
-LEASE = 0.2
+# Long enough that a claim renewed every third of it survives a starved event
+# loop (#229).
+LEASE = 1.0
 
 
 def _nested_agents(depth, *, seconds):
@@ -347,7 +349,7 @@ def _nested_agents(depth, *, seconds):
     return agent(0), calls
 
 
-async def _run_nested(depth, *, inflight, seconds=4 * LEASE):
+async def _run_nested(depth, *, inflight, seconds=1.5 * LEASE):
     top, calls = _nested_agents(depth, seconds=seconds)
     runtime = skrift.configure_workers(
         mode="in_process",
@@ -355,13 +357,15 @@ async def _run_nested(depth, *, inflight, seconds=4 * LEASE):
         concurrency=1,
         max_inflight_per_worker=inflight,
         visibility_timeout=LEASE,
-        reaper_interval=0.02,
+        reaper_interval=0.05,
         poll_interval=0.01,
     )
     await runtime.start()
     try:
         session = await top.run("go", dispatch="queued")
-        return await asyncio.wait_for(session.result(), 10), calls
+        # A hang guard: the fails-fast case retries about 20 agent runs, which
+        # takes over 10 s on a starved CPU (#229).
+        return await asyncio.wait_for(session.result(), 30), calls
     finally:
         await asyncio.sleep(0.1)
         await runtime.stop()
