@@ -48,6 +48,7 @@ from skrift.workers.registry import HandlerDescriptor, HandlerRegistry, registry
 
 
 LIFECYCLE_STREAM = "workers:lifecycle"
+DEAD_LETTER_PENDING_PREFIX = "workers:dead_letter_pending:"
 QUEUE_WAIT_HISTORY_STATE_KEY = "workers:queue_wait_history"
 QUEUE_TREND_HISTORY_STATE_KEY = "workers:queue_trend_history"
 # How long a finished job's state stays queryable before the store reclaims it.
@@ -89,6 +90,14 @@ class _Abandoned(Exception):
 
 class _StateRefused(Exception):
     """A job state change found a stored state it does not apply to."""
+
+
+class _NoDeadLetterHandler(Exception):
+    """A pending dead letter's job type has no registered handler to call back."""
+
+
+class _ReconcileStopped(Exception):
+    """The runtime stopped during a reconcile run, which leaves the rest."""
 
 
 @dataclass(frozen=True)
@@ -459,6 +468,9 @@ class WorkerRuntime:
         self._queue_history_lock = asyncio.Lock()
         self._queue_history_task: asyncio.Task | None = None
         self._reaper_task: asyncio.Task | None = None
+        self._reconcile_task: asyncio.Task | None = None
+        # Every start pass still running, with any a stop gave up on.
+        self._reconcile_tasks: set[asyncio.Task] = set()
         # Worker tasks inside a claimed job's handler, with the job's run; those a
         # drain cancelled; set whenever a handler ends; whether a drain is
         # stopping handlers, so none starts; and the jobs a drain abandoned with
@@ -503,6 +515,14 @@ class WorkerRuntime:
                 self._record_queue_history_loop(),
                 name="skrift-worker-queue-history",
             )
+        # In the background, once the pool polls: a slow store cannot hold up
+        # start, and a dead callback can wait on queued work.
+        self._reconcile_task = asyncio.create_task(
+            self._reconcile_dead_letters_on_start(set(self._reconcile_tasks)),
+            name="skrift-worker-dead-letter-reconcile",
+        )
+        self._reconcile_tasks.add(self._reconcile_task)
+        self._reconcile_task.add_done_callback(self._reconcile_tasks.discard)
         if self._reaper_task is None and hasattr(self.queue, "_release_expired_claims"):
             self._reaper_task = asyncio.create_task(
                 self._release_expired_claims_loop(),
@@ -520,6 +540,22 @@ class WorkerRuntime:
         """
         self._stops += 1
         try:
+            # A dead callback in the start pass may stop the runtime: the pass
+            # cannot await itself, so it ends on its own once the callback returns.
+            reconcile = self._reconcile_task
+            if reconcile is not None and reconcile is not asyncio.current_task():
+                reconcile.cancel()
+                # Bounded like a drained handler, so a dead callback that
+                # ignores its cancellation cannot hold up the pool's drain.
+                await asyncio.wait({reconcile}, timeout=self.config.drain_cancel_timeout)
+                if reconcile.done():
+                    self._reconcile_task = None
+                else:
+                    logger.warning(
+                        "The dead-letter reconcile pass ignored its cancellation "
+                        "for %ss; stopping the worker without it",
+                        self.config.drain_cancel_timeout,
+                    )
             if self._reaper_task is not None:
                 self._reaper_task.cancel()
                 await asyncio.gather(self._reaper_task, return_exceptions=True)
@@ -533,6 +569,13 @@ class WorkerRuntime:
                 await self._pool.stop()
                 self._pool = None
         return list(self._abandoned)
+
+    @property
+    def reconcile_abandoned(self) -> bool:
+        """Whether, after ``stop()``, a start's dead-letter reconcile pass is
+        still running: its dead callback ignored the stop's cancellation.
+        ``asyncio.run`` would wait for it at exit, as for an abandoned job."""
+        return any(not task.done() for task in self._reconcile_tasks)
 
     async def submit(
         self,
@@ -1795,19 +1838,42 @@ class WorkerRuntime:
         ):
             logger.info("Job %s was cancelled before it was dead-lettered", job.id)
             return None
+        # The pending marker holds the record until it is saved and announced,
+        # so reconcile_dead_letters can finish a dead letter this one could not.
+        pending_key = self._dead_letter_pending_key(entry)
         try:
-            entry = await self.dead_letter_store.create(entry)
+            await self.state_store.set(pending_key, entry)
         except Exception:
-            # Nothing will run the job again, and with no record nothing can
-            # replay it; its state still holds the envelope, attempts and error.
+            pending_key = None
+            logger.warning(
+                "Job %s: saving its pending dead-letter marker failed, so its "
+                "dead letter cannot be reconciled if its record fails to save",
+                job.id,
+                exc_info=True,
+            )
+        try:
+            entry = await self._save_dead_letter_record(entry)
+        except Exception:
+            # Nothing will run the job again, and without a record nothing can
+            # replay it until reconciling recreates the record from the marker.
+            if pending_key is not None:
+                outcome = (
+                    "its pending marker keeps the record, and `skrift workers dlq "
+                    "reconcile`, or the next worker start, recreates it."
+                )
+            else:
+                outcome = (
+                    "it cannot be replayed. Its job state keeps the envelope, "
+                    "attempts and error."
+                )
             logger.exception(
                 "Job %s (queue %s, type %s, cause %s) is DEAD_LETTERED with no "
-                "dead-letter record: saving the record failed, so it cannot be "
-                "replayed. Its job state keeps the envelope, attempts and error.",
+                "dead-letter record: saving the record failed, so %s",
                 job.id,
                 job.queue,
                 job.type,
                 cause.value,
+                outcome,
                 extra={
                     "job_id": job.id,
                     "queue": job.queue,
@@ -1820,7 +1886,123 @@ class WorkerRuntime:
         descriptor = self.registry.get(job.type)
         if descriptor.dead_callback is not None:
             await self._call_dead_callback(descriptor, entry)
+        if pending_key is not None:
+            await self.state_store.delete(pending_key)
         return entry
+
+    async def reconcile_dead_letters(self) -> dict[str, list[Any]]:
+        """Finish the dead letters whose pending marker is still stored.
+
+        A marker stays when saving a job's record, emitting its
+        ``job_dead_lettered`` event or calling its dead callback failed, or the
+        process stopped first. Each marker's record is created unless its id
+        is already stored, the event and callback are delivered, and the
+        marker is deleted. Two concurrent runs create one record, but either
+        may deliver the event and callback: they are at-least-once. A job
+        whose handler is not registered gets its record, but keeps its marker
+        until the handler is there to call back. A run that sees the runtime
+        stop, as a dead callback may do, leaves the markers it has not reached.
+
+        Returns the job ids ``recovered``, and those that ``failed`` as
+        ``{"job_id": ..., "error": ...}``; they keep their markers for the
+        next run.
+        """
+        recovered: list[str] = []
+        failed: list[dict[str, str]] = []
+        stops = self._stops
+        keys = await self.state_store.keys(DEAD_LETTER_PENDING_PREFIX)
+        for index, key in enumerate(keys):
+            # From the key, so a marker that fails to read is reported as its
+            # own job; entry ids have no colon, job ids may.
+            job_id = key.removeprefix(DEAD_LETTER_PENDING_PREFIX).rpartition(":")[0]
+            try:
+                self._check_not_stopped(stops)
+                entry = await self.state_store.get(key)
+                if not isinstance(entry, DeadJobEntry):
+                    continue
+                await self._recreate_dead_letter(entry, stops)
+                # The callback has run, even one that stopped the runtime: a
+                # kept marker would call it back again on the next start.
+                await self.state_store.delete(key)
+            except _ReconcileStopped:
+                logger.info(
+                    "The worker runtime stopped; %d pending dead-letter markers "
+                    "are left for the next run",
+                    len(keys) - index,
+                )
+                break
+            except _NoDeadLetterHandler as exc:
+                logger.warning(
+                    "Cannot finish the dead letter of job %s: %s; its pending "
+                    "marker is kept until the handler is registered",
+                    job_id,
+                    exc,
+                    extra={"job_id": job_id},
+                )
+                failed.append({"job_id": job_id, "error": str(exc)})
+                continue
+            except Exception as exc:
+                logger.exception(
+                    "Reconciling the dead letter of job %s failed; its pending "
+                    "marker is kept for the next run",
+                    job_id,
+                    extra={"job_id": job_id},
+                )
+                failed.append({"job_id": job_id, "error": f"{type(exc).__name__}: {exc}"})
+                continue
+            logger.info(
+                "Reconciled the dead letter of job %s (entry %s)",
+                job_id,
+                entry.id,
+                extra={"job_id": job_id},
+            )
+            recovered.append(job_id)
+        return {"recovered": recovered, "failed": failed}
+
+    async def _save_dead_letter_record(self, entry: DeadJobEntry) -> DeadJobEntry:
+        """Create ``entry``'s record. One already stored under its id counts as
+        created: a concurrent reconcile, or the live dead letter, saved it first."""
+        try:
+            return await self.dead_letter_store.create(entry)
+        except Exception:
+            try:
+                existing = await self.dead_letter_store.get(entry.id)
+            except Exception:  # noqa: BLE001 - the create's error is the one to raise
+                existing = None
+            if existing is None:
+                raise
+            return existing
+
+    async def _recreate_dead_letter(self, entry: DeadJobEntry, stops: int) -> None:
+        if await self.dead_letter_store.get(entry.id) is None:
+            entry = await self._save_dead_letter_record(entry)
+        try:
+            descriptor = self.registry.get(entry.job_type)
+        except KeyError:
+            raise _NoDeadLetterHandler(
+                f"no handler is registered for job type {entry.job_type!r}"
+            ) from None
+        self._check_not_stopped(stops)
+        await self.emit_lifecycle(
+            LifecycleEventType.JOB_DEAD_LETTERED, entry.job, error=entry.latest_error
+        )
+        if descriptor.dead_callback is not None:
+            self._check_not_stopped(stops)
+            await self._call_dead_callback(descriptor, entry)
+
+    def _check_not_stopped(self, stops: int) -> None:
+        if self._stops != stops:
+            raise _ReconcileStopped
+
+    async def _reconcile_dead_letters_on_start(self, earlier: set[asyncio.Task]) -> None:
+        if earlier:
+            # A pass whose callback ignored an earlier stop, or stopped the
+            # runtime, has not ended: wait, so two passes never call back at once.
+            await asyncio.wait(earlier)
+        try:
+            await self.reconcile_dead_letters()
+        except Exception:
+            logger.exception("Reconciling dead letters on worker start failed")
 
     async def _dead_letter_submission(
         self, job: JobEnvelope, exc: ValidationError
@@ -2184,6 +2366,11 @@ class WorkerRuntime:
     @staticmethod
     def _job_key(job_id: str) -> str:
         return f"workers:jobs:{job_id}"
+
+    @staticmethod
+    def _dead_letter_pending_key(entry: DeadJobEntry) -> str:
+        # Keyed by entry too: a later job reusing the id has its own marker.
+        return f"{DEAD_LETTER_PENDING_PREFIX}{entry.job.id}:{entry.id}"
 
     @staticmethod
     def _same_idempotent_job(existing: JobEnvelope, incoming: JobEnvelope) -> bool:

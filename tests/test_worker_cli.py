@@ -67,6 +67,7 @@ def test_worker_operability_help_exposes_phase_7_commands():
         ["workers", "dlq", "retry", "--help"],
         ["workers", "dlq", "discard", "--help"],
         ["workers", "dlq", "export", "--help"],
+        ["workers", "dlq", "reconcile", "--help"],
     ):
         result = runner.invoke(cli, command)
         assert result.exit_code == 0, result.output
@@ -322,6 +323,60 @@ def test_worker_dlq_retry_reports_force_errors_as_json():
     assert payload["changed"] == []
     assert payload["errors"][0]["entry_id"] == "entry-permanent"
     assert "Permanent failures require force retry" in payload["errors"][0]["error"]
+
+
+def _invoke_dlq_reconcile(summary, *args):
+    runtime = MagicMock()
+    runtime.reconcile_dead_letters = AsyncMock(return_value=summary)
+    db_config = MagicMock()
+    db_config.get_session = MagicMock()
+    db_config.get_engine.return_value.dispose = AsyncMock()
+
+    with (
+        patch.dict(os.environ, {"SECRET_KEY": "test-secret"}, clear=False),
+        patch("skrift.cli._build_db_config", return_value=db_config),
+        patch("skrift.cli._configure_worker_runtime", return_value=runtime),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["workers", "dlq", "reconcile", *args, "--allow-memory-backends"],
+        )
+    runtime.reconcile_dead_letters.assert_awaited_once_with()
+    db_config.get_engine.return_value.dispose.assert_awaited_once()
+    return result
+
+
+def test_worker_dlq_reconcile_reports_recovered_jobs():
+    result = _invoke_dlq_reconcile({"recovered": ["job-1", "job-2"], "failed": []})
+
+    assert result.exit_code == 0, result.output
+    assert "Reconciled the dead letter of job job-1" in result.output
+    assert "Reconciled the dead letter of job job-2" in result.output
+
+
+def test_worker_dlq_reconcile_with_nothing_pending():
+    result = _invoke_dlq_reconcile({"recovered": [], "failed": []})
+
+    assert result.exit_code == 0, result.output
+    assert "No dead letters to reconcile." in result.output
+
+
+def test_worker_dlq_reconcile_exits_1_when_a_job_fails():
+    result = _invoke_dlq_reconcile(
+        {"recovered": ["job-1"], "failed": [{"job_id": "job-2", "error": "StoreDown: down"}]}
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "Reconciled the dead letter of job job-1" in result.output
+    assert "Failed to reconcile the dead letter of job job-2: StoreDown: down" in result.output
+
+
+def test_worker_dlq_reconcile_emits_json():
+    summary = {"recovered": ["job-1"], "failed": [{"job_id": "job-2", "error": "StoreDown: down"}]}
+    result = _invoke_dlq_reconcile(summary, "--json")
+
+    assert result.exit_code == 1, result.output
+    assert json.loads(result.output) == summary
 
 
 def test_worker_config_accepts_out_of_process_and_persistence(tmp_path):

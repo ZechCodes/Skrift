@@ -571,6 +571,10 @@ class InMemoryDeadLetterStore:
 
     async def create(self, entry: DeadJobEntry) -> DeadJobEntry:
         async with self._lock:
+            # Insert-only, like the SQLAlchemy store's unique entry id: a
+            # repeated create must not reset a record already acted on.
+            if entry.id in self._entries:
+                raise ValueError(f"dead-letter entry {entry.id!r} already exists")
             stored = entry.model_copy(deep=True)
             self._entries[stored.id] = stored
             return stored.model_copy(deep=True)

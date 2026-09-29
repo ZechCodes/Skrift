@@ -138,7 +138,7 @@ The SQLAlchemy queue keeps the order in a new `worker_queue.claim_generation` co
 3. **Jobs still in their handler are then cancelled and handed back.** The worker releases each claim so it is visible again at once, and sets the job's state back to `submitted`, keeping any `paused_state` it resumed from. If the queue fails to take a job back (its `nack` raises), the worker puts the job's `running` state back, logs an error with the job id, and abandons the job with its claim held; another worker runs it once the claim expires. A hand-back charges no attempt and is not a reclaim, so it never counts toward `max_attempts` or `max_reclaims`. A handler that turns its `CancelledError` into another exception is still handed back rather than failed; one that swallows it and returns a result completes normally. A job whose claim reaches the handler only after the drain window is handed back without running.
 4. **A handler still running `drain_cancel_timeout` later is abandoned.** A handler that swallows its `CancelledError` cannot be stopped, so it is left running with its claim, which expires; another worker then runs the job. An agent run's claim on the in-memory queue stops being renewed at that point, so it expires too. Its state reads `running` until then. The worker logs a warning with the job id. An abandoned run settles nothing, however its handler later ends: no `ack` or `nack`, no state write, only a warning. So a process that exits while the handler finishes can never leave the job acked but still `running`. A handler that ends while the drain is still waiting on other jobs, before its run was abandoned, settles as usual, and the stop waits for it.
 
-`WorkerRuntime.stop()` returns the ids of the jobs it abandoned, and so does every later call until the runtime starts again. A cancelled `stop()`, such as a server cancelling its shutdown, still drains the pool and waits for the drain before it raises `CancelledError`. When any jobs were abandoned, `skrift workers run` logs them at warning and exits directly, with the exit code it would have used, without waiting for the abandoned handlers: `asyncio.run` would otherwise wait for them forever. The web app's in-process pool cannot do that, because the server owns the event loop; there an abandoned handler can hold the process's exit until the orchestrator kills it at the end of its grace period.
+`WorkerRuntime.stop()` returns the ids of the jobs it abandoned, and so does every later call until the runtime starts again. A cancelled `stop()`, such as a server cancelling its shutdown, still drains the pool and waits for the drain before it raises `CancelledError`. When any jobs were abandoned, `skrift workers run` logs them at warning and exits directly, with the exit code it would have used, without waiting for the abandoned handlers: `asyncio.run` would otherwise wait for them forever. A dead-letter reconcile pass left running after its stop, in a dead callback that ignored the cancellation, triggers the same forced exit; `WorkerRuntime.reconcile_abandoned` reports it. The web app's in-process pool cannot do that, because the server owns the event loop; there an abandoned handler can hold the process's exit until the orchestrator kills it at the end of its grace period.
 
 Stopping takes at most `drain_timeout + drain_cancel_timeout`, 25 s by default, which is under Kubernetes' default `terminationGracePeriodSeconds` of 30. Raise the grace period if you raise either timeout. There are two exceptions:
 - **The worker's own writes for a job.** A stop never cuts its `ack`, `nack` or state writes short, and waits for any that have started, so a backend that hangs on a write can hold a stop past that bound.
@@ -287,13 +287,19 @@ DLQ entries use `DeadJobEntry` records with a structured `cause` and `state`.
 
 ### When the DLQ record fails to save
 
-A job's state is set to `DEAD_LETTERED`, and its queue entry dead-lettered, before its DLQ record is created. If the dead-letter store then fails, the job has no DLQ record: nothing runs it again, and `dlq retry` cannot replay it.
-- The runtime logs this at error level, with the exception. The message names the job id, queue, job type and cause, and says the job has no dead-letter record.
+A job's state is set to `DEAD_LETTERED`, and its queue entry dead-lettered, before its DLQ record is created. The runtime then writes the record to the state store as a pending marker (`workers:dead_letter_pending:JOB_ID:ENTRY_ID`), creates the record, emits `job_dead_lettered`, calls the handler's dead callback, and deletes the marker. If the dead-letter store fails, the job has no DLQ record yet, and `dlq retry` cannot replay it:
+- The runtime logs this at error level, with the exception. The message names the job id, queue, job type and cause, says the job has no dead-letter record, and says whether its pending marker was saved.
 - The same fields are on the log record as `job_id`, `queue`, `job_type` and `cause`, for structured log handlers.
 - The exception is still raised. A worker's loop logs it and goes on, and an inline or poison submission raises it to the caller.
 - No `job_dead_lettered` event is emitted, and the handler's dead callback is not called.
 
-To recover such a job, find its state by job id (`skrift workers jobs inspect JOB_ID`). The state store keeps the job's envelope, its attempts and its error; resubmit the job from them if it should run again. Recreating the missing records automatically is tracked in #232.
+`skrift workers dlq reconcile` (or `WorkerRuntime.reconcile_dead_letters()`) finishes every dead letter whose marker is still stored: it creates the record unless one with the same entry id exists, emits `job_dead_lettered`, calls the dead callback, and deletes the marker. A marker that fails again is kept and reported, and the command exits 1. So is a job whose handler is not registered in the reconciling process: its record is created, but the event and callback wait, with the marker, until the handler is registered. Reconciling also finishes a dead letter whose process stopped between writing the marker and deleting it.
+
+Every worker start runs one reconcile pass in the background once its pool is polling, so a slow store does not hold up the start and a dead callback can submit and wait on queued jobs. A failure there is logged. Stopping the worker cancels a pass still running and waits for it at most `drain_cancel_timeout`, then drains the pool without it; its unfinished markers stay for the next one. A dead callback may stop the runtime itself: the pass then ends once that callback returns, and the markers it has not reached are handled by the next start or by `skrift workers dlq reconcile`. A pass still running after its stop, in a callback that ignored the cancellation or stopped the runtime, is waited for by the next start's pass, so two passes never run callbacks at once.
+
+Concurrent reconciles, such as two workers starting at once, or a reconcile racing the dead letter itself, create one record: whichever creates second finds the record and counts it as created, but the `job_dead_lettered` event and the dead callback are at-least-once: a dead letter can deliver them more than once, so callbacks should tolerate a repeat.
+
+A process that stops after writing the job's `DEAD_LETTERED` state but before writing its marker leaves neither a marker nor a record, and reconciling cannot find the job. Nor can it recover a job whose marker failed to save (the log says so). For either, find the job's state by job id (`skrift workers jobs inspect JOB_ID`). The state store keeps the job's envelope, its attempts and its error; resubmit the job from them if it should run again.
 
 ## Custom Backends
 
@@ -372,6 +378,8 @@ class DeadLetterStore:
     async def save(self, entry: DeadJobEntry) -> DeadJobEntry: ...
 ```
 
+`create` must raise when an entry with the same `id` is already stored, never overwrite it: reconciling relies on that, so a record an operator has already replayed or discarded is not reset to `open`.
+
 ```python
 class Archive:
     async def bulk_insert_events(self, events: list[tuple[str, int, dict[str, Any]]]) -> None: ...
@@ -412,5 +420,6 @@ Optional admin methods fall back to slower scans or generic summaries when absen
 | `skrift workers dlq retry [ENTRY_ID...]` | Replay one or more DLQ entries, or a filtered set, as new jobs |
 | `skrift workers dlq discard [ENTRY_ID...]` | Mark one or more DLQ entries, or a filtered set, discarded |
 | `skrift workers dlq export` | Export DLQ entries as JSON |
+| `skrift workers dlq reconcile` | Recreate DLQ records that failed to save |
 
 All process-oriented commands reject memory backends by default because process-local data cannot be shared. Use `--allow-memory-backends` only for local tests.

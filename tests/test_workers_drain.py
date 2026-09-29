@@ -900,6 +900,7 @@ def test_a_worker_process_whose_stop_is_cancelled_still_exits_past_abandoned_job
     class CancelledStop:
         config = SimpleNamespace(concurrency=1)
         stops = 0
+        reconcile_abandoned = False
 
         async def start(self):
             asyncio.get_running_loop().call_soon(os.kill, os.getpid(), signal.SIGTERM)
@@ -923,7 +924,7 @@ def test_a_worker_process_whose_stop_is_cancelled_still_exits_past_abandoned_job
     ):
         CliRunner().invoke(cli, ["workers", "run", "--allow-memory-backends"])
 
-    exit_abandoning.assert_called_once_with(["job-1"], 1)
+    exit_abandoning.assert_called_once_with(["job-1"], 1, reconcile_abandoned=False)
     stop_backend.assert_awaited_once()
     db_config.get_engine.return_value.dispose.assert_awaited_once()
 
