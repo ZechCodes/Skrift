@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import importlib
 from enum import Enum
+from functools import cache
 from typing import Any
 
 from pydantic import TypeAdapter
-from pydantic_ai.builtin_tools import AbstractBuiltinTool
-from pydantic_ai.messages import ModelMessage
-from pydantic_ai.usage import RunUsage, UsageLimits
 
 
 class ReasoningLevel(str, Enum):
@@ -40,18 +38,27 @@ def normalize_turn_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return run_kwargs
 
 
-# Run kwargs holding Pydantic AI dataclasses, which a JSON state store
-# (SQLAlchemy, Redis) saves as plain dicts, and the adapters that rebuild them
-# (#235). Only dicts are rebuilt: the in-memory store keeps the objects, and a
-# list may also hold values JSON cannot carry, such as builtin tool functions.
-_DATACLASS_KWARGS: dict[str, TypeAdapter[Any]] = {
-    "usage_limits": TypeAdapter(UsageLimits),
-    "usage": TypeAdapter(RunUsage),
-}
-_DATACLASS_LIST_KWARGS: dict[str, TypeAdapter[Any]] = {
-    "message_history": TypeAdapter(ModelMessage),
-    "builtin_tools": TypeAdapter(AbstractBuiltinTool),
-}
+@cache
+def _dataclass_kwarg_adapters() -> tuple[dict[str, TypeAdapter[Any]], dict[str, TypeAdapter[Any]]]:
+    """Adapters for the run kwargs holding Pydantic AI dataclasses, which a JSON
+    state store (SQLAlchemy, Redis) saves as plain dicts (#235): one for each
+    single value, and one for each item of a list.
+
+    Built on first use, in the worker: defining and dispatching an agent must
+    not import pydantic-ai.
+    """
+
+    from pydantic_ai.builtin_tools import AbstractBuiltinTool
+    from pydantic_ai.messages import ModelMessage
+    from pydantic_ai.usage import RunUsage, UsageLimits
+
+    return (
+        {"usage_limits": TypeAdapter(UsageLimits), "usage": TypeAdapter(RunUsage)},
+        {
+            "message_history": TypeAdapter(ModelMessage),
+            "builtin_tools": TypeAdapter(AbstractBuiltinTool),
+        },
+    )
 
 
 def decode_turn_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -60,10 +67,13 @@ def decode_turn_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     run_kwargs = dict(kwargs)
     if "output_type" in run_kwargs:
         run_kwargs["output_type"] = _decode_type_ref(run_kwargs["output_type"])
-    for name, adapter in _DATACLASS_KWARGS.items():
+    # Only dicts are rebuilt: the in-memory store keeps the objects, and a list
+    # may also hold values JSON cannot carry, such as builtin tool functions.
+    single, listed = _dataclass_kwarg_adapters()
+    for name, adapter in single.items():
         if isinstance(run_kwargs.get(name), dict):
             run_kwargs[name] = adapter.validate_python(run_kwargs[name])
-    for name, adapter in _DATACLASS_LIST_KWARGS.items():
+    for name, adapter in listed.items():
         if isinstance(run_kwargs.get(name), (list, tuple)):
             run_kwargs[name] = [
                 adapter.validate_python(item) if isinstance(item, dict) else item
