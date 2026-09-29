@@ -111,6 +111,8 @@ class WorkerConfig:
     # job's handler gets to stop before it is left behind.
     drain_timeout: float = 20.0
     drain_cancel_timeout: float = 5.0
+    # Asked before each claim whether a worker takes another job (#207).
+    governor: Callable[[WorkerRuntime, int], bool | Awaitable[bool]] | None = None
 
     def __post_init__(self) -> None:
         # A pool with no places would start and never claim a job.
@@ -155,6 +157,10 @@ class _Polling:
 
     interval: float
     turn: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # How many of the worker's places hold a claimed job, from its claim to its
+    # settlement; and whether the governor's last answer was a failure.
+    inflight: int = 0
+    governor_failing: bool = False
 
 
 @dataclass
@@ -201,7 +207,9 @@ class WorkerPool:
     Each worker has ``max_inflight_per_worker`` places, each running one claimed
     job at a time; a place claims its own job, so it is the task that holds
     the claim. A worker polls as one: its free places take turns, one claim at
-    a time, and share the wait after an empty poll.
+    a time, and share the wait after an empty poll. A ``governor``, if given,
+    is asked within the turn before each claim, and a no waits as an empty
+    poll does.
     """
 
     def __init__(
@@ -214,8 +222,10 @@ class WorkerPool:
         poll_interval: float = 0.05,
         max_poll_interval: float = 2.0,
         poll_backoff_factor: float = 2.0,
+        governor: Callable[[WorkerRuntime, int], bool | Awaitable[bool]] | None = None,
     ) -> None:
         self._runtime = runtime
+        self._governor = governor
         self._queues = queues
         self._concurrency = concurrency
         self._max_inflight = max_inflight_per_worker
@@ -309,10 +319,12 @@ class WorkerPool:
                     continue
                 task = asyncio.current_task()
                 self._busy.add(task)
+                polling.inflight += 1
                 try:
                     await self._runtime.execute_claim(claimed)
                 finally:
                     self._busy.discard(task)
+                    polling.inflight -= 1
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -333,6 +345,15 @@ class WorkerPool:
         async with polling.turn:
             if self._stopping.is_set():
                 return None
+            if self._governor is not None:
+                admitted = await self._ask_governor(polling)
+                # A stop that began while the governor was deciding admits
+                # nothing, whatever it answered.
+                if self._stopping.is_set():
+                    return None
+                if not admitted:
+                    await self._back_off(polling)
+                    return None
             try:
                 claimed = await self._runtime.queue.claim(
                     self._queues, visibility_timeout=self._runtime.default_visibility_timeout
@@ -342,14 +363,56 @@ class WorkerPool:
                 await self._idle(self._poll_interval)
                 return None
             if claimed is None:
-                await self._idle(polling.interval)
-                polling.interval = min(
-                    polling.interval * self._poll_backoff_factor,
-                    self._max_poll_interval,
-                )
+                await self._back_off(polling)
                 return None
             polling.interval = self._poll_interval
             return claimed
+
+    async def _back_off(self, polling: _Polling) -> None:
+        """Wait after a poll that claimed nothing, longer each time up to
+        ``max_poll_interval``; a claim resets the wait."""
+        await self._idle(polling.interval)
+        polling.interval = min(
+            polling.interval * self._poll_backoff_factor,
+            self._max_poll_interval,
+        )
+
+    async def _ask_governor(self, polling: _Polling) -> bool:
+        """Whether the governor lets this worker claim another job.
+
+        A governor that raises, or answers anything but a bool, is taken as a
+        no; that is logged once until it answers True or False again. While it
+        decides, the place counts as idling, so a stop cancels the decision.
+        """
+        task = asyncio.current_task()
+        self._idling.add(task)
+        try:
+            answer = self._governor(self._runtime, polling.inflight)
+            if inspect.isawaitable(answer):
+                answer = await answer
+        except Exception:
+            if not polling.governor_failing:
+                logger.warning(
+                    "Worker governor raised; claiming nothing until it answers",
+                    exc_info=True,
+                )
+            polling.governor_failing = True
+            return False
+        finally:
+            self._idling.discard(task)
+        if not isinstance(answer, bool):
+            if not polling.governor_failing:
+                logger.warning(
+                    "Worker governor answered %r, not True or False; claiming nothing "
+                    "until it answers",
+                    answer,
+                )
+            polling.governor_failing = True
+            return False
+        if polling.governor_failing:
+            logger.info("Worker governor answered %s again; claiming as it decides", answer)
+            polling.governor_failing = False
+        return answer
 
 
 class WorkerRuntime:
@@ -430,6 +493,7 @@ class WorkerRuntime:
             poll_interval=self.config.poll_interval,
             max_poll_interval=self.config.max_poll_interval,
             poll_backoff_factor=self.config.poll_backoff_factor,
+            governor=self.config.governor,
         )
         await self._pool.start()
         if self._stops != stops:
@@ -2138,6 +2202,19 @@ def load_backend_class(spec: str) -> type:
     return getattr(module, class_name)
 
 
+def load_governor(spec: str) -> Callable[..., Any]:
+    """Import a worker governor from a ``module:attribute`` string."""
+    module_path, _, name = spec.partition(":")
+    if not module_path or not name:
+        raise ValueError(
+            f"Invalid worker governor {spec!r}: must be in format 'module:attribute'"
+        )
+    governor = getattr(importlib.import_module(module_path), name)
+    if not callable(governor):
+        raise TypeError(f"Worker governor {spec!r} is not callable")
+    return governor
+
+
 def _instantiate_backend(
     spec: str,
     *,
@@ -2218,6 +2295,7 @@ def configure_workers(
     terminal_job_state_ttl: float | None = TERMINAL_JOB_STATE_TTL_SECONDS,
     drain_timeout: float = 20.0,
     drain_cancel_timeout: float = 5.0,
+    governor: str | Callable[..., Any] | None = None,
     backend_imports: WorkerBackendConfig | Mapping[str, str] | Any | None = None,
     settings: Any | None = None,
     session_maker: Any | None = None,
@@ -2227,10 +2305,16 @@ def configure_workers(
     dead_letter_store: DeadLetterStore | None = None,
     archive: Archive | None = None,
 ) -> WorkerRuntime:
-    """Configure the process-local private-beta worker runtime."""
+    """Configure the process-local private-beta worker runtime.
+
+    ``governor`` is a callable, or its ``module:attribute`` import path, which
+    is imported here so a bad one fails at startup.
+    """
 
     global _runtime
     backends = _coerce_backend_config(backend_imports)
+    if isinstance(governor, str):
+        governor = load_governor(governor)
     _runtime = WorkerRuntime(
         config=WorkerConfig(
             mode=mode,
@@ -2246,6 +2330,7 @@ def configure_workers(
             terminal_job_state_ttl=terminal_job_state_ttl,
             drain_timeout=drain_timeout,
             drain_cancel_timeout=drain_cancel_timeout,
+            governor=governor,
         ),
         state_store=state_store
         or _instantiate_backend(

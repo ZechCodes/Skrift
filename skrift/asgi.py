@@ -1140,6 +1140,7 @@ def create_app() -> ASGIApp:
                 max_reclaims=settings.workers.max_reclaims,
                 drain_timeout=settings.workers.drain_timeout,
                 drain_cancel_timeout=settings.workers.drain_cancel_timeout,
+                governor=settings.workers.governor,
                 terminal_job_state_ttl=settings.workers.retention.terminal_job_state_ttl,
                 backend_imports=settings.workers.backends,
                 settings=settings,

@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, PrivateAttr, create_model, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, create_model, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from skrift.bot_detection.config import BotDetectionConfig
@@ -915,10 +915,22 @@ class WorkersConfig(BaseModel):
     max_reclaims: int = Field(default=3, ge=0)
     drain_timeout: float = Field(default=20.0, ge=0)
     drain_cancel_timeout: float = Field(default=5.0, ge=0)
+    # "module:attribute" of a callable asked before each claim (#207); imported
+    # when the worker runtime is configured, at startup.
+    governor: str | None = None
     imports: list[str] = []
     backends: WorkerBackendConfig = WorkerBackendConfig()
     persistence: WorkerPersistenceConfig = WorkerPersistenceConfig()
     retention: WorkerRetentionConfig = WorkerRetentionConfig()
+
+    @field_validator("governor")
+    @classmethod
+    def governor_is_an_import_path(cls, value: str | None) -> str | None:
+        if value is not None:
+            module_path, _, name = value.partition(":")
+            if not module_path or not name:
+                raise ValueError("must be in format 'module:attribute'")
+        return value
 
     @model_validator(mode="before")
     @classmethod
