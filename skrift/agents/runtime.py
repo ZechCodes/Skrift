@@ -574,6 +574,7 @@ async def _finalize_cancelled(session_id: str, reached_from_status: str) -> None
             return runstate
         runstate.terminal_at = utcnow()
         runstate.current_run_job_id = None
+        runstate.failed_run_messages = None
         append_event(
             runstate,
             "AgentCancelled",
@@ -703,10 +704,6 @@ async def _keep_failed_run_messages(
     turn's messages should it fail (agents_run_dead), in place of what an
     earlier run kept. A retry does not see them: it runs the turn again from
     the start of its message history."""
-    if not messages:
-        state = await load_runstate(session_id)
-        if state is None or state.failed_run_messages is None:
-            return
 
     async def keep(runstate):
         _claim_turn(runstate, context)
@@ -722,6 +719,10 @@ async def _keep_failed_run_messages(
         return runstate
 
     try:
+        if not messages:
+            state = await load_runstate(session_id)
+            if state is None or state.failed_run_messages is None:
+                return
         await update_runstate(session_id, keep)
     except _RunSuperseded:
         pass

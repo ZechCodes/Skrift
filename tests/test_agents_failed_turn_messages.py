@@ -32,7 +32,7 @@ from skrift.agents.models import AgentRunJob
 from skrift.agents.registry import registry as agent_registry
 from skrift.agents.runtime import agents_run_dead, agents_run_handler, register_agent_handlers
 from skrift.agents.state import load_runstate, stream_name
-from skrift.workers import WorkerContext
+from skrift.workers import PermanentFailure, WorkerContext
 from skrift.workers.models import DeadJobEntry, DeadLetterCause, JobEnvelope, Pause
 from skrift.workers.registry import registry as worker_registry
 
@@ -378,3 +378,51 @@ async def test_a_stale_claim_that_is_cancelled_keeps_what_its_successor_kept():
 
     kept = (await load_runstate(session.id)).failed_run_messages
     assert kept is not None and kept.messages
+
+
+@pytest.mark.parametrize("ending", ["permanent", "cancelled"])
+async def test_a_failed_read_while_keeping_messages_leaves_the_runs_exception(ending, monkeypatch):
+    # Keeping a run's messages must not replace the exception the worker
+    # classifies the run by, even when the store fails.
+    import skrift.agents.runtime as agent_runtime
+
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    started = asyncio.Event()
+
+    async def deps_factory(ctx):
+        started.set()
+        if ending == "permanent":
+            raise PermanentFailure("no account")
+        await asyncio.Event().wait()
+
+    agent = skrift.Agent(TestModel(), name="read_fails", deps_factory=deps_factory)
+    session = await agent.run("hi", dispatch="queued", deps_ref={})
+    job_id = (await load_runstate(session.id)).current_run_job_id
+    load = agent_runtime.load_runstate
+
+    async def failing_load(session_id):
+        if started.is_set():
+            raise OSError("store unavailable")
+        return await load(session_id)
+
+    monkeypatch.setattr(agent_runtime, "load_runstate", failing_load)
+    run = asyncio.create_task(_run(runtime, job_id, 1))
+    await asyncio.wait_for(started.wait(), 5)
+    if ending == "permanent":
+        with pytest.raises(PermanentFailure, match="no account"):
+            await run
+    else:
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+
+
+async def test_cancelling_a_session_drops_what_a_failed_attempt_kept():
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",))
+    agent, entered, gate = _gated_boom_agent()
+    session, job_id = await _failed_first_attempt(runtime, agent)
+
+    await session.cancel()
+    state = await load_runstate(session.id)
+    assert state.status == "cancelled"
+    assert state.failed_run_messages is None

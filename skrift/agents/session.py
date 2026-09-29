@@ -232,6 +232,7 @@ class Session:
             run_job_id = state.current_run_job_id
             prior_status = state.status
             state.status = "cancelled"
+            state.failed_run_messages = None
             append_event(
                 state,
                 "AgentCancellationRequested",
