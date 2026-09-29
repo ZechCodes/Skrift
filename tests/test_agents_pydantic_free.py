@@ -160,3 +160,78 @@ def test_agent_runs_end_to_end_in_each_mode(mode):
         """
     )
     _assert_ok(result)
+
+
+# Makes pydantic-ai unimportable, as on a dispatch-only install.
+_HIDE_PYDANTIC_AI = """
+import importlib.abc
+import sys
+
+class _NoPydanticAI(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "pydantic_ai" or fullname.startswith("pydantic_ai."):
+            raise ModuleNotFoundError(f"No module named {fullname!r}", name=fullname)
+
+sys.meta_path.insert(0, _NoPydanticAI())
+"""
+
+
+@pytest.mark.parametrize("store", ["memory", "sqlalchemy"])
+@pytest.mark.parametrize("operation", ["run", "send"])
+def test_dispatching_dict_kwargs_without_pydantic_ai_installed(store, operation, tmp_path):
+    # #238: the dict rebuild check must not need pydantic-ai at dispatch.
+    result = _run_in_clean_interpreter(
+        _HIDE_PYDANTIC_AI
+        + textwrap.dedent(
+            f"""
+            import asyncio
+            import skrift
+            from skrift.agents.state import load_runstate
+
+            async def main():
+                store_kwargs = {{}}
+                engine = None
+                if {store!r} == "sqlalchemy":
+                    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+                    from skrift.db import models as _models  # noqa: F401
+                    from skrift.db.base import Base
+                    from skrift.workers import SQLAlchemyQueue, SQLAlchemyStateStore
+
+                    engine = create_async_engine("sqlite+aiosqlite:///{tmp_path / 'agents.db'}")
+                    async with engine.begin() as conn:
+                        await conn.run_sync(Base.metadata.create_all)
+                    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+                    store_kwargs = dict(
+                        state_store=SQLAlchemyStateStore(session_maker=session_maker),
+                        queue=SQLAlchemyQueue(session_maker=session_maker),
+                    )
+                runtime = skrift.configure_workers(
+                    mode="out_of_process", queues=("agents",), **store_kwargs
+                )
+                agent = skrift.Agent(model="gemini/gemini-1.5-flash", name="demo")
+                kwargs = dict(
+                    usage_limits={{"request_limit": 2}},
+                    message_history=[{{"kind": "request", "parts": []}}],
+                )
+                try:
+                    if {operation!r} == "run":
+                        session = await agent.run("hi", actor="ada", **kwargs)
+                    else:
+                        session = await agent.run("hi", actor="ada")
+                        await session.send("next", **kwargs)
+                    state = await load_runstate(session.id)
+                    stored = [state.run_kwargs] + [p["run_kwargs"] for p in state.pending_user_messages]
+                    assert any(
+                        k.get("usage_limits") == {{"request_limit": 2}} for k in stored
+                    ), stored
+                    assert "pydantic_ai" not in sys.modules
+                finally:
+                    await runtime.stop()
+                    if engine is not None:
+                        await engine.dispose()
+
+            asyncio.run(main())
+            """
+        )
+    )
+    _assert_ok(result)
