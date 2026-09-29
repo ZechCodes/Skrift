@@ -105,7 +105,14 @@ def check_turn_kwargs_storable(run_kwargs: dict[str, Any]) -> None:
     ]
     if not values:
         return
-    adapters = _dataclass_kwarg_adapters()
+    try:
+        adapters = _dataclass_kwarg_adapters()
+    except ModuleNotFoundError as error:
+        if error.name != "pydantic_ai":
+            raise
+        # A dispatch-only install has no pydantic-ai (#238), so the values are
+        # all dicts: store them as given, and the worker validates them.
+        return
     for name, value in values:
         try:
             stored = to_jsonable_python(value)
