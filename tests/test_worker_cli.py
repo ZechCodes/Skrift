@@ -362,15 +362,17 @@ def test_worker_dlq_reconcile_with_nothing_pending():
 
 
 def test_worker_dlq_reconcile_exits_1_when_a_job_fails():
-    result = _invoke_dlq_reconcile({"recovered": ["job-1"], "failed": ["job-2"]})
+    result = _invoke_dlq_reconcile(
+        {"recovered": ["job-1"], "failed": [{"job_id": "job-2", "error": "StoreDown: down"}]}
+    )
 
     assert result.exit_code == 1, result.output
     assert "Reconciled the dead letter of job job-1" in result.output
-    assert "Failed to reconcile the dead letter of job job-2" in result.output
+    assert "Failed to reconcile the dead letter of job job-2: StoreDown: down" in result.output
 
 
 def test_worker_dlq_reconcile_emits_json():
-    summary = {"recovered": ["job-1"], "failed": ["job-2"]}
+    summary = {"recovered": ["job-1"], "failed": [{"job_id": "job-2", "error": "StoreDown: down"}]}
     result = _invoke_dlq_reconcile(summary, "--json")
 
     assert result.exit_code == 1, result.output

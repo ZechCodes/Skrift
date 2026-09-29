@@ -1179,8 +1179,11 @@ def workers_dlq_reconcile(as_json, allow_memory_backends):
             else:
                 for job_id in summary["recovered"]:
                     click.echo(f"Reconciled the dead letter of job {job_id}")
-                for job_id in summary["failed"]:
-                    click.echo(f"Failed to reconcile the dead letter of job {job_id}", err=True)
+                for item in summary["failed"]:
+                    click.echo(
+                        f"Failed to reconcile the dead letter of job {item['job_id']}: {item['error']}",
+                        err=True,
+                    )
                 if not summary["recovered"] and not summary["failed"]:
                     click.echo("No dead letters to reconcile.")
             if summary["failed"]:
