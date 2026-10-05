@@ -3,15 +3,15 @@
   "parts": [
    {
     "content": "hi",
-    "timestamp": "2026-10-05T15:38:09.413289Z",
+    "timestamp": "2026-10-05T16:04:56.195460Z",
     "part_kind": "user-prompt"
    }
   ],
-  "timestamp": "2026-10-05T15:38:09.416219Z",
+  "timestamp": "2026-10-05T16:04:56.198288Z",
   "instructions": null,
   "kind": "request",
-  "run_id": "01a10cb7-1c81-7516-bca9-e2f693bec812",
-  "conversation_id": "01a10cb7-1c81-7516-bca9-e2f5bd6480a5",
+  "run_id": "01a10ccf-a0ff-71ac-8500-845447d71b20",
+  "conversation_id": "01a10ccf-a0ff-71ac-8500-84536474d548",
   "metadata": null
  },
  {
@@ -46,26 +46,26 @@
    "details": {}
   },
   "model_name": "function:respond:",
-  "timestamp": "2026-10-05T15:38:09.416779Z",
+  "timestamp": "2026-10-05T16:04:56.198814Z",
   "kind": "response",
   "provider_name": null,
   "provider_url": null,
   "provider_details": null,
   "provider_response_id": null,
   "finish_reason": null,
-  "run_id": "01a10cb7-1c81-7516-bca9-e2f693bec812",
-  "conversation_id": "01a10cb7-1c81-7516-bca9-e2f5bd6480a5",
+  "run_id": "01a10ccf-a0ff-71ac-8500-845447d71b20",
+  "conversation_id": "01a10ccf-a0ff-71ac-8500-84536474d548",
   "metadata": null
  },
  {
   "parts": [
    {
     "tool_name": "good",
-    "content": "fine",
+    "content": "No result: the run stopped with RuntimeError before this tool call returned.",
     "tool_call_id": "good-1",
     "metadata": null,
-    "timestamp": "2026-10-05T15:38:09.417208Z",
-    "outcome": "success",
+    "timestamp": "2026-10-05T16:04:56.218285Z",
+    "outcome": "failed",
     "part_kind": "tool-return"
    },
    {
@@ -73,7 +73,7 @@
     "content": "No result: the run stopped with RuntimeError before this tool call returned.",
     "tool_call_id": "boom-1",
     "metadata": null,
-    "timestamp": "2026-10-05T15:38:09.417308Z",
+    "timestamp": "2026-10-05T16:04:56.218287Z",
     "outcome": "failed",
     "part_kind": "tool-return"
    }

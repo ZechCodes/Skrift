@@ -11,12 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 # Imported first: it checks the installed pydantic-ai is one the runtime supports.
-from skrift.agents._compat import (
-    native_tool_kwargs,
-    run_new_messages,
-    run_usage,
-    stream_tool_returns,
-)
+from skrift.agents._compat import native_tool_kwargs, run_new_messages, run_usage
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
 from pydantic_ai import exceptions as pydantic_ai_exceptions
 from pydantic_ai.messages import (
@@ -657,7 +652,6 @@ async def _drive_agent_iter(
             deferred_tool_results=deferred_tool_results,
             **iter_kwargs,
         ) as run:
-            tool_returns: list[Any] = []
             try:
                 node_index = 0
                 streamed_message_count = 0
@@ -692,8 +686,6 @@ async def _drive_agent_iter(
 
                     await update_runstate(session_id, record_cursor)
                     await drain_outbox(session_id)
-                    # After the node's events: on 1.x this runs its tool calls.
-                    await stream_tool_returns(run, node, tool_returns)
                     node_index += 1
                 return AgentIterResult(
                     result=run.result,
@@ -702,7 +694,7 @@ async def _drive_agent_iter(
                     response=_latest_response(run),
                 )
             except Exception as exc:
-                failed_run.messages = _failed_run_messages(run, exc, tool_returns)
+                failed_run.messages = _failed_run_messages(run, exc)
                 raise
     finally:
         reset_current_session_id(token)
@@ -744,9 +736,7 @@ async def _keep_failed_run_messages(
         )
 
 
-def _failed_run_messages(
-    run: Any, exc: Exception, tool_returns: list[Any] | None = None
-) -> list[dict[str, Any]]:
+def _failed_run_messages(run: Any, exc: Exception) -> list[dict[str, Any]]:
     """The messages ``run`` produced before it raised ``exc``, dumped for the
     turn's history in a form the next turn's run accepts.
 
@@ -754,11 +744,11 @@ def _failed_run_messages(
     their results are in, when a tool raises or the tool-call limit is hit, and
     pydantic-ai either refuses a new prompt after unanswered tool calls or, on
     1.x when they are not last in the history, sends them to the model. The
-    calls that returned keep their returns, and each other call gets a failed
+    returns pydantic-ai reports are kept, and every other call gets a failed
     tool return saying so.
     """
     try:
-        messages = run_new_messages(run, tool_returns or ())
+        messages = run_new_messages(run)
     except Exception:
         return []
     # The last response's calls, and the returns that came in for them.

@@ -2,16 +2,17 @@
 
 pydantic-ai 2.x renamed the built-in tools module and dropped the
 ``builtin_tools`` kwarg, made ``AgentRun.usage`` a property, and ends a run a
-tool raised in with an interrupted request holding the returns that came in,
-where 1.x drops them. ``skrift.agents._compat`` bridges them;
+tool raised in with an interrupted request holding the returns it collected. ``skrift.agents._compat`` bridges them;
 these tests run on whichever major is installed, and CI runs both.
 """
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
 import textwrap
+from contextvars import ContextVar
 
 import pytest
 from pydantic_ai import WebSearchTool
@@ -28,8 +29,10 @@ from pydantic_ai.models.function import FunctionModel
 import skrift
 from skrift.agents import _compat
 from skrift.agents.blob import InMemoryBlobStore
+from skrift.agents.context import resolve_actor
 from skrift.agents.registry import registry as agent_registry
 from skrift.agents.runtime import register_agent_handlers
+from skrift.agents.state import stream_name
 from skrift.workers.registry import registry as worker_registry
 
 
@@ -200,12 +203,44 @@ def test_run_new_messages_completes_an_interrupted_request_keeping_its_returns()
     assert messages[2].state == "complete"
 
 
-def test_run_new_messages_adds_the_streamed_returns_of_the_last_responses_calls():
-    request, response, returned = _batch()
-    earlier = ToolReturnPart("good", "stale", tool_call_id="good-0")
+_tool_marker: ContextVar[str] = ContextVar("tool_marker", default="caller")
 
-    messages = _compat.run_new_messages(_Run([request, response]), [earlier, returned])
 
-    assert messages[:2] == [request, response]
-    assert messages[2].parts == [returned]
-    assert _compat.run_new_messages(_Run([request, response]), [earlier]) == [request, response]
+async def _a_turn_whose_tool_sets_context():
+    def respond(messages, info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(parts=[ToolCallPart("touch", {}, tool_call_id="touch-1")])
+
+    skrift.configure_workers(mode="inline")
+    agent = skrift.Agent(FunctionModel(respond), name="context")
+
+    @agent.tool_plain(sequential=True)
+    async def touch() -> str:
+        skrift.set_actor("tool-actor")
+        _tool_marker.set("tool")
+        return "ok"
+
+    skrift.set_actor("caller")
+    session = await agent.run("hi", dispatch="inline")
+    assert await session.result() == "done"
+    seen = (resolve_actor().id, _tool_marker.get())
+    await session.send("again")
+    assert await session.result() == "done"
+    events = [event for _, event in await skrift.get_runtime().event_log.read(stream_name(session.id))]
+    return seen, events
+
+
+async def test_a_tool_cannot_change_the_context_of_the_run_that_called_it():
+    # pydantic-ai runs each step of a run in its own task on either major, so
+    # a tool's context changes stay in it.
+    seen, events = await asyncio.create_task(_a_turn_whose_tool_sets_context())
+
+    assert seen == ("caller", "caller")
+    actors = [
+        (event["type"], event["payload"]["actor"]["id"])
+        for event in events
+        if isinstance(event["payload"].get("actor"), dict)
+    ]
+    assert [actor for kind, actor in actors if kind == "UserMessageReceived"] == ["caller"] * 2
+    assert {actor for _, actor in actors} == {"caller"}, actors
