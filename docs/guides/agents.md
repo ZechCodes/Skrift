@@ -9,6 +9,18 @@ Skrift agents wrap Pydantic AI agents in durable worker-backed sessions. A sessi
 - [Adapting Pydantic AI Agents](pydantic-ai-agents.md) explains how to move existing Pydantic AI agents to Skrift and what the preview limitations are.
 - [Agents Reference](../reference/agents.md) summarizes the public API surface.
 
+## Supported Pydantic AI versions
+
+The agent runtime supports Pydantic AI `>=1.89.1,<3.0.0`: the 1.x line from 1.89.1, and 2.x. The `agents` extras (`skrift[agents]`, `skrift[agents-google]`, `skrift[agents-openai]`, `skrift[agents-anthropic]`) install `pydantic-ai-slim` from that range. With another version installed, the agent runtime fails where it first needs Pydantic AI with an `ImportError` that names the installed version and the supported range: when a worker runs an agent, or when a dispatch checks a kwarg Skrift rebuilds, such as `usage_limits`. Importing `skrift` and defining agents do not check the version, and a process that only dispatches agents still does not need Pydantic AI installed at all.
+
+Pydantic AI 2.x renamed built-in tools to native tools, `pydantic_ai.builtin_tools` to `pydantic_ai.native_tools`, and its `Agent` and run methods no longer take `builtin_tools=`: they take the tools as `NativeTool` capabilities. Skrift accepts the tools as either `builtin_tools=` or `native_tools=`, on `skrift.Agent(...)` and on every run and send, whichever major is installed, and passes them to Pydantic AI the way that major takes them. Passing both names sends both lists. Import tool classes such as `WebSearchTool` from `pydantic_ai`, which exports them under both majors.
+
+```python
+from pydantic_ai import WebSearchTool
+
+session = await assistant.run("What changed this week?", native_tools=[WebSearchTool()])
+```
+
 ## Defining an agent
 
 ```python
@@ -141,7 +153,7 @@ session = await assistant.run(
 
 Runtime-owned values such as `deps`, committed `message_history`, and `deferred_tool_results` are merged by Skrift so session state remains durable. If you pass an explicit `session_id` that already exists, `Agent.run()` raises `AgentSessionError`; use `Session.send()` for follow-up turns.
 
-Run kwargs are stored with the turn, so a queued turn runs with the kwargs it was sent with. The SQLAlchemy and Redis state stores save them as JSON, and Skrift rebuilds the Pydantic AI dataclasses among them, `usage_limits`, `usage`, the messages in `message_history` and the tools in `builtin_tools`, before the run, so a queued turn enforces its `usage_limits` on every store. Values JSON cannot carry work only with the in-memory state store. On the others, `Agent.run()` and `Session.send()` refuse them, with any dispatch, since inline dispatch also runs its turn from the stored kwargs. `toolsets` and functions raise a serialization error. A `Model` instance raises a `TypeError`: pass `model` by name, such as `"openai:gpt-5.4-mini"`. So does a value among the rebuilt kwargs that would not come back the same, such as a `UsageLimits` subclass with fields of its own. You may pass a dict of a rebuilt kwarg's fields instead of the object, such as `usage_limits={"request_limit": 2}`, on any store. The run rebuilds it, so a dict with a key the dataclass does not have, or a value not of its field's type, raises the same `TypeError`, even with the in-memory store. That check needs Pydantic AI, so a process that only dispatches, without it installed, stores the dict as given, and the worker raises the error when the turn runs.
+Run kwargs are stored with the turn, so a queued turn runs with the kwargs it was sent with. The SQLAlchemy and Redis state stores save them as JSON, and Skrift rebuilds the Pydantic AI dataclasses among them, `usage_limits`, `usage`, the messages in `message_history` and the tools in `builtin_tools` or `native_tools`, before the run, so a queued turn enforces its `usage_limits` on every store. Values JSON cannot carry work only with the in-memory state store. On the others, `Agent.run()` and `Session.send()` refuse them, with any dispatch, since inline dispatch also runs its turn from the stored kwargs. `toolsets` and functions raise a serialization error. A `Model` instance raises a `TypeError`: pass `model` by name, such as `"openai:gpt-5.4-mini"`. So does a value among the rebuilt kwargs that would not come back the same, such as a `UsageLimits` subclass with fields of its own. You may pass a dict of a rebuilt kwarg's fields instead of the object, such as `usage_limits={"request_limit": 2}`, on any store. The run rebuilds it, so a dict with a key the dataclass does not have, or a value not of its field's type, raises the same `TypeError`, even with the in-memory store. That check needs Pydantic AI, so a process that only dispatches, without it installed, stores the dict as given, and the worker raises the error when the turn runs.
 
 High-level chat sends accept the same per-turn overrides:
 

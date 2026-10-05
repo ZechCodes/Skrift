@@ -8,13 +8,29 @@ on:
 
 jobs:
   test:
+    name: test (pydantic-ai ${{ matrix.pydantic-ai }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Both ends of the pydantic-ai range the agent runtime supports.
+      matrix:
+        include:
+          - pydantic-ai: "1.89.1"
+            spec: "==1.89.1"
+          - pydantic-ai: "latest 2.x"
+            spec: ">=2,<3"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
+      - run: uv sync --all-extras
+      - name: Install pydantic-ai ${{ matrix.pydantic-ai }}
+        run: |
+          uv pip install --upgrade-package pydantic-ai-slim --upgrade-package pydantic-graph \
+            "pydantic-ai-slim[google,openai,anthropic]${{ matrix.spec }}"
+          uv run --no-sync python -c "import pydantic_ai; print('pydantic-ai', pydantic_ai.__version__)"
       - name: Verify all imports resolve
-        run: uv run --all-extras python -c "import pkgutil, importlib; [importlib.import_module(m.name) for m in pkgutil.walk_packages(['skrift'], prefix='skrift.')]"
-      - run: uv run --all-extras pytest -m "not integration"
+        run: uv run --no-sync python -c "import pkgutil, importlib; [importlib.import_module(m.name) for m in pkgutil.walk_packages(['skrift'], prefix='skrift.')]"
+      - run: uv run --no-sync pytest -m "not integration"
 
   frontend:
     runs-on: ubuntu-latest

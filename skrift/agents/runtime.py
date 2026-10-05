@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+# Imported first: it checks the installed pydantic-ai is one the runtime supports.
+from skrift.agents._compat import native_tool_kwargs, run_new_messages, run_usage
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
 from pydantic_ai import exceptions as pydantic_ai_exceptions
 from pydantic_ai.messages import (
@@ -639,7 +641,7 @@ async def _drive_agent_iter(
         # redundant — and Pydantic AI rejects a run-level output_type when the
         # agent registers output validators. Omitting it keeps both working.
         turn_output_type = run_kwargs.pop("output_type", None)
-        iter_kwargs = dict(run_kwargs)
+        iter_kwargs = native_tool_kwargs(run_kwargs)
         if turn_output_type is not None:
             iter_kwargs["output_type"] = _durable_output_type(turn_output_type)
         async with agent._iter_pydantic(
@@ -658,7 +660,7 @@ async def _drive_agent_iter(
                         return AgentIterResult(
                             result=pause,
                             streamed_message_count=streamed_message_count,
-                            usage=run.usage(),
+                            usage=run_usage(run),
                             response=_latest_response(run),
                         )
                     node_kind = type(node).__name__
@@ -687,7 +689,7 @@ async def _drive_agent_iter(
                 return AgentIterResult(
                     result=run.result,
                     streamed_message_count=streamed_message_count,
-                    usage=run.usage(),
+                    usage=run_usage(run),
                     response=_latest_response(run),
                 )
             except Exception as exc:
@@ -743,7 +745,7 @@ def _failed_run_messages(run: Any, exc: Exception) -> list[dict[str, Any]]:
     tool calls. Each such call gets a failed tool return saying so.
     """
     try:
-        messages = list(run.new_messages())
+        messages = run_new_messages(run)
     except Exception:
         return []
     last = messages[-1] if messages else None

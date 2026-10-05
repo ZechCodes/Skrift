@@ -212,6 +212,7 @@ def test_dispatching_dict_kwargs_without_pydantic_ai_installed(store, operation,
                 kwargs = dict(
                     usage_limits={{"request_limit": 2}},
                     message_history=[{{"kind": "request", "parts": []}}],
+                    native_tools=[{{"kind": "web_search"}}],
                 )
                 try:
                     if {operation!r} == "run":
