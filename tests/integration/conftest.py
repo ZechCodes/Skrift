@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from skrift.config import DatabaseConfig, RedisConfig, Settings
+from skrift.config import DatabaseConfig, NotificationsConfig, RedisConfig, Settings
 from skrift.db.base import Base
 from skrift.lib.notification_backends import PgNotifyBackend, RedisBackend
 from skrift.notifications import NotificationService
@@ -150,3 +150,24 @@ async def pg_backend_pair(settings_for_pg, pg_session_maker):
 @pytest.fixture(params=["redis_backend_pair", "pg_backend_pair"])
 def backend_pair(request):
     return request.getfixturevalue(request.param)
+
+
+# ---------------------------------------------------------------------------
+# Short queued lifetime (#245): same pairs with a 60 s queued / 120 s timeseries
+# lifetime, so a notification aged past it is still on disk until a sweep.
+# ---------------------------------------------------------------------------
+
+SHORT_LIFETIMES = NotificationsConfig(queued_ttl_seconds=60, timeseries_ttl_seconds=120)
+
+
+@pytest.fixture(params=["redis", "pg"])
+async def short_ttl_backend_pair(request, settings_for_redis, settings_for_pg, pg_session_maker):
+    backend_cls, settings = {
+        "redis": (RedisBackend, settings_for_redis),
+        "pg": (PgNotifyBackend, settings_for_pg),
+    }[request.param]
+    settings = settings.model_copy(update={"notifications": SHORT_LIFETIMES})
+    pairs = await _make_pair(backend_cls, settings=settings, session_maker=pg_session_maker)
+    yield pairs
+    for _, backend in pairs:
+        await backend.stop()

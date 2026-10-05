@@ -290,3 +290,76 @@ class TestNotificationBackends:
         # Should get exactly 1 (from local push), not 2 (local + remote echo)
         assert len(items) == 1
         assert items[0].id == n.id
+
+
+@pytest.mark.integration
+class TestNotificationLifetimeAndClearing:
+    """#245: configured lifetimes bound reads and the sweep; clearing fans out."""
+
+    async def test_short_lifetime_bounds_reads_before_the_sweep(self, short_ttl_backend_pair):
+        (svc_a, backend_a), (svc_b, _) = short_ttl_backend_pair
+
+        stale = Notification(type="generic", created_at=time.time() - 61)
+        fresh = Notification(type="generic", created_at=time.time() - 59)
+        ts_stale = Notification(
+            type="generic", created_at=time.time() - 121, mode=NotificationMode.TIMESERIES
+        )
+        for n in (stale, fresh, ts_stale):
+            await backend_a.store("session:sess-1", n)
+
+        assert [n.id for n in await svc_b.get_queued("sess-1", None)] == [fresh.id]
+        assert await svc_b.get_since("sess-1", None, 0) == []
+
+        await backend_a._delete_old_notifications()
+        from skrift.db.models.notification import StoredNotification
+        from sqlalchemy import select
+
+        async with backend_a._session_maker() as session:
+            ids = set((await session.execute(select(StoredNotification.id))).scalars())
+        assert ids == {fresh.id}
+
+    async def test_sweep_interval_capped_by_short_lifetime(self, short_ttl_backend_pair):
+        (_, backend_a), _ = short_ttl_backend_pair
+        assert backend_a._sweep_interval_seconds() == 60
+
+    async def test_clear_user_across_replicas(self, backend_pair):
+        (svc_a, backend_a), (svc_b, _) = backend_pair
+
+        drop = [Notification(type="generic", group="answer-1"), Notification(type="generic")]
+        for n in drop:
+            await svc_a.send_to_user("alice", n)
+        ts = Notification(type="generic", mode=NotificationMode.TIMESERIES)
+        await svc_a.send_to_user("alice", ts)
+        bob = Notification(type="generic")
+        await svc_a.send_to_user("bob", bob)
+
+        q = await svc_b.register_connection("sess-b", "alice")
+        await drain_queue(q, timeout=0.3)
+
+        assert await svc_a.clear_queued("user:alice") == 2
+
+        items = await drain_queue(q)
+        assert {i.type for i in items} == {"dismissed"}
+        assert {i.payload["notification_id"] for i in items} == {str(n.id) for n in drop}
+
+        assert await svc_b.get_queued("sess-b", "alice") == []
+        assert [n.id for n in await backend_a.get_since_multi(["user:alice"], 0)] == [ts.id]
+        assert [n.id for n in await backend_a.get_queued_multi(["user:bob"])] == [bob.id]
+
+    async def test_clear_group_across_replicas(self, backend_pair):
+        (svc_a, backend_a), (svc_b, _) = backend_pair
+
+        keep = Notification(type="generic", group="answer-2")
+        drop = Notification(type="generic", group="answer-1")
+        await svc_a.send_to_session("sess-1", keep)
+        await svc_a.send_to_session("sess-1", drop)
+
+        q = await svc_b.register_connection("sess-1", None)
+        await drain_queue(q, timeout=0.3)
+
+        assert await svc_b.clear_queued("session:sess-1", group="answer-1") == 1
+
+        assert [n.id for n in await backend_a.get_queued_multi(["session:sess-1"])] == [keep.id]
+        # B's own connection gets the dismissed event from the local push.
+        [event] = await drain_queue(q)
+        assert event.payload["notification_id"] == str(drop.id)

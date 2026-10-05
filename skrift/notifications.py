@@ -303,7 +303,7 @@ class NotificationService:
     def _get_backend(self) -> NotificationBackend:
         if self._backend is None:
             from skrift.lib.notification_backends import InMemoryBackend
-            self._backend = InMemoryBackend()
+            self._backend = InMemoryBackend(settings=_settings_or_none())
             self._backend.on_remote_message(self._handle_remote)
         return self._backend
 
@@ -430,6 +430,40 @@ class NotificationService:
             await hooks.do_action(NOTIFICATION_DISMISSED, dismissed_id)
 
         return dismissed_id is not None
+
+    async def clear_queued(self, source_key: str, *, group: str | None = None) -> int:
+        """Delete every queued notification stored for *source_key*.
+
+        With *group*, only that group's notification is deleted. Timeseries
+        notifications are left alone. The deletion applies to every
+        subscriber, like group replacement and unlike :meth:`dismiss`.
+        Connected clients on every replica get a ``dismissed`` event per
+        removed notification; the event is not stored, because a reconnecting
+        client drops anything missing from the queued replay. Returns the
+        number of notifications removed.
+        """
+        backend = self._get_backend()
+        clear = getattr(backend, "clear_queued", None)
+        if clear is not None:
+            removed = list(await clear(source_key, group))
+        else:
+            # Custom backends that predate clear_queued: the protocol's
+            # per-item calls do the same job, one notification at a time.
+            removed = []
+            for n in await backend.get_queued_multi([source_key]):
+                if group is not None and n.group != group:
+                    continue
+                if await backend.remove(n.id) is not None:
+                    removed.append(n.id)
+
+        for removed_id in removed:
+            dismissed = Notification.dismissed(removed_id)
+            self._registry.push(source_key, dismissed)
+            await backend.publish({
+                "a": "s", "sk": source_key, "pid": self._publisher_id,
+                "n": dismissed.to_dict(),
+            })
+        return len(removed)
 
     async def get_queued(
         self, nid: str, user_id: str | None
@@ -588,6 +622,21 @@ def _notification_from_wire(
     return notification
 
 
+def _settings_or_none():
+    """App settings for the lazy in-process backend, or None when they cannot load.
+
+    The fallback backend has always worked without configuration; a missing
+    secret key or unreadable app.yaml leaves it on the default lifetimes.
+    """
+    from skrift.config import get_settings
+
+    try:
+        return get_settings()
+    except (Exception, SystemExit):
+        logger.debug("Settings unavailable; in-process notification backend uses defaults", exc_info=True)
+        return None
+
+
 # Global singleton
 notifications = NotificationService()
 
@@ -668,6 +717,25 @@ async def dismiss_user_group(user_id: str, group: str) -> bool:
             anchor_nid = child.removeprefix("session:")
             break
     return await notifications.dismiss(anchor_nid, user_id, group=group)
+
+
+async def clear_session_notifications(nid: str, *, group: str | None = None) -> int:
+    """Delete the session's queued notifications (only *group*'s if given); returns the count."""
+    return await notifications.clear_queued(f"session:{nid}", group=group)
+
+
+async def clear_user_notifications(user_id: str, *, group: str | None = None) -> int:
+    """Delete the user's queued notifications (only *group*'s if given); returns the count.
+
+    Only the ``user:{id}`` queue: notifications sent to one of the user's
+    sessions are cleared with :func:`clear_session_notifications`.
+    """
+    return await notifications.clear_queued(f"user:{user_id}", group=group)
+
+
+async def clear_source_notifications(source_key: str, *, group: str | None = None) -> int:
+    """Delete the queued notifications stored for any source key; returns the count."""
+    return await notifications.clear_queued(source_key, group=group)
 
 
 def ensure_nid(request) -> str:

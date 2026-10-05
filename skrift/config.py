@@ -798,6 +798,10 @@ class NotificationsConfig(BaseModel):
 
     backend: str = ""  # empty = InMemoryBackend; or "module:ClassName" import string
     webhook_secret: str = ""  # empty = webhook disabled
+    # How long stored notifications stay replayable. Built-in backends never
+    # return an older notification and their sweep deletes it shortly after.
+    queued_ttl_seconds: float = Field(default=24 * 60 * 60, gt=0, allow_inf_nan=False)
+    timeseries_ttl_seconds: float = Field(default=7 * 24 * 60 * 60, gt=0, allow_inf_nan=False)
 
 
 class WebhookBackoffConfig(BaseModel):

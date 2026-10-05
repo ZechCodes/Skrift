@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from collections.abc import Collection
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -25,9 +25,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Defaults for ``notifications.queued_ttl_seconds`` / ``timeseries_ttl_seconds``.
 QUEUED_TTL_HOURS = 24
 TIMESERIES_TTL_DAYS = 7
 CLEANUP_INTERVAL_SECONDS = 600
+# Floor on the sweep interval so a tiny lifetime cannot turn the sweep into a busy loop.
+MIN_CLEANUP_INTERVAL_SECONDS = 1.0
 
 
 def load_backend(spec: str) -> type:
@@ -85,10 +88,35 @@ class _PeriodicCleanupMixin:
     Subclasses provide the storage-specific ``_delete_old_notifications`` and
     ``cleanup_dismissed``; the loop itself is shared by every backend so no
     storage grows without bound.
+
+    The lifetimes also bound reads: built-in backends never return a stored
+    notification older than its lifetime, whenever the sweep last ran.
     """
 
+    _queued_ttl_seconds: float = QUEUED_TTL_HOURS * 3600
+    _timeseries_ttl_seconds: float = TIMESERIES_TTL_DAYS * 86400
     _cleanup_interval_seconds: float = CLEANUP_INTERVAL_SECONDS
     _cleanup_task: asyncio.Task | None = None
+
+    def _configure_lifetimes(self, settings: Settings | None) -> None:
+        """Take the lifetimes from ``settings.notifications`` (defaults without settings)."""
+        if settings is not None:
+            self._queued_ttl_seconds = settings.notifications.queued_ttl_seconds
+            self._timeseries_ttl_seconds = settings.notifications.timeseries_ttl_seconds
+
+    def _sweep_interval_seconds(self) -> float:
+        """Seconds between sweeps: at most one queued lifetime, so a short
+        lifetime is not left on disk for the default ten minutes."""
+        return min(
+            self._cleanup_interval_seconds,
+            max(MIN_CLEANUP_INTERVAL_SECONDS, self._queued_ttl_seconds),
+        )
+
+    def _queued_cutoff(self) -> float:
+        return time.time() - self._queued_ttl_seconds
+
+    def _timeseries_cutoff(self) -> float:
+        return time.time() - self._timeseries_ttl_seconds
 
     async def _start_cleanup(self) -> None:
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -105,7 +133,7 @@ class _PeriodicCleanupMixin:
     async def _cleanup_loop(self) -> None:
         while True:
             try:
-                await asyncio.sleep(self._cleanup_interval_seconds)
+                await asyncio.sleep(self._sweep_interval_seconds())
                 await self._delete_old_notifications()
                 await self.cleanup_dismissed()
             except asyncio.CancelledError:
@@ -123,7 +151,8 @@ class _PeriodicCleanupMixin:
 class InMemoryBackend(_PeriodicCleanupMixin):
     """Dict-based storage with no cross-replica fanout. Default backend."""
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, settings: Settings | None = None, **kwargs: Any) -> None:
+        self._configure_lifetimes(settings)
         self._queues: dict[str, dict[UUID, Notification]] = {}
         self._subscriptions: dict[str, set[str]] = {}  # subscriber_key → {source_keys}
         self._dismissed: dict[str, set[UUID]] = {}  # subscriber_key → {notification_ids}
@@ -138,9 +167,8 @@ class InMemoryBackend(_PeriodicCleanupMixin):
 
     async def _delete_old_notifications(self) -> None:
         """Drop notifications past their TTL and forget emptied source keys."""
-        now = time.time()
-        queued_cutoff = now - QUEUED_TTL_HOURS * 3600
-        timeseries_cutoff = now - TIMESERIES_TTL_DAYS * 86400
+        queued_cutoff = self._queued_cutoff()
+        timeseries_cutoff = self._timeseries_cutoff()
         for source_key in list(self._queues):
             queue = self._queues[source_key]
             expired_ids = [
@@ -190,16 +218,34 @@ class InMemoryBackend(_PeriodicCleanupMixin):
         old = self._dismiss_by_group(q, group)
         return old.id if old else None
 
+    async def clear_queued(self, source_key: str, group: str | None = None) -> list[UUID]:
+        """Delete every queued notification for *source_key* (only *group*'s if given)."""
+        q = self._queues.get(source_key)
+        if not q:
+            return []
+        removed = [
+            nid
+            for nid, n in q.items()
+            if n.mode == NotificationMode.QUEUED and (group is None or n.group == group)
+        ]
+        for nid in removed:
+            del q[nid]
+        if not q:
+            del self._queues[source_key]
+        return removed
+
     async def get_queued_multi(self, source_keys: Collection[str]) -> list[Notification]:
+        cutoff = self._queued_cutoff()
         merged: dict[UUID, Notification] = {}
         for key in source_keys:
             q = self._queues.get(key, {})
             for n in q.values():
-                if n.mode == NotificationMode.QUEUED:
+                if n.mode == NotificationMode.QUEUED and n.created_at >= cutoff:
                     merged[n.id] = n
         return sorted(merged.values(), key=lambda n: n.created_at)
 
     async def get_since_multi(self, source_keys: Collection[str], since: float) -> list[Notification]:
+        since = max(since, self._timeseries_cutoff())
         merged: dict[UUID, Notification] = {}
         for key in source_keys:
             q = self._queues.get(key, {})
@@ -276,16 +322,21 @@ class _DatabaseStorageMixin(_PeriodicCleanupMixin):
 
     _session_maker: Any
 
-    def _init_db(self, session_maker: Any) -> None:
+    def _init_db(self, session_maker: Any, settings: Settings | None = None) -> None:
         self._session_maker = session_maker
         self._cleanup_task = None
+        self._configure_lifetimes(settings)
+
+    @staticmethod
+    def _as_datetime(timestamp: float) -> datetime:
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
     async def _delete_old_notifications(self) -> None:
         from skrift.db.models.notification import StoredNotification
         from sqlalchemy import delete, or_, and_
 
-        queued_cutoff = datetime.now(timezone.utc) - timedelta(hours=QUEUED_TTL_HOURS)
-        timeseries_cutoff = datetime.now(timezone.utc) - timedelta(days=TIMESERIES_TTL_DAYS)
+        queued_cutoff = self._as_datetime(self._queued_cutoff())
+        timeseries_cutoff = self._as_datetime(self._timeseries_cutoff())
         async with self._session_maker() as session:
             await session.execute(
                 delete(StoredNotification).where(
@@ -367,6 +418,27 @@ class _DatabaseStorageMixin(_PeriodicCleanupMixin):
                 await session.commit()
             return old_ids[0] if old_ids else None
 
+    async def clear_queued(self, source_key: str, group: str | None = None) -> list[UUID]:
+        """Delete every queued notification for *source_key* (only *group*'s if given)."""
+        from skrift.db.models.notification import StoredNotification
+        from sqlalchemy import select, delete
+
+        conditions = [
+            StoredNotification.source_key == source_key,
+            StoredNotification.delivery_mode == NotificationMode.QUEUED.value,
+        ]
+        if group is not None:
+            conditions.append(StoredNotification.group_key == group)
+        async with self._session_maker() as session:
+            result = await session.execute(select(StoredNotification.id).where(*conditions))
+            removed = list(result.scalars().all())
+            if removed:
+                await session.execute(
+                    delete(StoredNotification).where(StoredNotification.id.in_(removed))
+                )
+                await session.commit()
+            return removed
+
     async def get_queued_multi(self, source_keys: Collection[str]) -> list[Notification]:
         from skrift.db.models.notification import StoredNotification
         from sqlalchemy import select
@@ -380,6 +452,7 @@ class _DatabaseStorageMixin(_PeriodicCleanupMixin):
                 .where(
                     StoredNotification.source_key.in_(source_keys),
                     StoredNotification.delivery_mode == NotificationMode.QUEUED.value,
+                    StoredNotification.notified_at >= self._as_datetime(self._queued_cutoff()),
                 )
                 .order_by(StoredNotification.notified_at)
             )
@@ -393,7 +466,7 @@ class _DatabaseStorageMixin(_PeriodicCleanupMixin):
         if not source_keys:
             return []
 
-        since_dt = datetime.fromtimestamp(since, tz=timezone.utc)
+        since_dt = self._as_datetime(max(since, self._timeseries_cutoff()))
         async with self._session_maker() as session:
             result = await session.execute(
                 select(StoredNotification)
@@ -542,7 +615,7 @@ class RedisBackend(_DatabaseStorageMixin):
     """DB storage + Redis pub/sub for cross-replica fanout."""
 
     def __init__(self, *, settings: Settings, session_maker: Any, **kwargs: Any) -> None:
-        self._init_db(session_maker)
+        self._init_db(session_maker, settings)
         self._redis_url = settings.redis.url
         self._channel = settings.redis.make_key("skrift", "notifications")
         self._client: Any = None
@@ -623,7 +696,7 @@ class PgNotifyBackend(_DatabaseStorageMixin):
     CHANNEL = "skrift_notifications"
 
     def __init__(self, *, settings: Settings, session_maker: Any, **kwargs: Any) -> None:
-        self._init_db(session_maker)
+        self._init_db(session_maker, settings)
         # Derive raw DSN from SQLAlchemy URL (strip +asyncpg suffix)
         self._dsn = settings.db.url.replace("+asyncpg", "").replace("postgresql://", "postgresql://")
         self._listener_conn: Any = None
