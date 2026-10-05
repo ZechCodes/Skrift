@@ -2,7 +2,8 @@
 
 pydantic-ai 2.x renamed the built-in tools module and dropped the
 ``builtin_tools`` kwarg, made ``AgentRun.usage`` a property, and ends a run a
-tool raised in with an empty request. ``skrift.agents._compat`` bridges them;
+tool raised in with an interrupted request holding the returns that came in,
+where 1.x drops them. ``skrift.agents._compat`` bridges them;
 these tests run on whichever major is installed, and CI runs both.
 """
 
@@ -14,7 +15,14 @@ import textwrap
 
 import pytest
 from pydantic_ai import WebSearchTool
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import FunctionModel
 
 import skrift
@@ -167,3 +175,37 @@ def test_run_new_messages_drops_a_request_the_run_never_filled():
     ]
     assert _compat.run_new_messages(_Run([request, response])) == [request, response]
     assert _compat.run_new_messages(_Run([])) == []
+
+
+def _batch():
+    request = ModelRequest(parts=[UserPromptPart("hi")])
+    response = ModelResponse(
+        parts=[
+            ToolCallPart("good", {}, tool_call_id="good-1"),
+            ToolCallPart("boom", {}, tool_call_id="boom-1"),
+        ]
+    )
+    return request, response, ToolReturnPart("good", "fine", tool_call_id="good-1")
+
+
+@pytest.mark.skipif(_compat.MAJOR < 2, reason="a 1.x request has no state")
+def test_run_new_messages_completes_an_interrupted_request_keeping_its_returns():
+    request, response, returned = _batch()
+    interrupted = ModelRequest(parts=[returned], state="interrupted")
+
+    messages = _compat.run_new_messages(_Run([request, response, interrupted]))
+
+    assert messages[:2] == [request, response]
+    assert messages[2].parts == [returned]
+    assert messages[2].state == "complete"
+
+
+def test_run_new_messages_adds_the_streamed_returns_of_the_last_responses_calls():
+    request, response, returned = _batch()
+    earlier = ToolReturnPart("good", "stale", tool_call_id="good-0")
+
+    messages = _compat.run_new_messages(_Run([request, response]), [earlier, returned])
+
+    assert messages[:2] == [request, response]
+    assert messages[2].parts == [returned]
+    assert _compat.run_new_messages(_Run([request, response]), [earlier]) == [request, response]

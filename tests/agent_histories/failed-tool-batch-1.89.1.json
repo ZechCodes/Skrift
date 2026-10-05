@@ -1,0 +1,88 @@
+[
+ {
+  "parts": [
+   {
+    "content": "hi",
+    "timestamp": "2026-10-05T15:38:09.413289Z",
+    "part_kind": "user-prompt"
+   }
+  ],
+  "timestamp": "2026-10-05T15:38:09.416219Z",
+  "instructions": null,
+  "kind": "request",
+  "run_id": "01a10cb7-1c81-7516-bca9-e2f693bec812",
+  "conversation_id": "01a10cb7-1c81-7516-bca9-e2f5bd6480a5",
+  "metadata": null
+ },
+ {
+  "parts": [
+   {
+    "tool_name": "good",
+    "args": {},
+    "tool_call_id": "good-1",
+    "id": null,
+    "provider_name": null,
+    "provider_details": null,
+    "part_kind": "tool-call"
+   },
+   {
+    "tool_name": "boom",
+    "args": {},
+    "tool_call_id": "boom-1",
+    "id": null,
+    "provider_name": null,
+    "provider_details": null,
+    "part_kind": "tool-call"
+   }
+  ],
+  "usage": {
+   "input_tokens": 51,
+   "cache_write_tokens": 0,
+   "cache_read_tokens": 0,
+   "output_tokens": 4,
+   "input_audio_tokens": 0,
+   "cache_audio_read_tokens": 0,
+   "output_audio_tokens": 0,
+   "details": {}
+  },
+  "model_name": "function:respond:",
+  "timestamp": "2026-10-05T15:38:09.416779Z",
+  "kind": "response",
+  "provider_name": null,
+  "provider_url": null,
+  "provider_details": null,
+  "provider_response_id": null,
+  "finish_reason": null,
+  "run_id": "01a10cb7-1c81-7516-bca9-e2f693bec812",
+  "conversation_id": "01a10cb7-1c81-7516-bca9-e2f5bd6480a5",
+  "metadata": null
+ },
+ {
+  "parts": [
+   {
+    "tool_name": "good",
+    "content": "fine",
+    "tool_call_id": "good-1",
+    "metadata": null,
+    "timestamp": "2026-10-05T15:38:09.417208Z",
+    "outcome": "success",
+    "part_kind": "tool-return"
+   },
+   {
+    "tool_name": "boom",
+    "content": "No result: the run stopped with RuntimeError before this tool call returned.",
+    "tool_call_id": "boom-1",
+    "metadata": null,
+    "timestamp": "2026-10-05T15:38:09.417308Z",
+    "outcome": "failed",
+    "part_kind": "tool-return"
+   }
+  ],
+  "timestamp": null,
+  "instructions": null,
+  "kind": "request",
+  "run_id": null,
+  "conversation_id": null,
+  "metadata": null
+ }
+]

@@ -10,6 +10,8 @@ budget again on each attempt from the same messages.
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 from pydantic_ai import RunContext
@@ -37,7 +39,7 @@ from skrift.agents.runtime import (
     agents_run_handler,
     register_agent_handlers,
 )
-from skrift.agents.state import load_runstate, stream_name
+from skrift.agents.state import load_runstate, stream_name, update_runstate
 from skrift.workers import PermanentFailure, WorkerContext
 from skrift.workers.models import DeadJobEntry, DeadLetterCause, JobEnvelope, Pause
 from skrift.workers.registry import registry as worker_registry
@@ -548,3 +550,127 @@ async def test_session_cancels_finalizer_drops_what_an_attempt_kept_after_the_re
     assert state.current_run_job_id is None
     assert state.failed_run_messages is None
     assert _history(state) == []
+
+
+_PASSES = 10
+
+
+def _batch_agent(name: str, *, sequential: bool):
+    """An agent whose model calls ``good`` then ``boom`` in one response, where
+    ``good`` returns and ``boom`` raises after ``good`` has returned, and that
+    answers "done" when prompted "again".
+
+    Run in parallel on 1.x, a call that returns in the same event loop pass
+    as one that raises loses its return inside pydantic-ai, and gets a failed
+    one; ``boom`` waits some passes after ``good`` so the test does not hinge
+    on it.
+    """
+
+    seen = []
+    returned = asyncio.Event()
+
+    def respond(messages, info):
+        seen.append(list(messages))
+        if _answers_again(messages):
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart("good", {}, tool_call_id="good-1"),
+                ToolCallPart("boom", {}, tool_call_id="boom-1"),
+            ]
+        )
+
+    agent = skrift.Agent(FunctionModel(respond), name=name)
+
+    @agent.tool_plain(sequential=sequential)
+    async def good() -> str:
+        returned.set()
+        return "fine"
+
+    @agent.tool_plain(sequential=sequential)
+    async def boom() -> str:
+        await returned.wait()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        raise RuntimeError("the service is down")
+
+    return agent, seen
+
+
+def _answer_every_call(messages) -> None:
+    calls = {call.tool_call_id for call in _parts(messages, ToolCallPart)}
+    returns = [part.tool_call_id for part in _parts(messages, ToolReturnPart)]
+    assert sorted(returns) == sorted(calls), "unanswered calls sent to the model"
+
+
+@pytest.mark.parametrize("sequential", [True, False], ids=["sequential", "parallel"])
+async def test_a_tool_batch_that_fails_partway_keeps_the_returns_it_got(sequential):
+    # A call that returned keeps its return, on either major: a 2.x run keeps
+    # it in an interrupted request, and a 1.x run drops it unless the runtime
+    # streams the tool calls. The call that raised gets a failed return.
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",), poll_interval=0.01)
+    agent, seen = _batch_agent("batch", sequential=sequential)
+
+    session = await agent.run("hi", dispatch="queued")
+    await runtime.start()
+    try:
+        state = await _settled(session.id, "failed")
+        history = _history(state)
+        returns = _parts(history, ToolReturnPart)
+        assert [(part.tool_call_id, part.outcome) for part in returns] == [
+            ("good-1", "success"),
+            ("boom-1", "failed"),
+        ]
+        assert returns[0].content == "fine"
+        assert "RuntimeError" in returns[1].content
+        # Both returns answer the one response, in one request.
+        assert isinstance(history[-1], ModelRequest)
+        assert _parts(history[-1:], ToolReturnPart) == returns
+        assert getattr(history[-1], "state", "complete") == "complete"
+
+        await session.send("again")
+        state = await _settled(session.id, "completed")
+    finally:
+        await asyncio.wait_for(runtime.stop(), 5)
+
+    assert state.output == "done"
+    assert _prompts(seen[-1]) == ["hi", "again"]
+    _answer_every_call(seen[-1])
+
+
+# The history each major's runtime kept for the turn of
+# test_a_tool_batch_that_fails_partway_keeps_the_returns_it_got (sequential),
+# as a JSON state store saves it.
+HISTORIES = Path(__file__).resolve().parent / "agent_histories"
+
+
+@pytest.mark.parametrize("writer", ["1.89.1", "2.46.0"])
+async def test_a_partway_failed_batch_kept_on_either_major_runs_on_the_installed_one(writer):
+    # Workers on both majors can share a session, so a turn's next turn may
+    # run on the other major: the failed turn here keeps the history the
+    # writer's major kept.
+    history = json.loads((HISTORIES / f"failed-tool-batch-{writer}.json").read_text())
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",), poll_interval=0.01)
+    agent, seen = _batch_agent("reader", sequential=True)
+
+    session = await agent.run("hi", dispatch="queued")
+    await runtime.start()
+    try:
+        await _settled(session.id, "failed")
+
+        async def written_by(state):
+            state.messages = [
+                message for message in state.messages if message["role"] != "model"
+            ] + [{"role": "model", "content": message} for message in history]
+            return state
+
+        await update_runstate(session.id, written_by)
+        await session.send("again")
+        state = await _settled(session.id, "completed")
+    finally:
+        await asyncio.wait_for(runtime.stop(), 5)
+
+    assert state.output == "done"
+    assert _prompts(seen[-1]) == ["hi", "again"]
+    _answer_every_call(seen[-1])
+    assert _parts(seen[-1], ToolReturnPart)[0].content == "fine"

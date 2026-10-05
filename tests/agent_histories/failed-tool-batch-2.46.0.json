@@ -1,0 +1,96 @@
+[
+ {
+  "parts": [
+   {
+    "content": "hi",
+    "timestamp": "2026-10-05T15:38:04.414423Z",
+    "part_kind": "user-prompt"
+   }
+  ],
+  "timestamp": "2026-10-05T15:38:04.417759Z",
+  "instructions": null,
+  "kind": "request",
+  "run_id": "01a10cb7-08fa-73af-83e9-7ba83ee861b1",
+  "conversation_id": "01a10cb7-08fa-73af-83e9-7ba910762a29",
+  "metadata": null,
+  "state": "complete"
+ },
+ {
+  "parts": [
+   {
+    "tool_name": "good",
+    "args": {},
+    "tool_call_id": "good-1",
+    "tool_kind": null,
+    "id": null,
+    "provider_name": null,
+    "provider_details": null,
+    "part_kind": "tool-call"
+   },
+   {
+    "tool_name": "boom",
+    "args": {},
+    "tool_call_id": "boom-1",
+    "tool_kind": null,
+    "id": null,
+    "provider_name": null,
+    "provider_details": null,
+    "part_kind": "tool-call"
+   }
+  ],
+  "usage": {
+   "input_tokens": 51,
+   "cache_write_tokens": 0,
+   "cache_read_tokens": 0,
+   "output_tokens": 4,
+   "input_audio_tokens": 0,
+   "cache_audio_read_tokens": 0,
+   "output_audio_tokens": 0,
+   "details": {},
+   "cost": null
+  },
+  "model_name": "function:respond:",
+  "timestamp": "2026-10-05T15:38:04.418737Z",
+  "kind": "response",
+  "provider_name": null,
+  "provider_url": null,
+  "provider_details": null,
+  "provider_response_id": null,
+  "finish_reason": null,
+  "run_id": "01a10cb7-08fa-73af-83e9-7ba83ee861b1",
+  "conversation_id": "01a10cb7-08fa-73af-83e9-7ba910762a29",
+  "metadata": null,
+  "state": "complete"
+ },
+ {
+  "parts": [
+   {
+    "tool_name": "good",
+    "content": "fine",
+    "tool_call_id": "good-1",
+    "tool_kind": null,
+    "metadata": null,
+    "timestamp": "2026-10-05T15:38:04.439719Z",
+    "outcome": "success",
+    "part_kind": "tool-return"
+   },
+   {
+    "tool_name": "boom",
+    "content": "No result: the run stopped with RuntimeError before this tool call returned.",
+    "tool_call_id": "boom-1",
+    "tool_kind": null,
+    "metadata": null,
+    "timestamp": "2026-10-05T15:38:04.440232Z",
+    "outcome": "failed",
+    "part_kind": "tool-return"
+   }
+  ],
+  "timestamp": "2026-10-05T15:38:04.440084Z",
+  "instructions": null,
+  "kind": "request",
+  "run_id": "01a10cb7-08fa-73af-83e9-7ba83ee861b1",
+  "conversation_id": "01a10cb7-08fa-73af-83e9-7ba910762a29",
+  "metadata": null,
+  "state": "complete"
+ }
+]

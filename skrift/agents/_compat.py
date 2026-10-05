@@ -18,14 +18,19 @@ Differences bridged:
   takes them (:func:`native_tool_kwargs`).
 - ``AgentRun.usage`` is a method in 1.x and a property in 2.x
   (:func:`run_usage`).
-- When a tool raises, a 2.x run's ``new_messages()`` ends in the empty
-  ``ModelRequest`` that was to carry the tool results; a 1.x run's ends in the
-  model response that called the tools (:func:`run_new_messages`).
+- When a tool raises, a 2.x run's ``new_messages()`` ends in an
+  ``'interrupted'`` ``ModelRequest`` holding the returns of the tools that had
+  finished, empty if none had; a 1.x run's ends in the model response that
+  called the tools, and the returns of the tools that had finished are lost
+  unless the tool calls were streamed (:func:`stream_tool_returns`,
+  :func:`run_new_messages`).
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from dataclasses import replace
 from importlib import metadata
 from typing import Any
 
@@ -74,7 +79,8 @@ def check_version(version: str) -> int:
 VERSION = _installed_version()
 MAJOR = check_version(VERSION)
 
-from pydantic_ai.messages import ModelRequest
+from pydantic_ai import Agent
+from pydantic_ai.messages import FunctionToolResultEvent, ModelRequest, ModelResponse
 
 if MAJOR >= 2:
     from pydantic_ai.capabilities import NativeTool
@@ -96,6 +102,7 @@ __all__ = [
     "native_tool_kwargs",
     "run_new_messages",
     "run_usage",
+    "stream_tool_returns",
 ]
 
 
@@ -125,11 +132,42 @@ def run_usage(run: Any) -> Any:
     return usage() if callable(usage) else usage
 
 
-def run_new_messages(run: Any) -> list[Any]:
-    """The messages an ``AgentRun`` has produced, without a request it started
-    and never filled."""
+async def stream_tool_returns(run: Any, node: Any, returns: list[Any]) -> None:
+    """Run ``node``, the next node of ``run``, if it calls tools on 1.x, keeping
+    in ``returns`` the return of each tool call as it finishes.
+
+    A 1.x run that raises while calling tools drops the returns of the calls
+    that had finished; a 2.x run keeps them in its messages, and this does
+    nothing.
+    """
+
+    if MAJOR >= 2 or not Agent.is_call_tools_node(node):
+        return
+    returns.clear()
+    async with node.stream(run.ctx) as events:
+        async for event in events:
+            if isinstance(event, FunctionToolResultEvent):
+                returns.append(event.result)
+
+
+def run_new_messages(run: Any, tool_returns: Sequence[Any] = ()) -> list[Any]:
+    """The messages an ``AgentRun`` has produced, on either major.
+
+    When the run stopped while calling tools, the messages end in the model
+    response that called them, followed by a request with the returns of the
+    calls that had finished, if any had. ``tool_returns`` are those kept by
+    :func:`stream_tool_returns`.
+    """
 
     messages = list(run.new_messages())
+    last = messages[-1] if messages else None
+    if isinstance(last, ModelRequest) and getattr(last, "state", None) == "interrupted":
+        messages[-1] = replace(last, state="complete")
+    elif isinstance(last, ModelResponse) and tool_returns:
+        call_ids = {call.tool_call_id for call in last.tool_calls}
+        parts = [part for part in tool_returns if part.tool_call_id in call_ids]
+        if parts:
+            messages.append(ModelRequest(parts=parts))
     if messages and isinstance(messages[-1], ModelRequest) and not messages[-1].parts:
         messages.pop()
     return messages
