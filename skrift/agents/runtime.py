@@ -6,16 +6,19 @@ import asyncio
 import inspect
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
+# Imported first: it checks the installed pydantic-ai is one the runtime supports.
+from skrift.agents._compat import native_tool_kwargs, run_new_messages, run_usage
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
 from pydantic_ai import exceptions as pydantic_ai_exceptions
 from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     ToolReturnPart,
 )
 from pydantic_core import PydanticSerializationError, to_jsonable_python
@@ -639,7 +642,7 @@ async def _drive_agent_iter(
         # redundant — and Pydantic AI rejects a run-level output_type when the
         # agent registers output validators. Omitting it keeps both working.
         turn_output_type = run_kwargs.pop("output_type", None)
-        iter_kwargs = dict(run_kwargs)
+        iter_kwargs = native_tool_kwargs(run_kwargs)
         if turn_output_type is not None:
             iter_kwargs["output_type"] = _durable_output_type(turn_output_type)
         async with agent._iter_pydantic(
@@ -658,7 +661,7 @@ async def _drive_agent_iter(
                         return AgentIterResult(
                             result=pause,
                             streamed_message_count=streamed_message_count,
-                            usage=run.usage(),
+                            usage=run_usage(run),
                             response=_latest_response(run),
                         )
                     node_kind = type(node).__name__
@@ -687,7 +690,7 @@ async def _drive_agent_iter(
                 return AgentIterResult(
                     result=run.result,
                     streamed_message_count=streamed_message_count,
-                    usage=run.usage(),
+                    usage=run_usage(run),
                     response=_latest_response(run),
                 )
             except Exception as exc:
@@ -737,34 +740,49 @@ def _failed_run_messages(run: Any, exc: Exception) -> list[dict[str, Any]]:
     """The messages ``run`` produced before it raised ``exc``, dumped for the
     turn's history in a form the next turn's run accepts.
 
-    A run can raise after a model response that calls tools and before their
-    results are in, when a tool raises or the tool-call limit is hit, and
-    pydantic-ai refuses a new prompt after a history that ends in unanswered
-    tool calls. Each such call gets a failed tool return saying so.
+    A run can raise after a model response that calls tools and before all
+    their results are in, when a tool raises or the tool-call limit is hit, and
+    pydantic-ai either refuses a new prompt after unanswered tool calls or, on
+    1.x when they are not last in the history, sends them to the model. The
+    returns pydantic-ai reports are kept, and every other call gets a failed
+    tool return saying so.
     """
     try:
-        messages = list(run.new_messages())
+        messages = run_new_messages(run)
     except Exception:
         return []
-    last = messages[-1] if messages else None
-    if isinstance(last, ModelResponse) and last.tool_calls:
-        content = (
-            f"No result: the run stopped with {type(exc).__name__} "
-            "before this tool call returned."
+    # The last response's calls, and the returns that came in for them.
+    calls: list[Any] = []
+    answered: set[str] = set()
+    for message in reversed(messages):
+        if isinstance(message, ModelResponse):
+            calls = message.tool_calls
+            break
+        answered.update(
+            part.tool_call_id
+            for part in message.parts
+            if isinstance(part, (ToolReturnPart, RetryPromptPart))
         )
-        messages.append(
-            ModelRequest(
-                parts=[
-                    ToolReturnPart(
-                        tool_name=call.tool_name,
-                        content=content,
-                        tool_call_id=call.tool_call_id,
-                        outcome="failed",
-                    )
-                    for call in last.tool_calls
-                ]
-            )
+    content = (
+        f"No result: the run stopped with {type(exc).__name__} "
+        "before this tool call returned."
+    )
+    failed = [
+        ToolReturnPart(
+            tool_name=call.tool_name,
+            content=content,
+            tool_call_id=call.tool_call_id,
+            outcome="failed",
         )
+        for call in calls
+        if call.tool_call_id not in answered
+    ]
+    if failed:
+        last = messages[-1]
+        if isinstance(last, ModelRequest):
+            messages[-1] = replace(last, parts=[*last.parts, *failed])
+        else:
+            messages.append(ModelRequest(parts=failed))
     try:
         return ModelMessagesTypeAdapter.dump_python(messages, mode="json")
     except Exception:

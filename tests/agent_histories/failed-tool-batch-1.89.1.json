@@ -1,0 +1,88 @@
+[
+ {
+  "parts": [
+   {
+    "content": "hi",
+    "timestamp": "2026-10-05T16:04:56.195460Z",
+    "part_kind": "user-prompt"
+   }
+  ],
+  "timestamp": "2026-10-05T16:04:56.198288Z",
+  "instructions": null,
+  "kind": "request",
+  "run_id": "01a10ccf-a0ff-71ac-8500-845447d71b20",
+  "conversation_id": "01a10ccf-a0ff-71ac-8500-84536474d548",
+  "metadata": null
+ },
+ {
+  "parts": [
+   {
+    "tool_name": "good",
+    "args": {},
+    "tool_call_id": "good-1",
+    "id": null,
+    "provider_name": null,
+    "provider_details": null,
+    "part_kind": "tool-call"
+   },
+   {
+    "tool_name": "boom",
+    "args": {},
+    "tool_call_id": "boom-1",
+    "id": null,
+    "provider_name": null,
+    "provider_details": null,
+    "part_kind": "tool-call"
+   }
+  ],
+  "usage": {
+   "input_tokens": 51,
+   "cache_write_tokens": 0,
+   "cache_read_tokens": 0,
+   "output_tokens": 4,
+   "input_audio_tokens": 0,
+   "cache_audio_read_tokens": 0,
+   "output_audio_tokens": 0,
+   "details": {}
+  },
+  "model_name": "function:respond:",
+  "timestamp": "2026-10-05T16:04:56.198814Z",
+  "kind": "response",
+  "provider_name": null,
+  "provider_url": null,
+  "provider_details": null,
+  "provider_response_id": null,
+  "finish_reason": null,
+  "run_id": "01a10ccf-a0ff-71ac-8500-845447d71b20",
+  "conversation_id": "01a10ccf-a0ff-71ac-8500-84536474d548",
+  "metadata": null
+ },
+ {
+  "parts": [
+   {
+    "tool_name": "good",
+    "content": "No result: the run stopped with RuntimeError before this tool call returned.",
+    "tool_call_id": "good-1",
+    "metadata": null,
+    "timestamp": "2026-10-05T16:04:56.218285Z",
+    "outcome": "failed",
+    "part_kind": "tool-return"
+   },
+   {
+    "tool_name": "boom",
+    "content": "No result: the run stopped with RuntimeError before this tool call returned.",
+    "tool_call_id": "boom-1",
+    "metadata": null,
+    "timestamp": "2026-10-05T16:04:56.218287Z",
+    "outcome": "failed",
+    "part_kind": "tool-return"
+   }
+  ],
+  "timestamp": null,
+  "instructions": null,
+  "kind": "request",
+  "run_id": null,
+  "conversation_id": null,
+  "metadata": null
+ }
+]

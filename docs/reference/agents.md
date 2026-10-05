@@ -139,7 +139,7 @@ Supported turn kwargs include:
 - `metadata`
 - `instructions`
 - `toolsets`
-- `builtin_tools`
+- `builtin_tools` or `native_tools` (either name on Pydantic AI 1.x and 2.x)
 - `capabilities`
 - `spec`
 - `reasoning`

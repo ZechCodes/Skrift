@@ -13,6 +13,8 @@ import functools
 import inspect
 from typing import TYPE_CHECKING, Any, Callable
 
+# Imported first: it checks the installed pydantic-ai is one the runtime supports.
+from skrift.agents._compat import native_tool_kwargs
 from pydantic_ai import Agent as PydanticAgent, DeferredToolRequests, RunContext
 from pydantic_ai.exceptions import ApprovalRequired, CallDeferred
 
@@ -164,7 +166,7 @@ class MaterializedAgent(PydanticAgent):
 def materialize(facade: Agent) -> MaterializedAgent:
     """Build a live Pydantic AI agent from a Skrift agent facade."""
 
-    kwargs = dict(facade._init_kwargs)
+    kwargs = native_tool_kwargs(dict(facade._init_kwargs))
     kwargs["output_type"] = durable_registration_output_type(
         facade._init_kwargs.get("output_type", str)
     )

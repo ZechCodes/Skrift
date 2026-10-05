@@ -10,8 +10,11 @@ budget again on each attempt from the same messages.
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
+from pydantic_ai import Agent as PydanticAgent
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
@@ -24,9 +27,11 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.tool_manager import _parallel_execution_mode_ctx_var
 from pydantic_ai.usage import UsageLimits
 
 import skrift
+from skrift.agents._compat import MAJOR
 from skrift.agents.blob import InMemoryBlobStore
 from skrift.agents.models import AgentRunJob
 from skrift.agents.registry import registry as agent_registry
@@ -37,7 +42,7 @@ from skrift.agents.runtime import (
     agents_run_handler,
     register_agent_handlers,
 )
-from skrift.agents.state import load_runstate, stream_name
+from skrift.agents.state import load_runstate, stream_name, update_runstate
 from skrift.workers import PermanentFailure, WorkerContext
 from skrift.workers.models import DeadJobEntry, DeadLetterCause, JobEnvelope, Pause
 from skrift.workers.registry import registry as worker_registry
@@ -548,3 +553,144 @@ async def test_session_cancels_finalizer_drops_what_an_attempt_kept_after_the_re
     assert state.current_run_job_id is None
     assert state.failed_run_messages is None
     assert _history(state) == []
+
+
+def _batch_agent(name: str):
+    """An agent whose model calls ``good`` then ``boom`` in one response, where
+    ``good`` returns and ``boom`` raises once ``good`` has returned, and that
+    answers "done" when prompted "again". ``modes`` gets the parallel
+    execution mode each tool call ran under."""
+
+    seen, modes = [], []
+    returned = asyncio.Event()
+
+    def respond(messages, info):
+        seen.append(list(messages))
+        if _answers_again(messages):
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart("good", {}, tool_call_id="good-1"),
+                ToolCallPart("boom", {}, tool_call_id="boom-1"),
+            ]
+        )
+
+    agent = skrift.Agent(FunctionModel(respond), name=name)
+
+    @agent.tool_plain
+    async def good() -> str:
+        modes.append(_parallel_execution_mode_ctx_var.get())
+        returned.set()
+        return "fine"
+
+    @agent.tool_plain
+    async def boom() -> str:
+        modes.append(_parallel_execution_mode_ctx_var.get())
+        await returned.wait()
+        raise RuntimeError("the service is down")
+
+    return agent, seen, modes
+
+
+def _answer_every_call(messages) -> None:
+    calls = [call.tool_call_id for call in _parts(messages, ToolCallPart)]
+    returns = [part.tool_call_id for part in _parts(messages, ToolReturnPart)]
+    assert sorted(returns) == sorted(calls), "unanswered calls sent to the model"
+
+
+async def _failed_batch(name: str, mode: str):
+    """Run ``_batch_agent``'s first turn under ``mode`` until it fails."""
+    runtime = skrift.configure_workers(mode="in_process", queues=("agents",), poll_interval=0.01)
+    agent, seen, modes = _batch_agent(name)
+    session = await agent.run("hi", dispatch="queued")
+    # The workers' tasks take the mode from the context they start in.
+    with PydanticAgent.parallel_tool_call_execution_mode(mode):
+        await runtime.start()
+    await _settled(session.id, "failed")
+    assert set(modes) == {mode}
+    return runtime, session, seen
+
+
+@pytest.mark.parametrize("mode", ["sequential", "parallel", "parallel_ordered_events"])
+async def test_a_tool_batch_that_fails_partway_leaves_no_call_unanswered(mode):
+    # Every call of the last response gets exactly one return: the one
+    # pydantic-ai reported, or a failed one. pydantic-ai reports a call that
+    # returned before a sibling raised only sometimes (never on 1.x; on 2.x
+    # not when they finish in one pass or the events are ordered), so this
+    # holds the invariant and not which returns are kept.
+    runtime, session, seen = await _failed_batch("batch", mode)
+    try:
+        history = _history(await load_runstate(session.id))
+        returns = _parts(history[-1:], ToolReturnPart)
+        assert sorted(part.tool_call_id for part in returns) == ["boom-1", "good-1"]
+        assert _parts(history, ToolReturnPart) == returns
+        assert getattr(history[-1], "state", "complete") == "complete"
+        by_call = {part.tool_call_id: part for part in returns}
+        assert by_call["boom-1"].outcome == "failed"
+        assert "RuntimeError" in by_call["boom-1"].content
+        assert (by_call["good-1"].outcome, by_call["good-1"].content) in {
+            ("success", "fine"),
+            ("failed", by_call["boom-1"].content),
+        }
+
+        await session.send("again")
+        state = await _settled(session.id, "completed")
+    finally:
+        await asyncio.wait_for(runtime.stop(), 5)
+
+    assert state.output == "done"
+    assert _prompts(seen[-1]) == ["hi", "again"]
+    _answer_every_call(seen[-1])
+
+
+@pytest.mark.skipif(MAJOR < 2, reason="1.x reports no returns from a failed batch")
+async def test_a_return_pydantic_ai_reports_from_a_failed_batch_is_kept():
+    # Run one at a time, 2.x reports good's return in the interrupted request
+    # it ends the run with.
+    runtime, session, _ = await _failed_batch("kept", "sequential")
+    try:
+        history = _history(await load_runstate(session.id))
+    finally:
+        await asyncio.wait_for(runtime.stop(), 5)
+
+    returns = _parts(history[-1:], ToolReturnPart)
+    assert [(part.tool_call_id, part.outcome) for part in returns] == [
+        ("good-1", "success"),
+        ("boom-1", "failed"),
+    ]
+    assert returns[0].content == "fine"
+
+
+# The history each major's runtime kept for the turn of
+# test_a_tool_batch_that_fails_partway_leaves_no_call_unanswered (sequential),
+# as a JSON state store saves it.
+HISTORIES = Path(__file__).resolve().parent / "agent_histories"
+
+
+@pytest.mark.parametrize("writer", ["1.89.1", "2.46.0"])
+async def test_a_partway_failed_batch_kept_on_either_major_runs_on_the_installed_one(writer):
+    # Workers on both majors can share a session, so a turn's next turn may
+    # run on the other major: the failed turn here keeps the history the
+    # writer's major kept.
+    history = json.loads((HISTORIES / f"failed-tool-batch-{writer}.json").read_text())
+    runtime, session, seen = await _failed_batch("reader", "sequential")
+    try:
+
+        async def written_by(state):
+            state.messages = [
+                message for message in state.messages if message["role"] != "model"
+            ] + [{"role": "model", "content": message} for message in history]
+            return state
+
+        await update_runstate(session.id, written_by)
+        await session.send("again")
+        state = await _settled(session.id, "completed")
+    finally:
+        await asyncio.wait_for(runtime.stop(), 5)
+
+    assert state.output == "done"
+    assert _prompts(seen[-1]) == ["hi", "again"]
+    _answer_every_call(seen[-1])
+    assert [part.content for part in _parts(seen[-1], ToolReturnPart)] == [
+        part["content"] for part in history[-1]["parts"]
+    ]

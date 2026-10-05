@@ -14,8 +14,7 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
 import pytest
-from pydantic_ai import RunContext
-from pydantic_ai.builtin_tools import WebSearchTool
+from pydantic_ai import RunContext, WebSearchTool
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -212,6 +211,7 @@ def test_decoding_rebuilds_dataclass_kwargs_from_json_and_keeps_objects():
         "usage": RunUsage(requests=1, input_tokens=5, details={"reasoning": 3}),
         "message_history": history,
         "builtin_tools": [WebSearchTool(max_uses=2)],
+        "native_tools": [WebSearchTool(max_uses=3)],
         "model_settings": {"temperature": 0.2},
     }
     stored = RunState(session_id="s", agent_name="a", run_kwargs=kwargs).model_dump(mode="json")
@@ -302,6 +302,7 @@ async def test_a_kwarg_that_would_not_come_back_the_same_is_refused(backend, kwa
         {"usage": {"requests": "1"}},
         {"message_history": [{"kind": "request", "parts": [], "extra": 1}]},
         {"builtin_tools": [{"kind": "no_such_tool"}]},
+        {"native_tools": [{"kind": "no_such_tool"}]},
     ],
     ids=[
         "usage_limits bad type",
@@ -310,6 +311,7 @@ async def test_a_kwarg_that_would_not_come_back_the_same_is_refused(backend, kwa
         "usage bad type",
         "message_history extra key",
         "builtin_tools unknown kind",
+        "native_tools unknown kind",
     ],
 )
 @pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
@@ -349,3 +351,36 @@ async def test_a_dict_for_a_dataclass_kwarg_is_accepted_and_enforced(backend, tm
     assert "request_limit of 2" in state.turn_errors[turn_id]["exception_message"]
     assert len(seen) == 1
     assert _prompts(seen[0]) == ["earlier", "now"]
+
+
+def _native_tools_seen(info) -> list:
+    """The native tools a model request carried: pydantic-ai 1.x names them
+    builtin_tools, 2.x native_tools."""
+    params = info.model_request_parameters
+    return list(getattr(params, "native_tools", None) or getattr(params, "builtin_tools", None) or [])
+
+
+@pytest.mark.parametrize("given", ["object", "dict"])
+@pytest.mark.parametrize("name", ["builtin_tools", "native_tools"])
+@pytest.mark.parametrize("backend", ["memory", "sqlalchemy", "redis"])
+async def test_native_tools_reach_a_queued_runs_model_under_either_name(
+    backend, name, given, tmp_path
+):
+    # #241: 2.x has no builtin_tools run kwarg; Skrift takes either name on
+    # either pydantic-ai major and passes the tools as the installed one takes them.
+    seen = []
+
+    def respond(messages, info):
+        seen.append(_native_tools_seen(info))
+        return ModelResponse(parts=[TextPart("ok")])
+
+    agent = skrift.Agent(FunctionModel(respond), name="searching")
+    tool = WebSearchTool(max_uses=2) if given == "object" else {"kind": "web_search", "max_uses": 2}
+    async with AsyncExitStack() as stack:
+        runtime = await _worker_runtime(backend, stack, tmp_path)
+        session = await agent.run("hi", dispatch="queued", **{name: [tool]})
+        await runtime.start()
+        stack.push_async_callback(lambda: asyncio.wait_for(runtime.stop(), 5))
+        assert await asyncio.wait_for(session.result(), 5) == "ok"
+
+    assert seen == [[WebSearchTool(max_uses=2)]]

@@ -46,7 +46,9 @@ def normalize_turn_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
 # (SQLAlchemy, Redis) saves as plain dicts (#235): single values, and lists of
 # them.
 _DATACLASS_KWARGS = ("usage_limits", "usage")
-_DATACLASS_LIST_KWARGS = ("message_history", "builtin_tools")
+# The built-in tools go by "builtin_tools" (pydantic-ai 1.x) or "native_tools"
+# (2.x), and either name works on either major (skrift.agents._compat).
+_DATACLASS_LIST_KWARGS = ("message_history", "builtin_tools", "native_tools")
 
 
 @cache
@@ -57,7 +59,8 @@ def _dataclass_kwarg_adapters() -> dict[str, TypeAdapter[Any]]:
     pydantic-ai.
     """
 
-    from pydantic_ai.builtin_tools import AbstractBuiltinTool
+    # Imported first: it checks the installed pydantic-ai is one the runtime supports.
+    from skrift.agents._compat import AbstractNativeTool
     from pydantic_ai.messages import ModelMessage
     from pydantic_ai.usage import RunUsage, UsageLimits
 
@@ -65,7 +68,8 @@ def _dataclass_kwarg_adapters() -> dict[str, TypeAdapter[Any]]:
         "usage_limits": TypeAdapter(UsageLimits),
         "usage": TypeAdapter(RunUsage),
         "message_history": TypeAdapter(ModelMessage),
-        "builtin_tools": TypeAdapter(AbstractBuiltinTool),
+        "builtin_tools": TypeAdapter(AbstractNativeTool),
+        "native_tools": TypeAdapter(AbstractNativeTool),
     }
 
 
@@ -156,7 +160,8 @@ def decode_turn_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     if "output_type" in run_kwargs:
         run_kwargs["output_type"] = _decode_type_ref(run_kwargs["output_type"])
     # Only dicts are rebuilt: the in-memory store keeps the objects, and a list
-    # may also hold values JSON cannot carry, such as builtin tool functions.
+    # may also hold values JSON cannot carry, such as functions that build a
+    # native tool.
     adapters = _dataclass_kwarg_adapters()
     for name in _DATACLASS_KWARGS:
         if isinstance(run_kwargs.get(name), dict):
