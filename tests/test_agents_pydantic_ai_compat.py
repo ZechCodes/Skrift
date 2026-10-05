@@ -111,6 +111,7 @@ async def test_an_agent_defined_with_native_tools_under_either_name_sends_them(n
         )
         return ModelResponse(parts=[TextPart("ok")])
 
+    skrift.configure_workers(mode="inline")
     agent = skrift.Agent(FunctionModel(respond), name="defined", **{name: [WebSearchTool()]})
     session = await agent.run("hi", dispatch="inline")
 
