@@ -105,11 +105,12 @@ class _PeriodicCleanupMixin:
             self._timeseries_ttl_seconds = settings.notifications.timeseries_ttl_seconds
 
     def _sweep_interval_seconds(self) -> float:
-        """Seconds between sweeps: at most one queued lifetime, so a short
-        lifetime is not left on disk for the default ten minutes."""
+        """Seconds between sweeps: at most the shorter lifetime (floored at one
+        second), so a short lifetime is not left on disk for ten minutes."""
+        shortest = min(self._queued_ttl_seconds, self._timeseries_ttl_seconds)
         return min(
             self._cleanup_interval_seconds,
-            max(MIN_CLEANUP_INTERVAL_SECONDS, self._queued_ttl_seconds),
+            max(MIN_CLEANUP_INTERVAL_SECONDS, shortest),
         )
 
     def _queued_cutoff(self) -> float:
@@ -381,47 +382,44 @@ class _DatabaseStorageMixin(_PeriodicCleanupMixin):
             await session.commit()
         return old_id
 
+    # Removals report what their own DELETE removed (RETURNING), never an
+    # earlier SELECT, so concurrent removals of one row count it once.
+
     async def remove(self, notification_id: UUID) -> str | None:
         from skrift.db.models.notification import StoredNotification
-        from sqlalchemy import select, delete
+        from sqlalchemy import delete
 
         async with self._session_maker() as session:
             result = await session.execute(
-                select(StoredNotification.source_key).where(
-                    StoredNotification.id == notification_id
-                )
+                delete(StoredNotification)
+                .where(StoredNotification.id == notification_id)
+                .returning(StoredNotification.source_key)
             )
             source_key = result.scalar_one_or_none()
-            if source_key is not None:
-                await session.execute(
-                    delete(StoredNotification).where(StoredNotification.id == notification_id)
-                )
-                await session.commit()
+            await session.commit()
             return source_key
 
     async def remove_by_group(self, source_key: str, group: str) -> UUID | None:
         from skrift.db.models.notification import StoredNotification
-        from sqlalchemy import select, delete
+        from sqlalchemy import delete
 
         async with self._session_maker() as session:
             result = await session.execute(
-                select(StoredNotification.id).where(
+                delete(StoredNotification)
+                .where(
                     StoredNotification.source_key == source_key,
                     StoredNotification.group_key == group,
                 )
+                .returning(StoredNotification.id)
             )
             old_ids = list(result.scalars().all())
-            if old_ids:
-                await session.execute(
-                    delete(StoredNotification).where(StoredNotification.id.in_(old_ids))
-                )
-                await session.commit()
+            await session.commit()
             return old_ids[0] if old_ids else None
 
     async def clear_queued(self, source_key: str, group: str | None = None) -> list[UUID]:
         """Delete every queued notification for *source_key* (only *group*'s if given)."""
         from skrift.db.models.notification import StoredNotification
-        from sqlalchemy import select, delete
+        from sqlalchemy import delete
 
         conditions = [
             StoredNotification.source_key == source_key,
@@ -430,13 +428,11 @@ class _DatabaseStorageMixin(_PeriodicCleanupMixin):
         if group is not None:
             conditions.append(StoredNotification.group_key == group)
         async with self._session_maker() as session:
-            result = await session.execute(select(StoredNotification.id).where(*conditions))
+            result = await session.execute(
+                delete(StoredNotification).where(*conditions).returning(StoredNotification.id)
+            )
             removed = list(result.scalars().all())
-            if removed:
-                await session.execute(
-                    delete(StoredNotification).where(StoredNotification.id.in_(removed))
-                )
-                await session.commit()
+            await session.commit()
             return removed
 
     async def get_queued_multi(self, source_keys: Collection[str]) -> list[Notification]:

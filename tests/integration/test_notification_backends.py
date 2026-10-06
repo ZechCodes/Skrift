@@ -363,3 +363,46 @@ class TestNotificationLifetimeAndClearing:
         # B's own connection gets the dismissed event from the local push.
         [event] = await drain_queue(q)
         assert event.payload["notification_id"] == str(drop.id)
+
+
+@pytest.mark.integration
+class TestRemovalRaces:
+    """Review findings on #246: late send fanout and concurrent DB removals."""
+
+    async def test_send_fanout_delayed_past_a_clear_is_not_shown(self, backend_pair):
+        (svc_a, backend_a), (svc_b, _) = backend_pair
+        n = Notification(type="generic", payload={"title": "secret"})
+
+        # Hold replica A's publication of n until B has cleared it.
+        release = asyncio.Event()
+        real_publish = backend_a.publish
+
+        async def delayed_publish(message):
+            if message.get("n", {}).get("id") == str(n.id):
+                await release.wait()
+            await real_publish(message)
+
+        backend_a.publish = delayed_publish
+
+        q = await svc_b.register_connection("sess-b", "alice")
+        await drain_queue(q, timeout=0.3)
+
+        send = asyncio.create_task(svc_a.send_to_user("alice", n))
+        for _ in range(100):
+            if await backend_a.get_queued_multi(["user:alice"]):
+                break
+            await asyncio.sleep(0.02)
+
+        assert await svc_b.clear_queued("user:alice") == 1
+        release.set()
+        await send
+
+        items = await drain_queue(q)
+        assert [i.type for i in items] == ["dismissed"]
+        assert items[0].payload["notification_id"] == str(n.id)
+
+    async def test_concurrent_removals_count_each_row_once(self, backend_pair, pg_session_maker):
+        from tests.test_notification_lifetime import assert_concurrent_removals_count_once
+
+        (_, backend_a), _ = backend_pair
+        await assert_concurrent_removals_count_once(backend_a, pg_session_maker)

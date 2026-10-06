@@ -8,6 +8,9 @@
 (function () {
     "use strict";
 
+    // How many dismissed ids the client remembers to ignore late deliveries of.
+    const REMOVED_IDS_MAX = 1000;
+
     const _modeDefaults = {
         queued:     { dismiss: "server", autoClear: false },
         timeseries: { dismiss: false,    autoClear: 8000 },
@@ -97,6 +100,8 @@
         constructor() {
             this._es = null;
             this._displayedIds = new Set();
+            // Ids the server said to dismiss; a late delivery of one is ignored.
+            this._removedIds = new Set();
             this._pendingSyncIds = new Set();
             this._groupMap = new Map();
             this._synced = false;
@@ -338,11 +343,12 @@
 
         _handleNotification(data) {
             if (data.type === "dismissed") {
-                this._removeDismissed(
-                    (data.payload && data.payload.notification_id) || data.id
-                );
+                const removedId = (data.payload && data.payload.notification_id) || data.id;
+                this._rememberRemoved(removedId);
+                this._removeDismissed(removedId);
                 return;
             }
+            if (this._removedIds.has(data.id)) return;
             if (data.type === "disconnecting") {
                 this._handleDisconnecting();
                 return;
@@ -632,6 +638,14 @@
                 this._cleanGroupMap(id);
                 this._showNextFromQueue();
             }, { once: true });
+        }
+
+        _rememberRemoved(id) {
+            this._removedIds.delete(id);
+            this._removedIds.add(id);
+            if (this._removedIds.size > REMOVED_IDS_MAX) {
+                this._removedIds.delete(this._removedIds.values().next().value);
+            }
         }
 
         _cleanGroupMap(id) {

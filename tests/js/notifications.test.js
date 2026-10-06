@@ -155,6 +155,60 @@ describe("dismissed events", () => {
     });
 });
 
+describe("late delivery after dismissal", () => {
+    const removed = wire({
+        id: "33333333-3333-4333-8333-333333333333",
+        mode: "queued",
+        payload: { title: "Cleared" },
+    });
+
+    function dismiss(id) {
+        FakeEventSource.last.emit(
+            "notification",
+            wire({
+                type: "dismissed",
+                id: `44444444-4444-4444-8444-${id.slice(-12)}`,
+                mode: "timeseries",
+                payload: { notification_id: id },
+            }),
+        );
+    }
+
+    it("ignores a notification whose dismissal arrived first", () => {
+        loadClient();
+        const seen = [];
+        document.addEventListener("sk:notification", (e) => seen.push(e.detail.id));
+
+        dismiss(removed.id);
+        FakeEventSource.last.emit("notification", removed);
+
+        expect(document.querySelector(".sk-notification")).toBeNull();
+        expect(seen).not.toContain(removed.id);
+    });
+
+    it("still shows notifications that were never dismissed", () => {
+        loadClient();
+        dismiss(removed.id);
+        FakeEventSource.last.emit(
+            "notification",
+            wire({ id: "55555555-5555-4555-8555-555555555555", payload: { title: "Fresh" } }),
+        );
+
+        expect(document.querySelector(".sk-notification-title").textContent).toBe("Fresh");
+    });
+
+    it("forgets the oldest dismissed ids past its bound", () => {
+        loadClient();
+        dismiss(removed.id);
+        for (let i = 0; i < 1000; i++) {
+            dismiss(`66666666-6666-4666-8666-${String(i).padStart(12, "0")}`);
+        }
+        FakeEventSource.last.emit("notification", removed);
+
+        expect(document.querySelector(".sk-notification-title").textContent).toBe("Cleared");
+    });
+});
+
 describe("sk:notification detail", () => {
     /** Deliver a notification and capture the object handed to listeners. */
     function capture(notification) {

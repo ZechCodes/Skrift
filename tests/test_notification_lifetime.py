@@ -9,6 +9,7 @@ written before the method existed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import time
 from typing import Any
@@ -18,7 +19,13 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from skrift.config import DatabaseConfig, NotificationsConfig, RedisConfig, Settings
+from skrift.config import (
+    MAX_NOTIFICATION_TTL_SECONDS,
+    DatabaseConfig,
+    NotificationsConfig,
+    RedisConfig,
+    Settings,
+)
 from skrift.lib.notification_backends import (
     CLEANUP_INTERVAL_SECONDS,
     MIN_CLEANUP_INTERVAL_SECONDS,
@@ -31,9 +38,12 @@ from skrift.lib.notification_backends import (
     _DatabaseStorageMixin,
 )
 from skrift.notifications import (
+    RECENTLY_REMOVED_MAXSIZE,
+    RECENTLY_REMOVED_SECONDS,
     Notification,
     NotificationMode,
     NotificationService,
+    _RecentlyRemoved,
     clear_session_notifications,
     clear_source_notifications,
     clear_user_notifications,
@@ -84,10 +94,17 @@ class TestLifetimeSettings:
         assert config.timeseries_ttl_seconds == 90
 
     @pytest.mark.parametrize("field", ["queued_ttl_seconds", "timeseries_ttl_seconds"])
-    @pytest.mark.parametrize("value", [0, -1, math.inf, math.nan, "inf"])
-    def test_rejects_non_positive_or_non_finite(self, field, value):
+    @pytest.mark.parametrize("value", [0, -1, math.inf, math.nan, "inf", 1e12, MAX_NOTIFICATION_TTL_SECONDS + 1])
+    def test_rejects_non_positive_non_finite_or_unrepresentable(self, field, value):
         with pytest.raises(ValidationError):
             NotificationsConfig(**{field: value})
+
+    def test_accepts_the_documented_maximum(self):
+        config = NotificationsConfig(
+            queued_ttl_seconds=MAX_NOTIFICATION_TTL_SECONDS,
+            timeseries_ttl_seconds=MAX_NOTIFICATION_TTL_SECONDS,
+        )
+        assert config.queued_ttl_seconds == 100 * 365 * 86400
 
 
 # ===========================================================================
@@ -112,11 +129,20 @@ class TestBackendsTakeLifetimesFromSettings:
         assert backend._timeseries_ttl_seconds == 3600
 
     @pytest.mark.parametrize(
-        ("ttl", "interval"),
-        [(86400, CLEANUP_INTERVAL_SECONDS), (21600, CLEANUP_INTERVAL_SECONDS), (30, 30), (0.01, MIN_CLEANUP_INTERVAL_SECONDS)],
+        ("queued", "timeseries", "interval"),
+        [
+            (86400, 604800, CLEANUP_INTERVAL_SECONDS),
+            (21600, 604800, CLEANUP_INTERVAL_SECONDS),
+            (30, 604800, 30),
+            (0.01, 604800, MIN_CLEANUP_INTERVAL_SECONDS),
+            (86400, 45, 45),
+            (86400, 0.1, MIN_CLEANUP_INTERVAL_SECONDS),
+        ],
     )
-    def test_sweep_interval_is_capped_by_the_lifetime(self, ttl, interval):
-        backend = InMemoryBackend(settings=_settings(queued_ttl_seconds=ttl))
+    def test_sweep_interval_follows_the_shorter_lifetime(self, queued, timeseries, interval):
+        backend = InMemoryBackend(
+            settings=_settings(queued_ttl_seconds=queued, timeseries_ttl_seconds=timeseries)
+        )
         assert backend._sweep_interval_seconds() == interval
 
     @pytest.mark.asyncio
@@ -131,6 +157,26 @@ class TestBackendsTakeLifetimesFromSettings:
             assert svc._backend._queued_ttl_seconds == 60
         finally:
             await svc.stop_backend()
+
+    @pytest.mark.asyncio
+    async def test_default_backend_honours_explicit_settings(self):
+        svc = NotificationService()
+        with patch("skrift.config.get_settings", return_value=_settings()):
+            assert await svc.ensure_backend_started(settings=_settings(queued_ttl_seconds=1)) is False
+            backend = svc._get_backend()
+        assert backend._queued_ttl_seconds == 1
+
+        await backend.store("session:s1", _aged(NotificationMode.QUEUED, 2))
+        assert await svc.get_queued("s1", None) == []
+
+    @pytest.mark.asyncio
+    async def test_explicit_settings_reach_an_existing_lazy_backend(self):
+        svc = NotificationService()
+        with patch("skrift.config.get_settings", return_value=_settings()):
+            backend = svc._get_backend()
+            await svc.ensure_backend_started(settings=_settings(queued_ttl_seconds=1))
+        assert svc._get_backend() is backend
+        assert backend._queued_ttl_seconds == 1
 
     def test_lazy_fallback_reads_app_settings(self):
         with patch("skrift.config.get_settings", return_value=_settings(queued_ttl_seconds=60)):
@@ -282,6 +328,21 @@ class TestDatabaseLifetime:
         assert ids == {fresh.id, ts_kept.id}
 
     @pytest.mark.asyncio
+    async def test_maximum_lifetime_reads_and_sweeps(self, sqlite_session_maker):
+        backend = _SqliteStorageBackend(
+            settings=_settings(
+                queued_ttl_seconds=MAX_NOTIFICATION_TTL_SECONDS,
+                timeseries_ttl_seconds=MAX_NOTIFICATION_TTL_SECONDS,
+            ),
+            session_maker=sqlite_session_maker,
+        )
+        n = _aged(NotificationMode.QUEUED, 86400 * 365)
+        await backend.store("session:s1", n)
+        await backend._delete_old_notifications()
+        assert [x.id for x in await backend.get_queued_multi(["session:s1"])] == [n.id]
+        assert await backend.get_since_multi(["session:s1"], 0) == []
+
+    @pytest.mark.asyncio
     async def test_clear_queued_by_source_and_group(self, db_backend):
         a1 = Notification(type="t", group="answer-1")
         a2 = Notification(type="t", group="answer-2")
@@ -300,6 +361,99 @@ class TestDatabaseLifetime:
         assert [n.id for n in await db_backend.get_since_multi(["user:alice"], 0)] == [ts.id]
         assert [n.id for n in await db_backend.get_queued_multi(["user:bob"])] == [other.id]
         assert await db_backend.clear_queued("user:alice") == []
+
+
+class HeldSessions:
+    """Session maker whose sessions pause after their first statement.
+
+    Each session waits until *parties* sessions have run a statement, or
+    *timeout* passes, before going on. Under select-then-delete code every
+    party has SELECTed before anyone deletes; a single atomic statement holds
+    its row lock instead, so the timeout lets it commit first.
+    """
+
+    def __init__(self, inner: Any, parties: int, timeout: float = 0.5) -> None:
+        self._inner = inner
+        self._parties = parties
+        self._timeout = timeout
+        self._ran = 0
+        self._all_ran = asyncio.Event()
+
+    @contextlib.asynccontextmanager
+    async def __call__(self):
+        async with self._inner() as session:
+            yield _HeldSession(session, self)
+
+    async def _after_first_statement(self) -> None:
+        self._ran += 1
+        if self._ran >= self._parties:
+            self._all_ran.set()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._all_ran.wait(), self._timeout)
+
+
+class _HeldSession:
+    def __init__(self, session: Any, maker: HeldSessions) -> None:
+        self._session = session
+        self._maker = maker
+        self._first = True
+
+    async def execute(self, *args: Any, **kwargs: Any) -> Any:
+        result = await self._session.execute(*args, **kwargs)
+        if self._first:
+            self._first = False
+            await self._maker._after_first_statement()
+        return result
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
+
+
+@pytest.fixture
+async def sqlite_file_session_maker(tmp_path):
+    from skrift.db.base import Base
+    from skrift.db.models.notification import StoredNotification
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'notifications.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all, tables=[StoredNotification.__table__])
+    yield async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    await engine.dispose()
+
+
+async def assert_concurrent_removals_count_once(backend: Any, inner_session_maker: Any) -> None:
+    """Shared by the SQLite test here and the Postgres integration test."""
+    n = Notification(type="t", group="g")
+    await backend.store("user:alice", n)
+    backend._session_maker = HeldSessions(inner_session_maker, parties=2)
+    first, second = await asyncio.gather(
+        backend.clear_queued("user:alice"), backend.clear_queued("user:alice")
+    )
+    assert sorted(map(len, (first, second))) == [0, 1]
+
+    backend._session_maker = inner_session_maker
+    n2 = Notification(type="t", group="g")
+    await backend.store("user:alice", n2)
+    backend._session_maker = HeldSessions(inner_session_maker, parties=2)
+    results = await asyncio.gather(
+        backend.remove_by_group("user:alice", "g"), backend.remove_by_group("user:alice", "g")
+    )
+    assert sorted(results, key=lambda r: r is not None) == [None, n2.id]
+
+    backend._session_maker = inner_session_maker
+    n3 = Notification(type="t")
+    await backend.store("user:alice", n3)
+    backend._session_maker = HeldSessions(inner_session_maker, parties=2)
+    results = await asyncio.gather(backend.remove(n3.id), backend.remove(n3.id))
+    assert sorted(results, key=lambda r: r is not None) == [None, "user:alice"]
+    backend._session_maker = inner_session_maker
+
+
+class TestDatabaseRemovalsAreAtomic:
+    @pytest.mark.asyncio
+    async def test_concurrent_removals_count_each_row_once(self, sqlite_file_session_maker):
+        backend = _SqliteStorageBackend(settings=None, session_maker=sqlite_file_session_maker)
+        await assert_concurrent_removals_count_once(backend, sqlite_file_session_maker)
 
 
 # ===========================================================================
@@ -448,6 +602,143 @@ class TestClearQueued:
         await svc.send_to_user("alice", Notification(type="t"))
         await svc.clear_queued("user:alice")
         assert await backend.get_since_multi(["user:alice"], 0) == []
+
+
+class _ModeBlindLegacyBackend(_LegacyBackend):
+    """A custom backend whose get_queued_multi also returns timeseries entries."""
+
+    async def get_queued_multi(self, source_keys):
+        return [n for key in source_keys for n in self._inner._queues.get(key, {}).values()]
+
+
+class TestLegacyFallbackIsQueuedOnly:
+    @pytest.mark.asyncio
+    async def test_fallback_skips_non_queued_items(self):
+        backend = _ModeBlindLegacyBackend()
+        svc = NotificationService()
+        svc.set_backend(backend)
+        queued = Notification(type="t")
+        ts = Notification(type="t", mode=NotificationMode.TIMESERIES)
+        await svc.send_to_user("alice", queued)
+        await svc.send_to_user("alice", ts)
+
+        assert await svc.clear_queued("user:alice") == 1
+        assert [n.id for n in await backend.get_since_multi(["user:alice"], 0)] == [ts.id]
+
+
+def _wire_send(source_key: str, n: Notification, pid: str = "other-replica") -> dict:
+    return {"a": "s", "sk": source_key, "pid": pid, "n": n.to_dict()}
+
+
+class TestLateDeliveryAfterRemoval:
+    @pytest.mark.asyncio
+    async def test_remote_send_after_local_clear_is_dropped(self):
+        backend = InMemoryBackend()
+        svc = NotificationService()
+        svc.set_backend(backend)
+        n = Notification(type="t", payload={"title": "secret"})
+        # Replica A stored it; its fanout has not reached this replica yet.
+        await backend.store("user:alice", n)
+        q = await svc.register_connection("s1", "alice")
+
+        assert await svc.clear_queued("user:alice") == 1
+        await svc._handle_remote(_wire_send("user:alice", n))
+
+        assert [e.type for e in await _drain(q)] == ["dismissed"]
+
+    @pytest.mark.asyncio
+    async def test_remote_send_after_remote_clear_is_dropped(self):
+        clearer = NotificationService()
+        clearer.set_backend(_RecordingBackend())
+        n = Notification(type="t")
+        await clearer._backend.store("user:alice", n)
+        await clearer.clear_queued("user:alice")
+        [dismissal] = clearer._backend.published
+
+        other = NotificationService()
+        q = await other.register_connection("s9", "alice")
+        await other._handle_remote(dismissal)
+        await other._handle_remote(_wire_send("user:alice", n))
+
+        events = await _drain(q)
+        assert [e.type for e in events] == ["dismissed"]
+        assert events[0].payload["notification_id"] == str(n.id)
+
+    @pytest.mark.asyncio
+    async def test_send_cleared_while_in_flight_is_not_pushed_or_published(self):
+        svc = NotificationService()
+
+        class ClearsDuringStore(_RecordingBackend):
+            async def store(self, source_key, notification):
+                old = await super().store(source_key, notification)
+                if notification.type == "racy":
+                    await svc.clear_queued(source_key)
+                return old
+
+        backend = ClearsDuringStore()
+        svc.set_backend(backend)
+        q = await svc.register_connection("s1", "alice")
+
+        await svc.send_to_user("alice", Notification(type="racy"))
+
+        assert [e.type for e in await _drain(q)] == ["dismissed"]
+        assert [m["n"]["type"] for m in backend.published] == ["dismissed"]
+
+    @pytest.mark.asyncio
+    async def test_remote_send_of_a_group_replaced_notification_is_dropped(self):
+        svc = NotificationService()
+        svc.set_backend(InMemoryBackend())
+        old = Notification(type="t", group="progress")
+        await svc._backend.store("user:alice", old)
+        await svc.send_to_user("alice", Notification(type="t", group="progress"))
+        q = await svc.register_connection("s1", "alice")
+
+        await svc._handle_remote(_wire_send("user:alice", old))
+
+        assert await _drain(q) == []
+
+    @pytest.mark.asyncio
+    async def test_unrelated_remote_sends_still_arrive(self):
+        svc = NotificationService()
+        svc.set_backend(InMemoryBackend())
+        await svc._backend.store("user:alice", Notification(type="t"))
+        await svc.clear_queued("user:alice")
+        q = await svc.register_connection("s1", "alice")
+        fresh = Notification(type="t")
+
+        await svc._handle_remote(_wire_send("user:alice", fresh))
+
+        assert [e.id for e in await _drain(q)] == [fresh.id]
+
+    def test_memory_is_bounded_in_size(self):
+        from uuid import uuid4
+
+        removed = _RecentlyRemoved(maxsize=3)
+        ids = [uuid4() for _ in range(4)]
+        for nid in ids:
+            removed.add(nid)
+        assert len(removed) == 3
+        assert ids[0] not in removed
+        assert all(nid in removed for nid in ids[1:])
+
+    def test_memory_is_bounded_in_time(self, monkeypatch):
+        from uuid import uuid4
+
+        now = [1000.0]
+        monkeypatch.setattr("skrift.notifications.time.monotonic", lambda: now[0])
+        removed = _RecentlyRemoved(seconds=10)
+        early, late = uuid4(), uuid4()
+        removed.add(early)
+        now[0] += 5
+        removed.add(late)
+        now[0] += 6
+        assert early not in removed and late in removed
+        removed.add(uuid4())
+        assert len(removed) == 2  # the expired id was pruned
+
+    def test_defaults(self):
+        assert RECENTLY_REMOVED_MAXSIZE == 10_000
+        assert RECENTLY_REMOVED_SECONDS == 600
 
 
 class TestClearHelpers:

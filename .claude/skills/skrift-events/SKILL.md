@@ -223,7 +223,7 @@ notifications:
   backend: "skrift.lib.notification_backends:PgNotifyBackend"
 ```
 
-Lifetimes: `notifications.queued_ttl_seconds` (default 86400) and `notifications.timeseries_ttl_seconds` (default 604800), positive and finite. Built-in backends never return a notification older than its lifetime and sweep it from storage within one interval of `min(600, max(1, queued_ttl_seconds))` seconds while running.
+Lifetimes: `notifications.queued_ttl_seconds` (default 86400) and `notifications.timeseries_ttl_seconds` (default 604800), positive, finite, at most 100 years. Built-in backends never replay a notification older than its lifetime (live pushes are not age-filtered). While running with successful sweeps, they delete it by age lifetime + `min(600, max(1, shorter lifetime))` s + sweep time.
 
 Clear queued notifications on demand (every subscriber, every replica, timeseries untouched; returns the count): `await clear_user_notifications(user_id, group=None)`, `clear_session_notifications(nid, group=None)`, `clear_source_notifications(source_key, group=None)`.
 

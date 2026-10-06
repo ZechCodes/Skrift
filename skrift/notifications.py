@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 # A stalled client drops its oldest pending notifications instead of growing
 # memory; stored notifications are re-flushed when the client reconnects.
 SSE_QUEUE_MAXSIZE = 100
+
+# Bounds on the ids a process remembers as removed for everyone (cleared or
+# replaced by group), so a send fanout that arrives after the removal is dropped
+# instead of showing the content again.
+RECENTLY_REMOVED_MAXSIZE = 10_000
+RECENTLY_REMOVED_SECONDS = 600.0
 
 
 class NotificationMode(str, Enum):
@@ -121,6 +127,44 @@ def _put_dropping_oldest(queue: asyncio.Queue, notification: Notification) -> No
             dropped.type,
         )
     queue.put_nowait(notification)
+
+
+class _RecentlyRemoved:
+    """Notification ids removed for everyone, remembered for a bounded time.
+
+    Holds at most *maxsize* ids, each for *seconds*; the oldest go first.
+    """
+
+    def __init__(
+        self,
+        maxsize: int = RECENTLY_REMOVED_MAXSIZE,
+        seconds: float = RECENTLY_REMOVED_SECONDS,
+    ) -> None:
+        self._maxsize = maxsize
+        self._seconds = seconds
+        self._expires: OrderedDict[UUID, float] = OrderedDict()
+
+    def add(self, notification_id: UUID) -> None:
+        now = time.monotonic()
+        self._prune(now)
+        self._expires[notification_id] = now + self._seconds
+        self._expires.move_to_end(notification_id)
+        while len(self._expires) > self._maxsize:
+            self._expires.popitem(last=False)
+
+    def __contains__(self, notification_id: object) -> bool:
+        expires = self._expires.get(notification_id)  # type: ignore[arg-type]
+        return expires is not None and expires > time.monotonic()
+
+    def __len__(self) -> int:
+        return len(self._expires)
+
+    def _prune(self, now: float) -> None:
+        while self._expires:
+            oldest = next(iter(self._expires.values()))
+            if oldest > now:
+                break
+            self._expires.popitem(last=False)
 
 
 class SourceRegistry:
@@ -237,6 +281,8 @@ class NotificationService:
         self._publisher_id: str = str(uuid4())
         self._loaded_user_subs: set[str] = set()
         self._session_users: dict[str, str] = {}  # session_key -> user_key
+        self._recently_removed = _RecentlyRemoved()
+        self._settings = None  # given to ensure_backend_started; used by the lazy fallback
 
     def set_backend(self, backend: NotificationBackend) -> None:
         self._backend = backend
@@ -292,6 +338,7 @@ class NotificationService:
 
                 settings = get_settings()
             if not settings.notifications.backend:
+                self._use_default_backend_settings(settings)
                 return False
             from skrift.lib.notification_backends import load_backend
 
@@ -300,10 +347,19 @@ class NotificationService:
             await self.start_backend(backend)
             return True
 
+    def _use_default_backend_settings(self, settings) -> None:
+        """Make the in-process fallback honour *settings* (its lifetimes)."""
+        from skrift.lib.notification_backends import InMemoryBackend
+
+        self._settings = settings
+        if isinstance(self._backend, InMemoryBackend) and not self._backend_started:
+            self._backend._configure_lifetimes(settings)
+
     def _get_backend(self) -> NotificationBackend:
         if self._backend is None:
             from skrift.lib.notification_backends import InMemoryBackend
-            self._backend = InMemoryBackend(settings=_settings_or_none())
+            settings = self._settings if self._settings is not None else _settings_or_none()
+            self._backend = InMemoryBackend(settings=settings)
             self._backend.on_remote_message(self._handle_remote)
         return self._backend
 
@@ -320,16 +376,19 @@ class NotificationService:
         if notification.mode != NotificationMode.EPHEMERAL:
             old_id = await backend.store(source_key, notification)
             if old_id is not None:
+                self._recently_removed.add(old_id)
                 dismissed = Notification.dismissed(old_id)
                 await backend.store(source_key, dismissed)
                 self._registry.push(source_key, dismissed)
 
-        self._registry.push(source_key, notification)
+        # Cleared (or replaced) while this send was in flight: do not show it.
+        if notification.id not in self._recently_removed:
+            self._registry.push(source_key, notification)
 
-        await backend.publish({
-            "a": "s", "sk": source_key, "pid": self._publisher_id,
-            "n": notification.to_dict(),
-        })
+            await backend.publish({
+                "a": "s", "sk": source_key, "pid": self._publisher_id,
+                "n": notification.to_dict(),
+            })
 
         await hooks.do_action(NOTIFICATION_SENT, notification, scope, scope_id)
 
@@ -439,8 +498,10 @@ class NotificationService:
         subscriber, like group replacement and unlike :meth:`dismiss`.
         Connected clients on every replica get a ``dismissed`` event per
         removed notification; the event is not stored, because a reconnecting
-        client drops anything missing from the queued replay. Returns the
-        number of notifications removed.
+        client drops anything missing from the queued replay. Each replica
+        that removes or hears of the removal drops a send fanout of the same
+        notification that arrives later (see ``RECENTLY_REMOVED_SECONDS``).
+        Returns the number of notifications removed.
         """
         backend = self._get_backend()
         clear = getattr(backend, "clear_queued", None)
@@ -451,12 +512,15 @@ class NotificationService:
             # per-item calls do the same job, one notification at a time.
             removed = []
             for n in await backend.get_queued_multi([source_key]):
+                if n.mode != NotificationMode.QUEUED:
+                    continue
                 if group is not None and n.group != group:
                     continue
                 if await backend.remove(n.id) is not None:
                     removed.append(n.id)
 
         for removed_id in removed:
+            self._recently_removed.add(removed_id)
             dismissed = Notification.dismissed(removed_id)
             self._registry.push(source_key, dismissed)
             await backend.publish({
@@ -579,6 +643,16 @@ class NotificationService:
 
         if action == "s":
             notification = _notification_from_wire(message.get("n", {}))
+            if notification.id in self._recently_removed:
+                # The send fanout arrived after another replica removed it.
+                return
+            if notification.type == "dismissed":
+                removed_id = notification.payload.get("notification_id")
+                if removed_id:
+                    try:
+                        self._recently_removed.add(UUID(removed_id))
+                    except ValueError:
+                        pass
             self._registry.push(source_key, notification)
 
         elif action == "d":

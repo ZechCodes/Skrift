@@ -81,10 +81,10 @@ notifications:
   timeseries_ttl_seconds: 604800  # 7 days (the default)
 ```
 
-Both must be positive and finite; values under an hour are fine. Every built-in backend (InMemory, Redis, PgNotify) honours them:
+Both must be positive, finite and at most 3,153,600,000 seconds (100 years); values under a second are fine. Every built-in backend (InMemory, Redis, PgNotify) honours them:
 
-- **Reads are bounded.** A notification older than its lifetime is never returned: not in the queued replay on reconnect, and not in the timeseries `?since=` replay. This holds whenever the cleanup sweep last ran.
-- **Storage is swept.** Each running backend sweeps expired notifications every `min(600, max(1, queued_ttl_seconds))` seconds. While at least one process runs the backend, an expired notification stays in storage for at most its lifetime plus one sweep interval (plus the time a sweep takes). That is under twice the lifetime for lifetimes under 10 minutes, and lifetime + 10 minutes otherwise. For DB-backed backends, rows written while no process is running stay in the table until a process starts and its first sweep runs. The InMemory backend loses everything on restart anyway.
+- **Replay is bounded.** A notification older than its lifetime is never returned by the queued replay on connect/reconnect or by the timeseries `?since=` replay, whenever the cleanup sweep last ran. The lifetime only filters replay: a notification is pushed live to connected clients (and to Web Push) as it is sent, without an age check.
+- **Storage is swept.** Each running backend sweeps every `interval = min(600, max(1, min(queued_ttl_seconds, timeseries_ttl_seconds)))` seconds. While a backend is running and its sweeps succeed, a notification is deleted at an age of at most its mode's lifetime + `interval` + the time the sweep and event-loop scheduling take. A failed sweep is logged and retried at the next interval, so each failure postpones deletion by one more interval. Rows of DB-backed backends are not swept while no process runs the backend; the first sweep runs one interval after a backend starts. The InMemory backend loses everything on restart anyway.
 
 The `QUEUED_TTL_HOURS` and `TIMESERIES_TTL_DAYS` constants in `skrift.lib.notification_backends` remain importable as the defaults.
 
@@ -113,6 +113,7 @@ Each returns how many notifications were removed. All three call `notifications.
 - Only **queued** notifications stored on that exact source key are removed. Timeseries notifications are left alone, and so are other source keys: `clear_user_notifications` does not touch a notification sent to one of the user's sessions.
 - Removal applies to **every subscriber**, like group replacement, and unlike `dismiss`, which hides a notification from one subscriber only. `NOTIFICATION_DISMISSED` is not fired.
 - Connected clients on every replica receive a `dismissed` event for each removed notification. Redis and PgNotify carry it through the normal send fanout. The event is not stored, because a client that reconnects later drops any notification missing from the queued replay.
+- A send's fanout can reach a replica after the notification was cleared there (the sending replica's publish was slow). Every process remembers ids removed for everyone (cleared, or replaced by a newer notification in the same group) for 10 minutes, up to 10,000 ids, both those it removed and those it heard about through a `dismissed` event, and drops a later delivery of one. The browser client likewise ignores a notification whose `dismissed` event it already received (last 1,000 ids). Not covered: a replica that never received the removal event, and a delivery delayed past that memory. A reconnect still corrects these, since the replay comes from storage.
 - Custom backends may implement `clear_queued(source_key, group=None) -> list[UUID]`. Backends without it still work: the service lists the source's queued notifications with `get_queued_multi` and removes each one with `remove`.
 
 ## Group Keys
@@ -384,8 +385,8 @@ if (saved) window.__skriftNotifications.lastSeen = parseFloat(saved);
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `notifications.backend` | `str` | `""` | Backend class path (`module:ClassName`). Empty = InMemory |
-| `notifications.queued_ttl_seconds` | `float` | `86400` | Lifetime of queued notifications (> 0, finite) |
-| `notifications.timeseries_ttl_seconds` | `float` | `604800` | Lifetime of timeseries notifications (> 0, finite) |
+| `notifications.queued_ttl_seconds` | `float` | `86400` | Lifetime of queued notifications (> 0, finite, ≤ 3153600000) |
+| `notifications.timeseries_ttl_seconds` | `float` | `604800` | Lifetime of timeseries notifications (> 0, finite, ≤ 3153600000) |
 | `redis.url` | `str` | `""` | Redis connection URL (RedisBackend only) |
 | `redis.prefix` | `str` | `""` | Key prefix for Redis keys |
 

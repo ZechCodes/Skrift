@@ -793,6 +793,9 @@ class RepublishConfig(BaseModel):
     default_delete_behavior: Literal["unpublish", "delete", "ignore"] = "unpublish"
 
 
+MAX_NOTIFICATION_TTL_SECONDS = 100 * 365 * 24 * 60 * 60  # 100 years
+
+
 class NotificationsConfig(BaseModel):
     """Notification backend configuration."""
 
@@ -800,8 +803,13 @@ class NotificationsConfig(BaseModel):
     webhook_secret: str = ""  # empty = webhook disabled
     # How long stored notifications stay replayable. Built-in backends never
     # return an older notification and their sweep deletes it shortly after.
-    queued_ttl_seconds: float = Field(default=24 * 60 * 60, gt=0, allow_inf_nan=False)
-    timeseries_ttl_seconds: float = Field(default=7 * 24 * 60 * 60, gt=0, allow_inf_nan=False)
+    # Capped so the cutoff (now - lifetime) stays a representable datetime.
+    queued_ttl_seconds: float = Field(
+        default=24 * 60 * 60, gt=0, le=MAX_NOTIFICATION_TTL_SECONDS, allow_inf_nan=False
+    )
+    timeseries_ttl_seconds: float = Field(
+        default=7 * 24 * 60 * 60, gt=0, le=MAX_NOTIFICATION_TTL_SECONDS, allow_inf_nan=False
+    )
 
 
 class WebhookBackoffConfig(BaseModel):
