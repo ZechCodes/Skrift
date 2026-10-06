@@ -31,6 +31,16 @@
 
     const _warnedKeys = new Set();
 
+    // created_at in whole microseconds, rounded half to even as the server
+    // rounds it when storing (skrift.notifications._created_at_microseconds).
+    function _microseconds(createdAt) {
+        const whole = Math.trunc(createdAt);
+        const scaled = (createdAt - whole) * 1e6;
+        let rounded = Math.round(scaled);
+        if (Math.abs(scaled % 1) === 0.5 && rounded % 2 !== 0) rounded -= 1;
+        return whole * 1e6 + rounded;
+    }
+
     function _warnOnce(key, message) {
         if (_warnedKeys.has(key)) return;
         _warnedKeys.add(key);
@@ -96,7 +106,7 @@
     class SkriftNotifications {
         constructor() {
             this._es = null;
-            this._displayedIds = new Set();
+            this._displayedIds = new Map();  // id -> created_at
             this._pendingSyncIds = new Set();
             this._groupMap = new Map();
             this._synced = false;
@@ -338,9 +348,16 @@
 
         _handleNotification(data) {
             if (data.type === "dismissed") {
-                this._removeDismissed(
-                    (data.payload && data.payload.notification_id) || data.id
-                );
+                const id = (data.payload && data.payload.notification_id) || data.id;
+                // A clear names the generation it deleted; a displayed
+                // notification newer than that is a later resend, not it.
+                const cutoff = data.payload && data.payload.cleared_created_at;
+                const shown = this._displayedIds.get(id);
+                if (typeof cutoff === "number" && typeof shown === "number"
+                        && _microseconds(shown) > _microseconds(cutoff)) {
+                    return;
+                }
+                this._removeDismissed(id);
                 return;
             }
             if (data.type === "disconnecting") {
@@ -382,7 +399,7 @@
                 this._enqueueGeneric(data);
             }
 
-            this._displayedIds.add(data.id);
+            this._displayedIds.set(data.id, data.created_at);
         }
 
         _handleDisconnecting() {
@@ -396,7 +413,7 @@
             this._setStatus("connected");
             // Any locally displayed ID NOT in _pendingSyncIds was dismissed elsewhere
             const toRemove = [];
-            for (const id of this._displayedIds) {
+            for (const id of this._displayedIds.keys()) {
                 if (!this._pendingSyncIds.has(id)) {
                     toRemove.push(id);
                 }

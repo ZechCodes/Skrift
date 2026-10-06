@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -36,6 +37,11 @@ logger = logging.getLogger(__name__)
 # A stalled client drops its oldest pending notifications instead of growing
 # memory; stored notifications are re-flushed when the client reconnects.
 SSE_QUEUE_MAXSIZE = 100
+
+# Bounds on the clear tombstones a process keeps, so a send fanout that arrives
+# after its notification was cleared is dropped instead of showing it again.
+CLEARED_TOMBSTONE_MAXSIZE = 10_000
+CLEARED_TOMBSTONE_SECONDS = 600.0
 
 
 class NotificationMode(str, Enum):
@@ -121,6 +127,69 @@ def _put_dropping_oldest(queue: asyncio.Queue, notification: Notification) -> No
             dropped.type,
         )
     queue.put_nowait(notification)
+
+
+def _created_at_microseconds(created_at: float) -> int:
+    """*created_at* in whole microseconds, rounded the way storage rounds it.
+
+    Database backends keep ``created_at`` as a microsecond datetime built with
+    :meth:`datetime.fromtimestamp`, which rounds the fractional part half to
+    even. Comparing generations of a notification at this precision treats a
+    stored copy as the same generation as the value it was stored from, and
+    anything a microsecond or more newer as newer. ``notifications.js`` applies
+    the same rule.
+    """
+    fraction, whole = math.modf(created_at)
+    return int(whole) * 1_000_000 + round(fraction * 1_000_000)
+
+
+class _ClearedTombstones:
+    """Notifications removed by an explicit clear, remembered for a bounded time.
+
+    Each entry is ``id -> created_at`` of the cleared notification, in whole
+    microseconds (:func:`_created_at_microseconds`). A queued delivery of that
+    id is stale only if it is not newer than that timestamp, so an updated
+    notification reusing the id (newer ``created_at``) still gets through. Holds at most *maxsize* entries, each for *seconds*.
+    """
+
+    def __init__(
+        self,
+        maxsize: int = CLEARED_TOMBSTONE_MAXSIZE,
+        seconds: float = CLEARED_TOMBSTONE_SECONDS,
+    ) -> None:
+        self._maxsize = maxsize
+        self._seconds = seconds
+        self._entries: OrderedDict[UUID, tuple[float, int]] = OrderedDict()  # id -> (expires, cutoff)
+
+    def add(self, notification_id: UUID, created_at: float) -> None:
+        cutoff = _created_at_microseconds(created_at)
+        now = time.monotonic()
+        self._prune(now)
+        previous = self._entries.pop(notification_id, None)
+        if previous is not None:
+            cutoff = max(cutoff, previous[1])
+        self._entries[notification_id] = (now + self._seconds, cutoff)
+        while len(self._entries) > self._maxsize:
+            self._entries.popitem(last=False)
+
+    def suppresses(self, notification: Notification) -> bool:
+        """True for a queued delivery of a cleared notification that is not newer."""
+        if notification.mode != NotificationMode.QUEUED:
+            return False
+        entry = self._entries.get(notification.id)
+        if entry is None or entry[0] <= time.monotonic():
+            return False
+        return _created_at_microseconds(notification.created_at) <= entry[1]
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def _prune(self, now: float) -> None:
+        while self._entries:
+            expires, _ = next(iter(self._entries.values()))
+            if expires > now:
+                break
+            self._entries.popitem(last=False)
 
 
 class SourceRegistry:
@@ -237,6 +306,8 @@ class NotificationService:
         self._publisher_id: str = str(uuid4())
         self._loaded_user_subs: set[str] = set()
         self._session_users: dict[str, str] = {}  # session_key -> user_key
+        self._cleared = _ClearedTombstones()
+        self._settings = None  # given to ensure_backend_started; used by the lazy fallback
 
     def set_backend(self, backend: NotificationBackend) -> None:
         self._backend = backend
@@ -292,6 +363,7 @@ class NotificationService:
 
                 settings = get_settings()
             if not settings.notifications.backend:
+                self._use_default_backend_settings(settings)
                 return False
             from skrift.lib.notification_backends import load_backend
 
@@ -300,10 +372,19 @@ class NotificationService:
             await self.start_backend(backend)
             return True
 
+    def _use_default_backend_settings(self, settings) -> None:
+        """Make the in-process fallback honour *settings* (its lifetimes)."""
+        from skrift.lib.notification_backends import InMemoryBackend
+
+        self._settings = settings
+        if isinstance(self._backend, InMemoryBackend) and not self._backend_started:
+            self._backend._configure_lifetimes(settings)
+
     def _get_backend(self) -> NotificationBackend:
         if self._backend is None:
             from skrift.lib.notification_backends import InMemoryBackend
-            self._backend = InMemoryBackend()
+            settings = self._settings if self._settings is not None else _settings_or_none()
+            self._backend = InMemoryBackend(settings=settings)
             self._backend.on_remote_message(self._handle_remote)
         return self._backend
 
@@ -324,12 +405,14 @@ class NotificationService:
                 await backend.store(source_key, dismissed)
                 self._registry.push(source_key, dismissed)
 
-        self._registry.push(source_key, notification)
+        # Cleared while this send was in flight: do not show it.
+        if not self._cleared.suppresses(notification):
+            self._registry.push(source_key, notification)
 
-        await backend.publish({
-            "a": "s", "sk": source_key, "pid": self._publisher_id,
-            "n": notification.to_dict(),
-        })
+            await backend.publish({
+                "a": "s", "sk": source_key, "pid": self._publisher_id,
+                "n": notification.to_dict(),
+            })
 
         await hooks.do_action(NOTIFICATION_SENT, notification, scope, scope_id)
 
@@ -430,6 +513,49 @@ class NotificationService:
             await hooks.do_action(NOTIFICATION_DISMISSED, dismissed_id)
 
         return dismissed_id is not None
+
+    async def clear_queued(self, source_key: str, *, group: str | None = None) -> int:
+        """Delete every queued notification stored for *source_key*.
+
+        With *group*, only that group's notification is deleted. Timeseries
+        notifications are left alone. The deletion applies to every
+        subscriber, like group replacement and unlike :meth:`dismiss`.
+        Connected clients on every replica get a ``dismissed`` event per
+        removed notification; the event is not stored, because a reconnecting
+        client drops anything missing from the queued replay. Each replica
+        that removes or hears of the removal drops a send fanout of the same
+        notification that arrives later and is not newer than the cleared one
+        (see ``CLEARED_TOMBSTONE_SECONDS``).
+        Returns the number of notifications removed.
+        """
+        backend = self._get_backend()
+        clear = getattr(backend, "clear_queued", None)
+        if clear is not None:
+            removed = list(await clear(source_key, group))
+        else:
+            # Custom backends that predate clear_queued: the protocol's
+            # per-item calls do the same job, one notification at a time.
+            removed = []
+            for n in await backend.get_queued_multi([source_key]):
+                if n.mode != NotificationMode.QUEUED:
+                    continue
+                if group is not None and n.group != group:
+                    continue
+                if await backend.remove(n.id) is not None:
+                    removed.append(n)
+
+        for n in removed:
+            self._cleared.add(n.id, n.created_at)
+            dismissed = Notification.dismissed(n.id)
+            # Lets other replicas tombstone this generation of the id; replicas
+            # and browsers that predate it ignore the extra payload key.
+            dismissed.payload["cleared_created_at"] = n.created_at
+            self._registry.push(source_key, dismissed)
+            await backend.publish({
+                "a": "s", "sk": source_key, "pid": self._publisher_id,
+                "n": dismissed.to_dict(),
+            })
+        return len(removed)
 
     async def get_queued(
         self, nid: str, user_id: str | None
@@ -534,6 +660,20 @@ class NotificationService:
         await self._get_backend().remove_subscription(subscriber_key, source_key)
         self._registry.unsubscribe(subscriber_key, source_key)
 
+    def _remember_remote_clear(self, payload: dict) -> None:
+        """Tombstone a notification another replica cleared.
+
+        Only clear events carry ``cleared_created_at``; group replacement and
+        dismissal events do not, and leave no tombstone.
+        """
+        cutoff = payload.get("cleared_created_at")
+        if not isinstance(cutoff, (int, float)) or isinstance(cutoff, bool):
+            return
+        try:
+            self._cleared.add(UUID(payload["notification_id"]), float(cutoff))
+        except (KeyError, TypeError, ValueError):
+            pass
+
     async def _handle_remote(self, message: dict) -> None:
         """Process a message received from another replica via pub/sub."""
         # Self-echo prevention
@@ -545,6 +685,11 @@ class NotificationService:
 
         if action == "s":
             notification = _notification_from_wire(message.get("n", {}))
+            if self._cleared.suppresses(notification):
+                # The send fanout arrived after the notification was cleared.
+                return
+            if notification.type == "dismissed":
+                self._remember_remote_clear(notification.payload)
             self._registry.push(source_key, notification)
 
         elif action == "d":
@@ -586,6 +731,21 @@ def _notification_from_wire(
     if "created_at" in n_data:
         notification.created_at = n_data["created_at"]
     return notification
+
+
+def _settings_or_none():
+    """App settings for the lazy in-process backend, or None when they cannot load.
+
+    The fallback backend has always worked without configuration; a missing
+    secret key or unreadable app.yaml leaves it on the default lifetimes.
+    """
+    from skrift.config import get_settings
+
+    try:
+        return get_settings()
+    except (Exception, SystemExit):
+        logger.debug("Settings unavailable; in-process notification backend uses defaults", exc_info=True)
+        return None
 
 
 # Global singleton
@@ -668,6 +828,25 @@ async def dismiss_user_group(user_id: str, group: str) -> bool:
             anchor_nid = child.removeprefix("session:")
             break
     return await notifications.dismiss(anchor_nid, user_id, group=group)
+
+
+async def clear_session_notifications(nid: str, *, group: str | None = None) -> int:
+    """Delete the session's queued notifications (only *group*'s if given); returns the count."""
+    return await notifications.clear_queued(f"session:{nid}", group=group)
+
+
+async def clear_user_notifications(user_id: str, *, group: str | None = None) -> int:
+    """Delete the user's queued notifications (only *group*'s if given); returns the count.
+
+    Only the ``user:{id}`` queue: notifications sent to one of the user's
+    sessions are cleared with :func:`clear_session_notifications`.
+    """
+    return await notifications.clear_queued(f"user:{user_id}", group=group)
+
+
+async def clear_source_notifications(source_key: str, *, group: str | None = None) -> int:
+    """Delete the queued notifications stored for any source key; returns the count."""
+    return await notifications.clear_queued(source_key, group=group)
 
 
 def ensure_nid(request) -> str:

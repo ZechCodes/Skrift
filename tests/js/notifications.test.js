@@ -155,6 +155,99 @@ describe("dismissed events", () => {
     });
 });
 
+describe("same id after a dismissal", () => {
+    const id = "33333333-3333-4333-8333-333333333333";
+
+    function dismiss() {
+        FakeEventSource.last.emit(
+            "notification",
+            wire({
+                type: "dismissed",
+                id: "44444444-4444-4444-8444-444444444444",
+                mode: "timeseries",
+                payload: { notification_id: id, cleared_created_at: 1 },
+            }),
+        );
+    }
+
+    // An updated notification may reuse its id (same group, newer created_at),
+    // and an app may resend an id after clearing it; both must be shown.
+    it("shows a newer notification that reuses a dismissed id", () => {
+        deliver(wire({ id, mode: "queued", group: "g", created_at: 1, payload: { title: "Old" } }));
+        dismiss();
+        // jsdom runs no animations; finish the exit the browser would.
+        document.querySelector(".sk-notification").dispatchEvent(new Event("animationend"));
+        FakeEventSource.last.emit(
+            "notification",
+            wire({ id, mode: "queued", group: "g", created_at: 2, payload: { title: "New" } }),
+        );
+
+        const titles = [...document.querySelectorAll(".sk-notification-title")].map((el) => el.textContent);
+        expect(titles).toContain("New");
+    });
+
+    it("shows a resend of an id that was dismissed before it was ever shown", () => {
+        loadClient();
+        dismiss();
+        FakeEventSource.last.emit(
+            "notification",
+            wire({ id, mode: "queued", created_at: 2, payload: { title: "Again" } }),
+        );
+
+        expect(document.querySelector(".sk-notification-title").textContent).toBe("Again");
+    });
+});
+
+describe("clear dismissals carry the generation they cleared", () => {
+    const id = "55555555-5555-4555-8555-555555555555";
+
+    function clearFrame(clearedCreatedAt) {
+        const payload = { notification_id: id };
+        if (clearedCreatedAt !== undefined) payload.cleared_created_at = clearedCreatedAt;
+        return wire({
+            type: "dismissed",
+            id: "66666666-6666-4666-8666-666666666666",
+            mode: "timeseries",
+            payload,
+        });
+    }
+
+    function shown() {
+        return document.querySelector(`[data-notification-id="${id}"]`);
+    }
+
+    // A clears the old row, its event is delayed, B delivers a fresh resend of
+    // the same id, then A's event arrives naming the older generation.
+    it("ignores a delayed clear of an older generation", () => {
+        deliver(wire({ id, mode: "queued", created_at: 1800000000.000002, payload: { title: "Fresh" } }));
+        FakeEventSource.last.emit("notification", clearFrame(1800000000.000001));
+
+        expect(shown().classList.contains("sk-notification-exit")).toBe(false);
+    });
+
+    it("removes the generation it cleared", () => {
+        deliver(wire({ id, mode: "queued", created_at: 1800000000.1234562, payload: { title: "Old" } }));
+        // The cleared copy came back from storage rounded to the microsecond.
+        FakeEventSource.last.emit("notification", clearFrame(1800000000.123456));
+
+        expect(shown().classList.contains("sk-notification-exit")).toBe(true);
+    });
+
+    it("removes an older displayed generation", () => {
+        deliver(wire({ id, mode: "queued", created_at: 1800000000.000001, payload: { title: "Old" } }));
+        FakeEventSource.last.emit("notification", clearFrame(1800000000.000002));
+
+        expect(shown().classList.contains("sk-notification-exit")).toBe(true);
+    });
+
+    it("still removes on a dismissal without the field", () => {
+        deliver(wire({ id, mode: "queued", created_at: 1800000000.000002, payload: { title: "Fresh" } }));
+        FakeEventSource.last.emit("notification", clearFrame());
+
+        expect(shown().classList.contains("sk-notification-exit")).toBe(true);
+    });
+});
+
 describe("sk:notification detail", () => {
     /** Deliver a notification and capture the object handed to listeners. */
     function capture(notification) {

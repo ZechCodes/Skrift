@@ -71,14 +71,50 @@ When the client reconnects, it appends `?since=<timestamp>` to the SSE URL using
 
 Sending a `DELETE /notifications/{id}` for a timeseries notification returns **HTTP 409** with `{"error": "notification is not dismissible"}`. This is raised via `NotDismissibleError`.
 
-### TTL and Cleanup
+### Lifetime and Cleanup
 
-DB-backed backends (Redis, PgNotify) run a background cleanup task every 10 minutes:
+Stored notifications have a lifetime, set under `notifications:` in `app.yaml`:
 
-- **Queued** notifications: deleted after **24 hours**
-- **Timeseries** notifications: deleted after **7 days**
+```yaml
+notifications:
+  queued_ttl_seconds: 21600       # 6 hours (default 86400, 24 hours)
+  timeseries_ttl_seconds: 604800  # 7 days (the default)
+```
 
-The InMemory backend does not run cleanup (notifications are lost on restart).
+Both must be positive, finite and at most 3,153,600,000 seconds (100 years); values under a second are fine. Every built-in backend (InMemory, Redis, PgNotify) honours them:
+
+- **Replay is bounded.** A notification older than its lifetime is never returned by the queued replay on connect/reconnect or by the timeseries `?since=` replay, whenever the cleanup sweep last ran. The lifetime only filters replay: a notification is pushed live to connected clients (and to Web Push) as it is sent, without an age check.
+- **Storage is swept.** Each running backend sweeps every `interval = min(600, max(1, min(queued_ttl_seconds, timeseries_ttl_seconds)))` seconds. The loop sleeps `interval` after each sweep finishes, so a notification that expires just after one sweep took its cutoff waits for the rest of that sweep, the sleep, and the whole next sweep. While a backend is running and its sweeps succeed, a notification is therefore deleted at an age of at most its mode's lifetime + `interval` + the running time of two sweeps (plus event-loop scheduling delay). A failed sweep is logged and retried at the next interval, so each failure postpones deletion by one more interval. Rows of DB-backed backends are not swept while no process runs the backend; the first sweep runs one interval after a backend starts. The InMemory backend loses everything on restart anyway.
+
+The `QUEUED_TTL_HOURS` and `TIMESERIES_TTL_DAYS` constants in `skrift.lib.notification_backends` remain importable as the defaults.
+
+!!! note "Custom backends"
+    A custom backend owns its own retention. It receives `settings=` at construction and can read `settings.notifications.queued_ttl_seconds`, but the service does not filter what a custom backend returns.
+
+### Clearing Queued Notifications
+
+When the work a notification describes is finished, delete its queued notifications instead of waiting for the lifetime:
+
+```python
+from skrift.notifications import (
+    clear_session_notifications,
+    clear_source_notifications,
+    clear_user_notifications,
+)
+
+removed = await clear_user_notifications(str(user.id))                     # everything queued for the user
+removed = await clear_user_notifications(str(user.id), group="answer-42")  # just one group
+removed = await clear_session_notifications(nid)
+removed = await clear_source_notifications("blog:tech", group="draft")
+```
+
+Each returns how many notifications were removed. All three call `notifications.clear_queued(source_key, *, group=None)`.
+
+- Only **queued** notifications stored on that exact source key are removed. Timeseries notifications are left alone, and so are other source keys: `clear_user_notifications` does not touch a notification sent to one of the user's sessions.
+- Removal applies to **every subscriber**, like group replacement, and unlike `dismiss`, which hides a notification from one subscriber only. `NOTIFICATION_DISMISSED` is not fired.
+- Connected clients on every replica receive a `dismissed` event for each removed notification. Redis and PgNotify carry it through the normal send fanout. The event is not stored, because a client that reconnects later drops any notification missing from the queued replay.
+- A send's fanout can reach a replica after the notification was cleared there (the sending replica's publish was slow). Each process keeps a tombstone per cleared notification, for clears it ran and for clear events it received (which carry the cleared notification's `created_at` as `cleared_created_at`), for 10 minutes and at most 10,000 entries. A later **queued** delivery of that id is dropped if its `created_at` is not newer than the cleared one. Both are compared in whole microseconds, the precision storage keeps, so a stored copy counts as the same generation and anything at least 1 µs newer counts as newer; a newer notification reusing the id, for example a same-id update or a resend after the clear, is delivered. The browser client applies the same rule to clear events: a `dismissed` event carrying `cleared_created_at` does not remove a displayed notification of that id whose `created_at` is newer, so a delayed clear event cannot hide a resend that arrived first. Timeseries and ephemeral deliveries are never dropped. Not covered: a replica that never received the clear event, and a delivery delayed past the 10 minutes; a reconnect corrects both, since replay comes from storage. Group replacement and `dismiss` leave no tombstones.
+- Custom backends may implement `clear_queued(source_key, group=None) -> list[Notification]`, returning the removed notifications. Backends without it still work: the service lists the source's queued notifications with `get_queued_multi` and removes each one with `remove`.
 
 ## Group Keys
 
@@ -349,6 +385,8 @@ if (saved) window.__skriftNotifications.lastSeen = parseFloat(saved);
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `notifications.backend` | `str` | `""` | Backend class path (`module:ClassName`). Empty = InMemory |
+| `notifications.queued_ttl_seconds` | `float` | `86400` | Lifetime of queued notifications (> 0, finite, ≤ 3153600000) |
+| `notifications.timeseries_ttl_seconds` | `float` | `604800` | Lifetime of timeseries notifications (> 0, finite, ≤ 3153600000) |
 | `redis.url` | `str` | `""` | Redis connection URL (RedisBackend only) |
 | `redis.prefix` | `str` | `""` | Key prefix for Redis keys |
 

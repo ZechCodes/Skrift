@@ -1054,7 +1054,7 @@ def create_app() -> ASGIApp:
         backend_cls = load_backend(settings.notifications.backend)
         backend = backend_cls(settings=settings, session_maker=db_config.get_session)
     else:
-        backend = InMemoryBackend()
+        backend = InMemoryBackend(settings=settings)
 
     # Email backend setup (separate abstraction from notifications)
     from skrift.lib.email_backends import build_email_backend
