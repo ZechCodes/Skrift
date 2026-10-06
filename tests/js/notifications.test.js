@@ -198,6 +198,56 @@ describe("same id after a dismissal", () => {
     });
 });
 
+describe("clear dismissals carry the generation they cleared", () => {
+    const id = "55555555-5555-4555-8555-555555555555";
+
+    function clearFrame(clearedCreatedAt) {
+        const payload = { notification_id: id };
+        if (clearedCreatedAt !== undefined) payload.cleared_created_at = clearedCreatedAt;
+        return wire({
+            type: "dismissed",
+            id: "66666666-6666-4666-8666-666666666666",
+            mode: "timeseries",
+            payload,
+        });
+    }
+
+    function shown() {
+        return document.querySelector(`[data-notification-id="${id}"]`);
+    }
+
+    // A clears the old row, its event is delayed, B delivers a fresh resend of
+    // the same id, then A's event arrives naming the older generation.
+    it("ignores a delayed clear of an older generation", () => {
+        deliver(wire({ id, mode: "queued", created_at: 1800000000.000002, payload: { title: "Fresh" } }));
+        FakeEventSource.last.emit("notification", clearFrame(1800000000.000001));
+
+        expect(shown().classList.contains("sk-notification-exit")).toBe(false);
+    });
+
+    it("removes the generation it cleared", () => {
+        deliver(wire({ id, mode: "queued", created_at: 1800000000.1234562, payload: { title: "Old" } }));
+        // The cleared copy came back from storage rounded to the microsecond.
+        FakeEventSource.last.emit("notification", clearFrame(1800000000.123456));
+
+        expect(shown().classList.contains("sk-notification-exit")).toBe(true);
+    });
+
+    it("removes an older displayed generation", () => {
+        deliver(wire({ id, mode: "queued", created_at: 1800000000.000001, payload: { title: "Old" } }));
+        FakeEventSource.last.emit("notification", clearFrame(1800000000.000002));
+
+        expect(shown().classList.contains("sk-notification-exit")).toBe(true);
+    });
+
+    it("still removes on a dismissal without the field", () => {
+        deliver(wire({ id, mode: "queued", created_at: 1800000000.000002, payload: { title: "Fresh" } }));
+        FakeEventSource.last.emit("notification", clearFrame());
+
+        expect(shown().classList.contains("sk-notification-exit")).toBe(true);
+    });
+});
+
 describe("sk:notification detail", () => {
     /** Deliver a notification and capture the object handed to listeners. */
     function capture(notification) {

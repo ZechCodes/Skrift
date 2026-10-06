@@ -446,3 +446,59 @@ class TestRemovalRaces:
 
         items = await drain_queue(q_b)
         assert [(i.id, i.payload) for i in items] == [(n.id, {"title": "again"})]
+
+    @pytest.mark.parametrize("newer_by", [500e-6, 1e-6], ids=["500us", "1us"])
+    async def test_resend_microseconds_newer_than_the_clear_is_delivered(self, backend_pair, newer_by):
+        (svc_a, backend_a), (svc_b, _) = backend_pair
+        # The sub-microsecond tail makes storage round the cleared copy down.
+        cleared_at = round(time.time() - 5, 6) + 2e-7
+        n = Notification(type="generic", created_at=cleared_at)
+        await svc_a.send_to_user("alice", n)
+        assert await svc_b.clear_queued("user:alice") == 1
+
+        q_a = await svc_a.register_connection("sess-a", "alice")
+        q_b = await svc_b.register_connection("sess-b", "alice")
+        await drain_queue(q_b, timeout=0.3)
+
+        resend = Notification(type="generic", id=n.id, created_at=cleared_at + newer_by)
+        await svc_a.send_to_user("alice", resend)
+
+        for q in (q_a, q_b):
+            items = [i for i in await drain_queue(q) if i.type == "generic"]
+            assert [i.created_at for i in items] == [resend.created_at]
+        assert [s.id for s in await backend_a.get_queued_multi(["user:alice"])] == [n.id]
+
+    async def test_delayed_clear_event_names_the_generation_it_cleared(self, backend_pair):
+        """The browser compares cleared_created_at with what it shows (notifications.js)."""
+        (svc_a, backend_a), (svc_b, backend_b) = backend_pair
+        n = Notification(type="generic", created_at=time.time() - 5)
+        await svc_a.send_to_user("alice", n)
+
+        release = asyncio.Event()
+        real_publish = backend_a.publish
+
+        async def delayed_publish(message):
+            if message.get("n", {}).get("type") == "dismissed":
+                await release.wait()
+            await real_publish(message)
+
+        backend_a.publish = delayed_publish
+        q_b = await svc_b.register_connection("sess-b", "alice")
+        await drain_queue(q_b, timeout=0.3)
+
+        clear = asyncio.create_task(svc_a.clear_queued("user:alice"))
+        for _ in range(100):
+            if not await backend_b.get_queued_multi(["user:alice"]):
+                break
+            await asyncio.sleep(0.02)
+        resend = Notification(type="generic", id=n.id, payload={"title": "fresh"})
+        await svc_b.send_to_user("alice", resend)
+        release.set()
+        assert await clear == 1
+
+        items = await drain_queue(q_b)
+        assert [i.type for i in items] == ["generic", "dismissed"]
+        assert items[0].created_at == resend.created_at
+        cutoff = items[1].payload["cleared_created_at"]
+        assert abs(cutoff - n.created_at) < 1e-6 < resend.created_at - cutoff
+        assert [s.payload for s in await backend_b.get_queued_multi(["user:alice"])] == [{"title": "fresh"}]

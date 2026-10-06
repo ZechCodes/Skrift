@@ -772,7 +772,7 @@ class TestLateDeliveryAfterClear:
         assert [e.id for e in await _drain(q)] == [fresh.id]
 
     @pytest.mark.asyncio
-    async def test_cutoff_tolerates_storage_precision(self, sqlite_session_maker):
+    async def test_cutoff_matches_storage_precision(self, sqlite_session_maker):
         svc = NotificationService()
         svc.set_backend(_SqliteStorageBackend(settings=None, session_maker=sqlite_session_maker))
         n = Notification(type="t", created_at=1_800_000_000.1234562)
@@ -785,6 +785,111 @@ class TestLateDeliveryAfterClear:
         await svc._handle_remote(_wire_send("session:s1", n))
 
         assert await _drain(q) == []
+
+
+
+_CLEARED_AT = 1_800_000_000.1234562  # stored as ...123456; the float reads back low
+
+
+def _generation_backend(kind: str, session_maker: Any) -> Any:
+    if kind == "memory":
+        return InMemoryBackend()
+    return _SqliteStorageBackend(settings=None, session_maker=session_maker)
+
+
+class TestClearGenerationsAtMicrosecondPrecision:
+    """A clear suppresses its own generation of an id and nothing newer.
+
+    Generations compare in whole microseconds, the precision storage keeps,
+    so a resend even 1 µs newer is a new generation.
+    """
+
+    @pytest.fixture(params=["memory", "sqlite"])
+    def cleared(self, request, sqlite_session_maker):
+        async def make() -> tuple[NotificationService, Notification, asyncio.Queue]:
+            svc = NotificationService()
+            svc.set_backend(_generation_backend(request.param, sqlite_session_maker))
+            n = Notification(type="t", created_at=_CLEARED_AT)
+            await svc.send_to_session("s1", n)
+            assert await svc.clear_queued("session:s1") == 1
+            q = await svc.register_connection("s1", None)
+            return svc, n, q
+
+        return make
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("newer_by", [500e-6, 1e-6])
+    async def test_local_resend_slightly_newer_is_delivered(self, cleared, newer_by):
+        svc, n, q = await cleared()
+        resend = _same_id(n, created_at=_CLEARED_AT + newer_by)
+
+        await svc.send_to_session("s1", resend)
+
+        assert [e.created_at for e in await _drain(q)] == [resend.created_at]
+        assert [x.id for x in await svc._backend.get_queued_multi(["session:s1"])] == [n.id]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("newer_by", [500e-6, 1e-6])
+    async def test_remote_resend_slightly_newer_is_delivered(self, cleared, newer_by):
+        svc, n, q = await cleared()
+        resend = _same_id(n, created_at=_CLEARED_AT + newer_by)
+
+        await svc._handle_remote(_wire_send("session:s1", resend))
+
+        assert [e.created_at for e in await _drain(q)] == [resend.created_at]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("newer_by", [500e-6, 1e-6])
+    async def test_peer_of_the_clearer_delivers_slightly_newer(self, cleared, newer_by):
+        clearer, n, _ = await cleared()
+        published: list[dict] = []
+        clearer._backend.publish = lambda message: _record(published, message)
+        await clearer.send_to_session("s1", n)
+        await clearer.clear_queued("session:s1")
+        [dismissal] = published
+
+        peer = NotificationService()
+        q = await peer.register_connection("s1", None)
+        await peer._handle_remote(dismissal)
+        await peer._handle_remote(_wire_send("session:s1", n))
+        resend = _same_id(n, created_at=_CLEARED_AT + newer_by)
+        await peer._handle_remote(_wire_send("session:s1", resend))
+
+        events = await _drain(q)
+        assert [e.type for e in events] == ["dismissed", "t"]
+        assert events[1].created_at == resend.created_at
+
+    @pytest.mark.asyncio
+    async def test_cleared_generation_still_suppressed_when_storage_reads_low(self, cleared):
+        svc, n, q = await cleared()
+
+        # The delayed original fanout carries the full float; the cleared
+        # copy may have come back from storage rounded to ...123456.
+        await svc._handle_remote(_wire_send("session:s1", n))
+        await svc._handle_remote(_wire_send("session:s1", _same_id(n, created_at=1_800_000_000.123456)))
+
+        assert await _drain(q) == []
+
+    def test_microseconds_round_like_storage(self):
+        import random
+        from datetime import datetime, timedelta, timezone
+
+        from skrift.notifications import _created_at_microseconds
+
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        rng = random.Random(245)
+        samples = [_CLEARED_AT, 1_800_000_000.123456, 0.0000005, 0.0000015, 1.9999996]
+        samples += [rng.uniform(0, 4e9) for _ in range(20_000)]
+        samples += [rng.randrange(4 * 10**9) + rng.randrange(10**6) / 1e6 for _ in range(20_000)]
+        for t in samples:
+            stored = datetime.fromtimestamp(t, tz=timezone.utc)
+            expected = (stored - epoch) // timedelta(microseconds=1)
+            assert _created_at_microseconds(t) == expected, t
+            assert _created_at_microseconds(stored.timestamp()) == expected, t
+
+
+async def _record(published: list[dict], message: dict) -> None:
+    published.append(message)
 
 
 class TestNoTombstonesOutsideClears:

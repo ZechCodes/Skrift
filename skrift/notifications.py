@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
@@ -41,9 +42,6 @@ SSE_QUEUE_MAXSIZE = 100
 # after its notification was cleared is dropped instead of showing it again.
 CLEARED_TOMBSTONE_MAXSIZE = 10_000
 CLEARED_TOMBSTONE_SECONDS = 600.0
-# Stored timestamps are microsecond datetimes; a delivery this close to the
-# cleared notification's created_at is the same generation, not a newer one.
-_CREATED_AT_TOLERANCE = 0.001
 
 
 class NotificationMode(str, Enum):
@@ -131,13 +129,27 @@ def _put_dropping_oldest(queue: asyncio.Queue, notification: Notification) -> No
     queue.put_nowait(notification)
 
 
+def _created_at_microseconds(created_at: float) -> int:
+    """*created_at* in whole microseconds, rounded the way storage rounds it.
+
+    Database backends keep ``created_at`` as a microsecond datetime built with
+    :meth:`datetime.fromtimestamp`, which rounds the fractional part half to
+    even. Comparing generations of a notification at this precision treats a
+    stored copy as the same generation as the value it was stored from, and
+    anything a microsecond or more newer as newer. ``notifications.js`` applies
+    the same rule.
+    """
+    fraction, whole = math.modf(created_at)
+    return int(whole) * 1_000_000 + round(fraction * 1_000_000)
+
+
 class _ClearedTombstones:
     """Notifications removed by an explicit clear, remembered for a bounded time.
 
-    Each entry is ``id -> created_at`` of the cleared notification. A queued
-    delivery of that id is stale only if it is not newer than that timestamp,
-    so an updated notification reusing the id (newer ``created_at``) still
-    gets through. Holds at most *maxsize* entries, each for *seconds*.
+    Each entry is ``id -> created_at`` of the cleared notification, in whole
+    microseconds (:func:`_created_at_microseconds`). A queued delivery of that
+    id is stale only if it is not newer than that timestamp, so an updated
+    notification reusing the id (newer ``created_at``) still gets through. Holds at most *maxsize* entries, each for *seconds*.
     """
 
     def __init__(
@@ -147,9 +159,10 @@ class _ClearedTombstones:
     ) -> None:
         self._maxsize = maxsize
         self._seconds = seconds
-        self._entries: OrderedDict[UUID, tuple[float, float]] = OrderedDict()  # id -> (expires, cutoff)
+        self._entries: OrderedDict[UUID, tuple[float, int]] = OrderedDict()  # id -> (expires, cutoff)
 
-    def add(self, notification_id: UUID, cutoff: float) -> None:
+    def add(self, notification_id: UUID, created_at: float) -> None:
+        cutoff = _created_at_microseconds(created_at)
         now = time.monotonic()
         self._prune(now)
         previous = self._entries.pop(notification_id, None)
@@ -166,7 +179,7 @@ class _ClearedTombstones:
         entry = self._entries.get(notification.id)
         if entry is None or entry[0] <= time.monotonic():
             return False
-        return notification.created_at <= entry[1] + _CREATED_AT_TOLERANCE
+        return _created_at_microseconds(notification.created_at) <= entry[1]
 
     def __len__(self) -> int:
         return len(self._entries)
