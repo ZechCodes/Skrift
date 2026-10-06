@@ -38,12 +38,12 @@ from skrift.lib.notification_backends import (
     _DatabaseStorageMixin,
 )
 from skrift.notifications import (
-    RECENTLY_REMOVED_MAXSIZE,
-    RECENTLY_REMOVED_SECONDS,
+    CLEARED_TOMBSTONE_MAXSIZE,
+    CLEARED_TOMBSTONE_SECONDS,
     Notification,
     NotificationMode,
     NotificationService,
-    _RecentlyRemoved,
+    _ClearedTombstones,
     clear_session_notifications,
     clear_source_notifications,
     clear_user_notifications,
@@ -261,6 +261,12 @@ class _SqliteStorageBackend(_DatabaseStorageMixin):
     def __init__(self, *, settings: Settings | None, session_maker: Any) -> None:
         self._init_db(session_maker, settings)
 
+    async def publish(self, message: dict) -> None:
+        pass
+
+    def on_remote_message(self, callback: Any) -> None:
+        pass
+
 
 @pytest.fixture
 async def sqlite_session_maker():
@@ -353,10 +359,12 @@ class TestDatabaseLifetime:
             await db_backend.store("user:alice", n)
         await db_backend.store("user:bob", other)
 
-        assert await db_backend.clear_queued("user:alice", "answer-1") == [a1.id]
+        cleared = await db_backend.clear_queued("user:alice", "answer-1")
+        assert [n.id for n in cleared] == [a1.id]
+        assert cleared[0].created_at == pytest.approx(a1.created_at, abs=1e-6)
         assert {n.id for n in await db_backend.get_queued_multi(["user:alice"])} == {a2.id, plain.id}
 
-        assert set(await db_backend.clear_queued("user:alice")) == {a2.id, plain.id}
+        assert {n.id for n in await db_backend.clear_queued("user:alice")} == {a2.id, plain.id}
         assert await db_backend.get_queued_multi(["user:alice"]) == []
         assert [n.id for n in await db_backend.get_since_multi(["user:alice"], 0)] == [ts.id]
         assert [n.id for n in await db_backend.get_queued_multi(["user:bob"])] == [other.id]
@@ -630,7 +638,19 @@ def _wire_send(source_key: str, n: Notification, pid: str = "other-replica") -> 
     return {"a": "s", "sk": source_key, "pid": pid, "n": n.to_dict()}
 
 
-class TestLateDeliveryAfterRemoval:
+def _same_id(n: Notification, *, created_at: float, **changes: Any) -> Notification:
+    """An updated notification reusing *n*'s id."""
+    return Notification(
+        type=changes.get("type", n.type),
+        id=n.id,
+        created_at=created_at,
+        payload=changes.get("payload", {"title": "updated"}),
+        group=changes.get("group", n.group),
+        mode=changes.get("mode", n.mode),
+    )
+
+
+class TestLateDeliveryAfterClear:
     @pytest.mark.asyncio
     async def test_remote_send_after_local_clear_is_dropped(self):
         backend = InMemoryBackend()
@@ -654,6 +674,7 @@ class TestLateDeliveryAfterRemoval:
         await clearer._backend.store("user:alice", n)
         await clearer.clear_queued("user:alice")
         [dismissal] = clearer._backend.published
+        assert dismissal["n"]["payload"]["cleared_created_at"] == n.created_at
 
         other = NotificationService()
         q = await other.register_connection("s9", "alice")
@@ -685,17 +706,57 @@ class TestLateDeliveryAfterRemoval:
         assert [m["n"]["type"] for m in backend.published] == ["dismissed"]
 
     @pytest.mark.asyncio
-    async def test_remote_send_of_a_group_replaced_notification_is_dropped(self):
+    async def test_newer_same_id_after_a_clear_is_delivered(self):
         svc = NotificationService()
         svc.set_backend(InMemoryBackend())
-        old = Notification(type="t", group="progress")
-        await svc._backend.store("user:alice", old)
-        await svc.send_to_user("alice", Notification(type="t", group="progress"))
+        n = Notification(type="t", group="answer", created_at=time.time() - 5)
+        await svc.send_to_user("alice", n)
+        await svc.clear_queued("user:alice")
         q = await svc.register_connection("s1", "alice")
 
-        await svc._handle_remote(_wire_send("user:alice", old))
+        updated = _same_id(n, created_at=time.time())
+        await svc.send_to_user("alice", updated)
+        resend = _same_id(n, created_at=time.time() + 1, group=None)
+        await svc._handle_remote(_wire_send("user:alice", resend))
 
-        assert await _drain(q) == []
+        events = await _drain(q)
+        assert [(e.id, e.created_at) for e in events] == [
+            (n.id, updated.created_at),
+            (n.id, resend.created_at),
+        ]
+        assert [x.created_at for x in await svc.get_queued("s1", "alice")] == [updated.created_at]
+
+    @pytest.mark.asyncio
+    async def test_remote_peer_lets_newer_same_id_through(self):
+        clearer = NotificationService()
+        clearer.set_backend(_RecordingBackend())
+        n = Notification(type="t", created_at=time.time() - 5)
+        await clearer._backend.store("user:alice", n)
+        await clearer.clear_queued("user:alice")
+        [dismissal] = clearer._backend.published
+
+        other = NotificationService()
+        q = await other.register_connection("s9", "alice")
+        await other._handle_remote(dismissal)
+        newer = _same_id(n, created_at=time.time())
+        await other._handle_remote(_wire_send("user:alice", newer))
+
+        assert [e.created_at for e in await _drain(q)][-1] == newer.created_at
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", [NotificationMode.TIMESERIES, NotificationMode.EPHEMERAL])
+    async def test_non_queued_same_id_is_never_suppressed(self, mode):
+        svc = NotificationService()
+        svc.set_backend(InMemoryBackend())
+        n = Notification(type="t")
+        await svc._backend.store("user:alice", n)
+        await svc.clear_queued("user:alice")
+        q = await svc.register_connection("s1", "alice")
+
+        old_generation = _same_id(n, created_at=n.created_at - 1, mode=mode)
+        await svc._handle_remote(_wire_send("user:alice", old_generation))
+
+        assert [e.mode for e in await _drain(q)] == [mode]
 
     @pytest.mark.asyncio
     async def test_unrelated_remote_sends_still_arrive(self):
@@ -710,35 +771,108 @@ class TestLateDeliveryAfterRemoval:
 
         assert [e.id for e in await _drain(q)] == [fresh.id]
 
+    @pytest.mark.asyncio
+    async def test_cutoff_tolerates_storage_precision(self, sqlite_session_maker):
+        svc = NotificationService()
+        svc.set_backend(_SqliteStorageBackend(settings=None, session_maker=sqlite_session_maker))
+        n = Notification(type="t", created_at=1_800_000_000.1234562)
+        await svc._backend.store("session:s1", n)
+        await svc.clear_queued("session:s1")
+        q = await svc.register_connection("s1", None)
+
+        # The stored datetime rounds created_at to microseconds; the delayed
+        # original still carries the full float.
+        await svc._handle_remote(_wire_send("session:s1", n))
+
+        assert await _drain(q) == []
+
+
+class TestNoTombstonesOutsideClears:
+    """Group replacement and dismiss behave exactly as before this PR."""
+
+    @pytest.mark.asyncio
+    async def test_same_id_group_update_is_delivered(self):
+        svc = NotificationService()
+        svc.set_backend(InMemoryBackend())
+        q = await svc.register_connection("s1", "alice")
+        n = Notification(type="t", group="progress", created_at=time.time() - 1, payload={"step": 1})
+        await svc.send_to_user("alice", n)
+        updated = _same_id(n, created_at=time.time(), payload={"step": 2})
+        await svc.send_to_user("alice", updated)
+
+        events = await _drain(q)
+        assert [(e.type, e.payload) for e in events][-1] == ("t", {"step": 2})
+        assert len(svc._cleared) == 0
+
+    @pytest.mark.asyncio
+    async def test_group_replaced_notification_fanout_is_not_suppressed(self):
+        svc = NotificationService()
+        svc.set_backend(InMemoryBackend())
+        old = Notification(type="t", group="progress")
+        await svc._backend.store("user:alice", old)
+        await svc.send_to_user("alice", Notification(type="t", group="progress"))
+        q = await svc.register_connection("s1", "alice")
+
+        await svc._handle_remote(_wire_send("user:alice", old))
+
+        assert [e.id for e in await _drain(q)] == [old.id]
+
+    @pytest.mark.asyncio
+    async def test_dismiss_leaves_no_tombstone(self):
+        svc = NotificationService()
+        svc.set_backend(InMemoryBackend())
+        n = Notification(type="t", group="g")
+        await svc.send_to_user("alice", n)
+        assert await svc.dismiss("s1", "alice", n.id)
+        assert await svc.dismiss("s1", "alice", group="g") is True
+        assert len(svc._cleared) == 0
+
+    @pytest.mark.asyncio
+    async def test_remote_dismissed_without_clear_marker_leaves_no_tombstone(self):
+        svc = NotificationService()
+        n = Notification(type="t")
+        await svc._handle_remote(_wire_send("user:alice", Notification.dismissed(n.id)))
+        q = await svc.register_connection("s1", "alice")
+        await svc._handle_remote(_wire_send("user:alice", n))
+
+        assert [e.id for e in await _drain(q)] == [n.id]
+
+
+class TestClearedTombstones:
     def test_memory_is_bounded_in_size(self):
         from uuid import uuid4
 
-        removed = _RecentlyRemoved(maxsize=3)
-        ids = [uuid4() for _ in range(4)]
-        for nid in ids:
-            removed.add(nid)
-        assert len(removed) == 3
-        assert ids[0] not in removed
-        assert all(nid in removed for nid in ids[1:])
+        tombstones = _ClearedTombstones(maxsize=3)
+        notes = [Notification(type="t", id=uuid4(), created_at=1.0) for _ in range(4)]
+        for n in notes:
+            tombstones.add(n.id, n.created_at)
+        assert len(tombstones) == 3
+        assert not tombstones.suppresses(notes[0])
+        assert all(tombstones.suppresses(n) for n in notes[1:])
 
     def test_memory_is_bounded_in_time(self, monkeypatch):
-        from uuid import uuid4
-
         now = [1000.0]
         monkeypatch.setattr("skrift.notifications.time.monotonic", lambda: now[0])
-        removed = _RecentlyRemoved(seconds=10)
-        early, late = uuid4(), uuid4()
-        removed.add(early)
+        tombstones = _ClearedTombstones(seconds=10)
+        early, late = Notification(type="t", created_at=1.0), Notification(type="t", created_at=1.0)
+        tombstones.add(early.id, 1.0)
         now[0] += 5
-        removed.add(late)
+        tombstones.add(late.id, 1.0)
         now[0] += 6
-        assert early not in removed and late in removed
-        removed.add(uuid4())
-        assert len(removed) == 2  # the expired id was pruned
+        assert not tombstones.suppresses(early) and tombstones.suppresses(late)
+        tombstones.add(Notification(type="t").id, 1.0)
+        assert len(tombstones) == 2  # the expired entry was pruned
+
+    def test_keeps_the_later_cutoff(self):
+        n = Notification(type="t", created_at=5.0)
+        tombstones = _ClearedTombstones()
+        tombstones.add(n.id, 5.0)
+        tombstones.add(n.id, 3.0)
+        assert tombstones.suppresses(n)
 
     def test_defaults(self):
-        assert RECENTLY_REMOVED_MAXSIZE == 10_000
-        assert RECENTLY_REMOVED_SECONDS == 600
+        assert CLEARED_TOMBSTONE_MAXSIZE == 10_000
+        assert CLEARED_TOMBSTONE_SECONDS == 600
 
 
 class TestClearHelpers:

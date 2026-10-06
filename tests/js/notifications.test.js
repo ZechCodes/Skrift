@@ -155,57 +155,46 @@ describe("dismissed events", () => {
     });
 });
 
-describe("late delivery after dismissal", () => {
-    const removed = wire({
-        id: "33333333-3333-4333-8333-333333333333",
-        mode: "queued",
-        payload: { title: "Cleared" },
-    });
+describe("same id after a dismissal", () => {
+    const id = "33333333-3333-4333-8333-333333333333";
 
-    function dismiss(id) {
+    function dismiss() {
         FakeEventSource.last.emit(
             "notification",
             wire({
                 type: "dismissed",
-                id: `44444444-4444-4444-8444-${id.slice(-12)}`,
+                id: "44444444-4444-4444-8444-444444444444",
                 mode: "timeseries",
-                payload: { notification_id: id },
+                payload: { notification_id: id, cleared_created_at: 1 },
             }),
         );
     }
 
-    it("ignores a notification whose dismissal arrived first", () => {
-        loadClient();
-        const seen = [];
-        document.addEventListener("sk:notification", (e) => seen.push(e.detail.id));
-
-        dismiss(removed.id);
-        FakeEventSource.last.emit("notification", removed);
-
-        expect(document.querySelector(".sk-notification")).toBeNull();
-        expect(seen).not.toContain(removed.id);
-    });
-
-    it("still shows notifications that were never dismissed", () => {
-        loadClient();
-        dismiss(removed.id);
+    // An updated notification may reuse its id (same group, newer created_at),
+    // and an app may resend an id after clearing it; both must be shown.
+    it("shows a newer notification that reuses a dismissed id", () => {
+        deliver(wire({ id, mode: "queued", group: "g", created_at: 1, payload: { title: "Old" } }));
+        dismiss();
+        // jsdom runs no animations; finish the exit the browser would.
+        document.querySelector(".sk-notification").dispatchEvent(new Event("animationend"));
         FakeEventSource.last.emit(
             "notification",
-            wire({ id: "55555555-5555-4555-8555-555555555555", payload: { title: "Fresh" } }),
+            wire({ id, mode: "queued", group: "g", created_at: 2, payload: { title: "New" } }),
         );
 
-        expect(document.querySelector(".sk-notification-title").textContent).toBe("Fresh");
+        const titles = [...document.querySelectorAll(".sk-notification-title")].map((el) => el.textContent);
+        expect(titles).toContain("New");
     });
 
-    it("forgets the oldest dismissed ids past its bound", () => {
+    it("shows a resend of an id that was dismissed before it was ever shown", () => {
         loadClient();
-        dismiss(removed.id);
-        for (let i = 0; i < 1000; i++) {
-            dismiss(`66666666-6666-4666-8666-${String(i).padStart(12, "0")}`);
-        }
-        FakeEventSource.last.emit("notification", removed);
+        dismiss();
+        FakeEventSource.last.emit(
+            "notification",
+            wire({ id, mode: "queued", created_at: 2, payload: { title: "Again" } }),
+        );
 
-        expect(document.querySelector(".sk-notification-title").textContent).toBe("Cleared");
+        expect(document.querySelector(".sk-notification-title").textContent).toBe("Again");
     });
 });
 

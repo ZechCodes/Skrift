@@ -406,3 +406,43 @@ class TestRemovalRaces:
 
         (_, backend_a), _ = backend_pair
         await assert_concurrent_removals_count_once(backend_a, pg_session_maker)
+
+    @pytest.mark.parametrize("clear_first", [False, True], ids=["no-clear", "after-clear"])
+    async def test_same_id_update_with_newer_created_at_is_delivered(self, backend_pair, clear_first):
+        (svc_a, backend_a), (svc_b, _) = backend_pair
+        n = Notification(
+            type="generic", group="answer", created_at=time.time() - 5, payload={"step": 1}
+        )
+        await svc_a.send_to_user("alice", n)
+        if clear_first:
+            assert await svc_b.clear_queued("user:alice") == 1
+
+        q_a = await svc_a.register_connection("sess-a", "alice")
+        q_b = await svc_b.register_connection("sess-b", "alice")
+        await drain_queue(q_b, timeout=0.3)
+
+        updated = Notification(
+            type="generic", id=n.id, group="answer", created_at=time.time(), payload={"step": 2}
+        )
+        await svc_a.send_to_user("alice", updated)
+
+        for q in (q_a, q_b):
+            items = [i for i in await drain_queue(q) if i.type == "generic"]
+            assert [i.payload for i in items] == [{"step": 2}]
+        [stored] = await backend_a.get_queued_multi(["user:alice"])
+        assert stored.payload == {"step": 2}
+
+    async def test_fresh_same_id_resend_after_clear_is_delivered(self, backend_pair):
+        (svc_a, _), (svc_b, _) = backend_pair
+        n = Notification(type="generic", created_at=time.time() - 5)
+        await svc_a.send_to_user("alice", n)
+        assert await svc_a.clear_queued("user:alice") == 1
+
+        q_b = await svc_b.register_connection("sess-b", "alice")
+        await drain_queue(q_b, timeout=0.3)
+
+        resend = Notification(type="generic", id=n.id, payload={"title": "again"})
+        await svc_a.send_to_user("alice", resend)
+
+        items = await drain_queue(q_b)
+        assert [(i.id, i.payload) for i in items] == [(n.id, {"title": "again"})]

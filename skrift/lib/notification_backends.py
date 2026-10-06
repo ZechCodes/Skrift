@@ -219,18 +219,19 @@ class InMemoryBackend(_PeriodicCleanupMixin):
         old = self._dismiss_by_group(q, group)
         return old.id if old else None
 
-    async def clear_queued(self, source_key: str, group: str | None = None) -> list[UUID]:
-        """Delete every queued notification for *source_key* (only *group*'s if given)."""
+    async def clear_queued(self, source_key: str, group: str | None = None) -> list[Notification]:
+        """Delete every queued notification for *source_key* (only *group*'s if
+        given) and return the removed notifications."""
         q = self._queues.get(source_key)
         if not q:
             return []
         removed = [
-            nid
-            for nid, n in q.items()
+            n
+            for n in q.values()
             if n.mode == NotificationMode.QUEUED and (group is None or n.group == group)
         ]
-        for nid in removed:
-            del q[nid]
+        for n in removed:
+            del q[n.id]
         if not q:
             del self._queues[source_key]
         return removed
@@ -416,8 +417,9 @@ class _DatabaseStorageMixin(_PeriodicCleanupMixin):
             await session.commit()
             return old_ids[0] if old_ids else None
 
-    async def clear_queued(self, source_key: str, group: str | None = None) -> list[UUID]:
-        """Delete every queued notification for *source_key* (only *group*'s if given)."""
+    async def clear_queued(self, source_key: str, group: str | None = None) -> list[Notification]:
+        """Delete every queued notification for *source_key* (only *group*'s if
+        given) and return the removed notifications."""
         from skrift.db.models.notification import StoredNotification
         from sqlalchemy import delete
 
@@ -429,9 +431,18 @@ class _DatabaseStorageMixin(_PeriodicCleanupMixin):
             conditions.append(StoredNotification.group_key == group)
         async with self._session_maker() as session:
             result = await session.execute(
-                delete(StoredNotification).where(*conditions).returning(StoredNotification.id)
+                delete(StoredNotification)
+                .where(*conditions)
+                .returning(
+                    StoredNotification.id,
+                    StoredNotification.type,
+                    StoredNotification.payload_json,
+                    StoredNotification.group_key,
+                    StoredNotification.delivery_mode,
+                    StoredNotification.notified_at,
+                )
             )
-            removed = list(result.scalars().all())
+            removed = [self._row_to_notification(row) for row in result.all()]
             await session.commit()
             return removed
 
@@ -517,10 +528,15 @@ class _DatabaseStorageMixin(_PeriodicCleanupMixin):
 
     @staticmethod
     def _row_to_notification(row) -> Notification:
+        notified_at = row.notified_at
+        if notified_at.tzinfo is None:
+            # Databases without timestamptz (SQLite) hand back the stored UTC
+            # wall time naive; .timestamp() would read it as local time.
+            notified_at = notified_at.replace(tzinfo=timezone.utc)
         return Notification(
             type=row.type,
             id=row.id,
-            created_at=row.notified_at.timestamp(),
+            created_at=notified_at.timestamp(),
             payload=json.loads(row.payload_json),
             group=row.group_key,
             mode=NotificationMode(row.delivery_mode),

@@ -37,11 +37,13 @@ logger = logging.getLogger(__name__)
 # memory; stored notifications are re-flushed when the client reconnects.
 SSE_QUEUE_MAXSIZE = 100
 
-# Bounds on the ids a process remembers as removed for everyone (cleared or
-# replaced by group), so a send fanout that arrives after the removal is dropped
-# instead of showing the content again.
-RECENTLY_REMOVED_MAXSIZE = 10_000
-RECENTLY_REMOVED_SECONDS = 600.0
+# Bounds on the clear tombstones a process keeps, so a send fanout that arrives
+# after its notification was cleared is dropped instead of showing it again.
+CLEARED_TOMBSTONE_MAXSIZE = 10_000
+CLEARED_TOMBSTONE_SECONDS = 600.0
+# Stored timestamps are microsecond datetimes; a delivery this close to the
+# cleared notification's created_at is the same generation, not a newer one.
+_CREATED_AT_TOLERANCE = 0.001
 
 
 class NotificationMode(str, Enum):
@@ -129,42 +131,52 @@ def _put_dropping_oldest(queue: asyncio.Queue, notification: Notification) -> No
     queue.put_nowait(notification)
 
 
-class _RecentlyRemoved:
-    """Notification ids removed for everyone, remembered for a bounded time.
+class _ClearedTombstones:
+    """Notifications removed by an explicit clear, remembered for a bounded time.
 
-    Holds at most *maxsize* ids, each for *seconds*; the oldest go first.
+    Each entry is ``id -> created_at`` of the cleared notification. A queued
+    delivery of that id is stale only if it is not newer than that timestamp,
+    so an updated notification reusing the id (newer ``created_at``) still
+    gets through. Holds at most *maxsize* entries, each for *seconds*.
     """
 
     def __init__(
         self,
-        maxsize: int = RECENTLY_REMOVED_MAXSIZE,
-        seconds: float = RECENTLY_REMOVED_SECONDS,
+        maxsize: int = CLEARED_TOMBSTONE_MAXSIZE,
+        seconds: float = CLEARED_TOMBSTONE_SECONDS,
     ) -> None:
         self._maxsize = maxsize
         self._seconds = seconds
-        self._expires: OrderedDict[UUID, float] = OrderedDict()
+        self._entries: OrderedDict[UUID, tuple[float, float]] = OrderedDict()  # id -> (expires, cutoff)
 
-    def add(self, notification_id: UUID) -> None:
+    def add(self, notification_id: UUID, cutoff: float) -> None:
         now = time.monotonic()
         self._prune(now)
-        self._expires[notification_id] = now + self._seconds
-        self._expires.move_to_end(notification_id)
-        while len(self._expires) > self._maxsize:
-            self._expires.popitem(last=False)
+        previous = self._entries.pop(notification_id, None)
+        if previous is not None:
+            cutoff = max(cutoff, previous[1])
+        self._entries[notification_id] = (now + self._seconds, cutoff)
+        while len(self._entries) > self._maxsize:
+            self._entries.popitem(last=False)
 
-    def __contains__(self, notification_id: object) -> bool:
-        expires = self._expires.get(notification_id)  # type: ignore[arg-type]
-        return expires is not None and expires > time.monotonic()
+    def suppresses(self, notification: Notification) -> bool:
+        """True for a queued delivery of a cleared notification that is not newer."""
+        if notification.mode != NotificationMode.QUEUED:
+            return False
+        entry = self._entries.get(notification.id)
+        if entry is None or entry[0] <= time.monotonic():
+            return False
+        return notification.created_at <= entry[1] + _CREATED_AT_TOLERANCE
 
     def __len__(self) -> int:
-        return len(self._expires)
+        return len(self._entries)
 
     def _prune(self, now: float) -> None:
-        while self._expires:
-            oldest = next(iter(self._expires.values()))
-            if oldest > now:
+        while self._entries:
+            expires, _ = next(iter(self._entries.values()))
+            if expires > now:
                 break
-            self._expires.popitem(last=False)
+            self._entries.popitem(last=False)
 
 
 class SourceRegistry:
@@ -281,7 +293,7 @@ class NotificationService:
         self._publisher_id: str = str(uuid4())
         self._loaded_user_subs: set[str] = set()
         self._session_users: dict[str, str] = {}  # session_key -> user_key
-        self._recently_removed = _RecentlyRemoved()
+        self._cleared = _ClearedTombstones()
         self._settings = None  # given to ensure_backend_started; used by the lazy fallback
 
     def set_backend(self, backend: NotificationBackend) -> None:
@@ -376,13 +388,12 @@ class NotificationService:
         if notification.mode != NotificationMode.EPHEMERAL:
             old_id = await backend.store(source_key, notification)
             if old_id is not None:
-                self._recently_removed.add(old_id)
                 dismissed = Notification.dismissed(old_id)
                 await backend.store(source_key, dismissed)
                 self._registry.push(source_key, dismissed)
 
-        # Cleared (or replaced) while this send was in flight: do not show it.
-        if notification.id not in self._recently_removed:
+        # Cleared while this send was in flight: do not show it.
+        if not self._cleared.suppresses(notification):
             self._registry.push(source_key, notification)
 
             await backend.publish({
@@ -500,7 +511,8 @@ class NotificationService:
         removed notification; the event is not stored, because a reconnecting
         client drops anything missing from the queued replay. Each replica
         that removes or hears of the removal drops a send fanout of the same
-        notification that arrives later (see ``RECENTLY_REMOVED_SECONDS``).
+        notification that arrives later and is not newer than the cleared one
+        (see ``CLEARED_TOMBSTONE_SECONDS``).
         Returns the number of notifications removed.
         """
         backend = self._get_backend()
@@ -517,11 +529,14 @@ class NotificationService:
                 if group is not None and n.group != group:
                     continue
                 if await backend.remove(n.id) is not None:
-                    removed.append(n.id)
+                    removed.append(n)
 
-        for removed_id in removed:
-            self._recently_removed.add(removed_id)
-            dismissed = Notification.dismissed(removed_id)
+        for n in removed:
+            self._cleared.add(n.id, n.created_at)
+            dismissed = Notification.dismissed(n.id)
+            # Lets other replicas tombstone this generation of the id; replicas
+            # and browsers that predate it ignore the extra payload key.
+            dismissed.payload["cleared_created_at"] = n.created_at
             self._registry.push(source_key, dismissed)
             await backend.publish({
                 "a": "s", "sk": source_key, "pid": self._publisher_id,
@@ -632,6 +647,20 @@ class NotificationService:
         await self._get_backend().remove_subscription(subscriber_key, source_key)
         self._registry.unsubscribe(subscriber_key, source_key)
 
+    def _remember_remote_clear(self, payload: dict) -> None:
+        """Tombstone a notification another replica cleared.
+
+        Only clear events carry ``cleared_created_at``; group replacement and
+        dismissal events do not, and leave no tombstone.
+        """
+        cutoff = payload.get("cleared_created_at")
+        if not isinstance(cutoff, (int, float)) or isinstance(cutoff, bool):
+            return
+        try:
+            self._cleared.add(UUID(payload["notification_id"]), float(cutoff))
+        except (KeyError, TypeError, ValueError):
+            pass
+
     async def _handle_remote(self, message: dict) -> None:
         """Process a message received from another replica via pub/sub."""
         # Self-echo prevention
@@ -643,16 +672,11 @@ class NotificationService:
 
         if action == "s":
             notification = _notification_from_wire(message.get("n", {}))
-            if notification.id in self._recently_removed:
-                # The send fanout arrived after another replica removed it.
+            if self._cleared.suppresses(notification):
+                # The send fanout arrived after the notification was cleared.
                 return
             if notification.type == "dismissed":
-                removed_id = notification.payload.get("notification_id")
-                if removed_id:
-                    try:
-                        self._recently_removed.add(UUID(removed_id))
-                    except ValueError:
-                        pass
+                self._remember_remote_clear(notification.payload)
             self._registry.push(source_key, notification)
 
         elif action == "d":
