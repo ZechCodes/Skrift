@@ -28,7 +28,9 @@ jobs:
           python-version: '3.13'
 
       - name: Install Zensical
-        run: pip install zensical
+        run: |
+          python -m pip install --upgrade "pip>=26.2.2"
+          pip install zensical
 
       - name: Build documentation
         run: zensical build

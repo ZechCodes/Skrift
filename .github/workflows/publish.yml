@@ -14,6 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
+        with:
+          version: ">=0.13.4"
       - run: uv run pytest -m "not integration"
 
   build:
@@ -22,6 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
+        with:
+          version: ">=0.13.4"
       - run: uv build
       - uses: actions/upload-artifact@v4
         with:
@@ -38,4 +42,6 @@ jobs:
           name: dist
           path: dist/
       - uses: astral-sh/setup-uv@v4
+        with:
+          version: ">=0.13.4"
       - run: uv publish
