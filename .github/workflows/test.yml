@@ -22,6 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
+        with:
+          version: ">=0.13.4"
       - run: uv sync --all-extras
       - name: Install pydantic-ai ${{ matrix.pydantic-ai }}
         run: |

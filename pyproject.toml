@@ -1,6 +1,6 @@
 [project]
 name = "skrift"
-version = "0.2.1a3"
+version = "0.2.1a4"
 description = "A lightweight async Python CMS for crafting modern websites"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -13,6 +13,7 @@ dependencies = [
     "advanced-alchemy>=0.26.0",
     "alembic>=1.14.0",
     "httpx>=0.28.0",
+    "certifi>=2026.10.19",
     "pydantic-settings>=2.7.0",
     "python-dotenv>=1.0.0",
     "hypercorn>=0.17.0",
